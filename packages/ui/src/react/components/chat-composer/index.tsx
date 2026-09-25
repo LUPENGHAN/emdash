@@ -216,6 +216,11 @@ export interface ChatComposerProps {
   modelOptions?: Record<string, ComposerModelOption> | null;
   selectedModel?: string;
   onModelChange?: (modelId: string) => void;
+  /**
+   * Let the user type a model id that is not in `modelOptions`. Only enable
+   * where the id is handed to the agent CLI verbatim (e.g. `--model`).
+   */
+  allowCustomModel?: boolean;
 
   effortOptions?: Record<string, ComposerEffortOption> | null;
   selectedEffort?: string;
@@ -323,6 +328,12 @@ interface ModelItem {
   name: string;
   description?: string;
   modelFeatures?: ComposerModelOption['modelFeatures'];
+}
+
+const CUSTOM_MODEL_HINT = 'Custom model id, passed to the agent CLI as-is.';
+
+function customModelItem(id: string): ModelItem {
+  return { id, name: `Use “${id}”`, description: CUSTOM_MODEL_HINT };
 }
 
 // ── Model detail hover card ───────────────────────────────────────────────────
@@ -669,6 +680,7 @@ export function ChatComposer({
   modelOptions,
   selectedModel,
   onModelChange,
+  allowCustomModel = false,
   effortOptions,
   selectedEffort,
   onEffortChange,
@@ -825,6 +837,15 @@ export function ChatComposer({
   const modelItems: ModelItem[] = modelOptions
     ? Object.entries(modelOptions).map(([id, opt]) => ({ id, ...opt }))
     : [];
+  // A previously typed custom id is not in the catalog; keep it selectable.
+  if (
+    allowCustomModel &&
+    modelItems.length > 0 &&
+    selectedModel &&
+    !modelItems.some((m) => m.id === selectedModel)
+  ) {
+    modelItems.push({ id: selectedModel, name: selectedModel, description: CUSTOM_MODEL_HINT });
+  }
   const selectedAgentItem =
     selectedAgent && agentOptions
       ? (agentOptions.find((a) => a.id === selectedAgent) ?? null)
@@ -1002,8 +1023,11 @@ export function ChatComposer({
                 onValueChange={(id) => onModelChange?.(id)}
                 itemToKey={(item) => item.id}
                 itemToLabel={(item) => item.name}
+                createItem={allowCustomModel ? customModelItem : undefined}
                 disabled={disabled}
-                searchPlaceholder="Search models…"
+                searchPlaceholder={
+                  allowCustomModel ? 'Search or type a model id…' : 'Search models…'
+                }
                 contentClassName={composerThemeScope}
                 contentStyle={{ minWidth: '12.5rem' }}
                 triggerTitle={() => selectedAgentTitle}

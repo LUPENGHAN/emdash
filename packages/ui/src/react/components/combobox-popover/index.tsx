@@ -63,6 +63,12 @@ export interface ComboboxPopoverProps<T> {
    */
   renderFooter?: () => React.ReactNode;
   /**
+   * When provided, a search query that matches no item key is offered as an
+   * extra row built by this function (e.g. a free-form model id). Selecting it
+   * reports `itemToKey(createItem(query))` through `onValueChange`.
+   */
+  createItem?: (query: string) => T;
+  /**
    * Visual appearance of the trigger button.
    * - `control` (default): ghost button — matches dropdowns and toolbar triggers.
    * - `input`: matches Input/Textarea — border, surfaceInput background, focus ring.
@@ -84,6 +90,7 @@ export function ComboboxPopover<T>({
   renderItem,
   renderItemDetail,
   renderFooter,
+  createItem,
   searchPlaceholder = 'Search…',
   disabled = false,
   className,
@@ -98,22 +105,36 @@ export function ComboboxPopover<T>({
   const [open, setOpen] = React.useState(false);
   const [anchorEl, setAnchorEl] = React.useState<HTMLElement | null>(null);
   const hoverCard = useHoverCard();
+  const [query, setQuery] = React.useState('');
+
+  const trimmedQuery = query.trim();
+  const createdItem =
+    createItem && trimmedQuery && !items.some((i) => itemToKey(i) === trimmedQuery)
+      ? createItem(trimmedQuery)
+      : null;
+  const allItems = createdItem ? [...items, createdItem] : items;
 
   const selectedItem = value != null ? (items.find((i) => itemToKey(i) === value) ?? null) : null;
   const triggerTitleValue = triggerTitle?.(selectedItem);
 
   const activeDetailItem =
     renderItemDetail && hoverCard.activeKey != null
-      ? (items.find((i) => itemToKey(i) === hoverCard.activeKey) ?? null)
+      ? (allItems.find((i) => itemToKey(i) === hoverCard.activeKey) ?? null)
       : null;
 
   const defaultFilter = React.useCallback(
     (item: T, query: string) => itemToLabel(item).toLowerCase().includes(query.toLowerCase()),
     [itemToLabel]
   );
+  const baseFilter = filter ?? defaultFilter;
+  // The created row always survives filtering: it *is* the query.
+  const effectiveFilter = createdItem
+    ? (item: T, q: string) => item === createdItem || baseFilter(item, q)
+    : baseFilter;
 
   function updateOpen(next: boolean) {
     setOpen(next);
+    if (!next) setQuery('');
     onOpenChange?.(next);
   }
 
@@ -141,13 +162,14 @@ export function ComboboxPopover<T>({
 
   return (
     <Combobox.Root
-      items={items}
+      items={allItems}
       value={selectedItem ?? null}
       onValueChange={handleValueChange}
+      onInputValueChange={createItem ? (next: string) => setQuery(next) : undefined}
       open={open}
       onOpenChange={disabled ? undefined : handleOpenChange}
       isItemEqualToValue={(a: T, b: T) => itemToKey(a) === itemToKey(b)}
-      filter={filter ?? defaultFilter}
+      filter={effectiveFilter}
       autoHighlight
     >
       <Combobox.Trigger

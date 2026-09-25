@@ -53,6 +53,9 @@ export const plugin = definePlugin(
     models: {
       kind: 'selectable',
       modelOptions: {
+        'claude-opus-5-5': {
+          name: 'Claude Opus 5.5',
+        },
         'claude-fable-5-1': {
           name: 'Claude Fable 5.1',
           modelFeatures: { intelligence: 4, speed: 3 },

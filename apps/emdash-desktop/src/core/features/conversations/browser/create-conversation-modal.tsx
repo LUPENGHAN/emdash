@@ -1,5 +1,5 @@
 import { formatHostRef } from '@emdash/core/primitives/host/api';
-import { Dialog, Field, Select, Switch } from '@emdash/ui/react/primitives';
+import { Dialog, Field, Input, Select, Switch } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
 import { useCallback, useState } from 'react';
 import { hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
@@ -27,6 +27,9 @@ import {
   providerPreference,
   providerPreferenceKey,
 } from './provider-preferences';
+
+// Select value for the "type any model id" row; not a real model id.
+const CUSTOM_MODEL_VALUE = '__emdash_custom_model__';
 
 export const CreateConversationModal = observer(function CreateConversationModal({
   projectId,
@@ -62,12 +65,16 @@ export const CreateConversationModal = observer(function CreateConversationModal
   const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities);
   const useAcp = showAcpToggle && useChatUiPreference;
   const transport = useAcp ? 'acp' : 'pty';
+  // Terminal sessions pass the id to the CLI's --model flag verbatim, so any
+  // model the CLI knows works, including ones newer than the catalog above.
+  const allowCustomModel = !useAcp;
   const host = formatHostRef(hostRefFromConnectionId(connectionId));
   const preferenceKey = providerId ? providerPreferenceKey(host, providerId, transport) : null;
   const savedPreference = providerId
     ? providerPreference(providerPreferences, host, providerId, transport)
     : undefined;
   const savedModelUnsupported =
+    !allowCustomModel &&
     savedPreference?.model !== undefined &&
     modelOptions !== null &&
     modelOptions[savedPreference.model] === undefined;
@@ -79,6 +86,13 @@ export const CreateConversationModal = observer(function CreateConversationModal
       : savedModelUnsupported
         ? null
         : (savedPreference?.model ?? null);
+  const [customModelDraft, setCustomModelDraft] = useState<string | null>(null);
+  const isCustomModel =
+    allowCustomModel &&
+    (customModelDraft !== null ||
+      (selectedModel !== null &&
+        modelOptions !== null &&
+        modelOptions[selectedModel] === undefined));
   const setSelectedModel = useCallback(
     (model: string | null) => {
       if (!preferenceKey) return;
@@ -101,6 +115,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
   const handleProviderChange = useCallback(
     (next: typeof providerId) => {
       setProviderOverride(next);
+      setCustomModelDraft(null);
     },
     [setProviderOverride]
   );
@@ -189,14 +204,23 @@ export const CreateConversationModal = observer(function CreateConversationModal
             <Field.Root>
               <Field.Label>Model</Field.Label>
               <Select.Root
-                value={selectedModel ?? ''}
-                onValueChange={(value) => setSelectedModel(value || null)}
+                value={isCustomModel ? CUSTOM_MODEL_VALUE : (selectedModel ?? '')}
+                onValueChange={(value) => {
+                  if (value === CUSTOM_MODEL_VALUE) {
+                    setCustomModelDraft(selectedModel ?? '');
+                    return;
+                  }
+                  setCustomModelDraft(null);
+                  setSelectedModel(value || null);
+                }}
               >
                 <Select.Trigger appearance="input" className="w-full">
                   <Select.Value placeholder="Default model">
-                    {selectedModel
-                      ? (modelOptions[selectedModel]?.name ?? selectedModel)
-                      : 'Default model'}
+                    {isCustomModel
+                      ? 'Custom model…'
+                      : selectedModel
+                        ? (modelOptions[selectedModel]?.name ?? selectedModel)
+                        : 'Default model'}
                   </Select.Value>
                 </Select.Trigger>
                 <Select.Content align="start" width="trigger">
@@ -206,8 +230,24 @@ export const CreateConversationModal = observer(function CreateConversationModal
                       {option.name}
                     </Select.Item>
                   ))}
+                  {allowCustomModel ? (
+                    <Select.Item value={CUSTOM_MODEL_VALUE}>Custom model…</Select.Item>
+                  ) : null}
                 </Select.Content>
               </Select.Root>
+              {isCustomModel ? (
+                <Input
+                  className="mt-2"
+                  autoFocus
+                  placeholder="Model id, e.g. claude-opus-5-5"
+                  value={customModelDraft ?? selectedModel ?? ''}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setCustomModelDraft(next);
+                    setSelectedModel(next.trim() || null);
+                  }}
+                />
+              ) : null}
             </Field.Root>
           ) : null}
           {showAutoApproveToggle ? (

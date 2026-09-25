@@ -53,6 +53,12 @@ export const plugin = definePlugin(
     models: {
       kind: 'selectable',
       modelOptions: {
+        'gpt-6-sol': {
+          name: 'GPT-6 Sol',
+        },
+        'gpt-6-luna': {
+          name: 'GPT-6 Luna',
+        },
         'gpt-6-astra': {
           name: 'GPT-6 Astra',
           description:

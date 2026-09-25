@@ -382,6 +382,7 @@ export function InitialConversationField({
           modelOptions={modelOptions}
           selectedModel={state.model ?? undefined}
           onModelChange={(modelId) => state.setModel(modelId || null)}
+          allowCustomModel={!state.useChatUi}
           className={textareaClassName}
         />
         {initialPromptInfo ? <Field.Description>{initialPromptInfo}</Field.Description> : null}
