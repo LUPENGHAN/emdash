@@ -144,9 +144,10 @@ describe('createConversationsWireController', () => {
     ).resolves.toEqual(ok({ turns: [], nextCursor: null }));
 
     expect(attach).toHaveBeenCalledWith(target.acpInput, {});
+    // History loads get a longer bound: the first one spawns the agent and replays it.
     expect(loadHistory).toHaveBeenCalledWith(
       { conversationId: target.conversationId, limit: 100 },
-      {}
+      { timeoutMs: 180_000 }
     );
   });
 

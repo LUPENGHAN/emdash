@@ -43,6 +43,9 @@ import {
 } from '../api/runtime-adapter';
 import { conversationWireEvents } from './event-host';
 
+// Mirrors the renderer's bound so the main → runtime hop does not time out first.
+const ACP_HISTORY_LOAD_TIMEOUT_MS = 180_000;
+
 type ConversationRuntimeTarget = Readonly<{
   conversationId: string;
   projectId: string;
@@ -223,7 +226,11 @@ export function createConversationsWireController(
       loadHistory: async (input, meta) => {
         const runtimeTarget = await target(input.conversationId);
         return withConversationRuntime(options, Promise.resolve(runtimeTarget), async (client) => {
-          const result = await client.acp.loadHistory(input, callOptions(meta));
+          // First load spawns the agent and replays the session; see ACP_HISTORY_LOAD_TIMEOUT_MS.
+          const result = await client.acp.loadHistory(input, {
+            ...callOptions(meta),
+            timeoutMs: ACP_HISTORY_LOAD_TIMEOUT_MS,
+          });
           await persistClearedConfiguration(hooks, runtimeTarget, result, options.logger);
           return result;
         });

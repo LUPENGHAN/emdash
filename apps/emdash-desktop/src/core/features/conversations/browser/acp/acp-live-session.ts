@@ -28,6 +28,13 @@ import {
 } from '@core/features/conversations/api/browser/client';
 import type { ProjectAttachmentError } from '@core/features/projects/api/attachments';
 
+/**
+ * The first history load of a chat materializes its session: spawning the agent, which
+ * starts its MCP servers (often `npx` packages), then session/load replaying the whole
+ * transcript. That can take well over the default 30s call timeout on a cold start.
+ */
+export const ACP_HISTORY_LOAD_TIMEOUT_MS = 180_000;
+
 export interface LiveValueSource<T> {
   getSnapshot(): T;
   subscribe(cb: () => void): Unsubscribe;
@@ -219,7 +226,10 @@ export class AcpLiveSession {
   }
 
   loadHistory(before?: number, limit = 50) {
-    return this.client.loadHistory({ conversationId: this.conversationId, before, limit });
+    return this.client.loadHistory(
+      { conversationId: this.conversationId, before, limit },
+      { timeoutMs: ACP_HISTORY_LOAD_TIMEOUT_MS }
+    );
   }
 
   async exportTranscript(): Promise<Result<string, unknown>> {
