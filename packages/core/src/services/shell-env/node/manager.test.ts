@@ -148,6 +148,8 @@ describe('createShellEnvManager', () => {
 
   it('logs and keeps the existing env when capture fails', async () => {
     const warn = vi.fn();
+    // The shell exists; none of the common CLI directories do.
+    existsSyncMock.mockImplementation((file: string) => file === '/bin/bash');
     spawnSyncMock.mockReturnValue({
       error: new Error('spawn failed'),
       status: null,
@@ -171,6 +173,31 @@ describe('createShellEnvManager', () => {
     await expect(manager.current()).resolves.toEqual({
       PATH: '/probe/bin',
       SHELL: '/bin/bash',
+    });
+  });
+
+  it('adds existing common CLI directories to PATH when capture fails', async () => {
+    existsSyncMock.mockImplementation(
+      (file: string) => file === '/bin/zsh' || file === '/opt/homebrew/bin'
+    );
+    spawnSyncMock.mockReturnValue({
+      error: new Error('spawnSync /bin/zsh ETIMEDOUT'),
+      status: null,
+      stderr: '',
+      stdout: '',
+    });
+    const target: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin' };
+    const manager = createShellEnvManager({
+      target,
+      baseEnvForProbe: () => ({ SHELL: '/bin/zsh', PATH: '/usr/bin:/bin' }),
+      logger: { warn: vi.fn() },
+    });
+
+    await manager.refresh();
+
+    expect(target.PATH).toBe('/usr/bin:/bin:/opt/homebrew/bin');
+    await expect(manager.current()).resolves.toMatchObject({
+      PATH: '/usr/bin:/bin:/opt/homebrew/bin',
     });
   });
 

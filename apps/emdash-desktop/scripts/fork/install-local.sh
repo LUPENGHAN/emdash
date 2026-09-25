@@ -17,7 +17,16 @@ VITE_BUILD=fork pnpm exec electron-vite build >/dev/null
 rm -rf release/mac-arm64
 CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac dir --arm64 \
   --publish never --config electron-builder.fork.config.ts
-codesign --force --deep --sign - "$bundle"
+# Sign with a stable local identity when one exists, so macOS privacy grants (e.g. the
+# Documents access a login shell needs) survive rebuilds; ad-hoc signatures change on
+# every build and re-prompt. Create it once in Keychain Access → Certificate Assistant
+# → Create a Certificate… (type: Code Signing), named as below.
+sign_identity="${EMDASH_FORK_SIGN_IDENTITY:-Emdash Fork Local}"
+if security find-identity -v -p codesigning | grep -q "\"$sign_identity\""; then
+  codesign --force --deep --sign "$sign_identity" "$bundle"
+else
+  codesign --force --deep --sign - "$bundle"
+fi
 
 # Match the process name exactly: a -f pattern would also match this script's own shell.
 if pgrep -x "Emdash Fork" >/dev/null; then
