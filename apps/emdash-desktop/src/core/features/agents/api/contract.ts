@@ -26,6 +26,7 @@ import {
   procedure,
 } from '@emdash/wire/rpc';
 import { z } from 'zod';
+import type { UsageLimits } from '@core/features/model-providers/api';
 import type {
   AgentInstallationStatus,
   AgentInstallError,
@@ -189,6 +190,11 @@ export const agentsContract = defineContract({
     }),
     data: z.array(z.string()),
     error: z.object({ message: z.string() }),
+  }),
+  /** Subscription limit usage (5h / weekly) for agents that expose it. */
+  getUsageLimits: procedure({
+    input: z.object({ refresh: z.boolean().optional() }),
+    output: z.custom<UsageLimits>(),
   }),
 });
 

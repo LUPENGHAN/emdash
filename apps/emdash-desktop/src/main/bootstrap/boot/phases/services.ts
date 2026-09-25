@@ -57,13 +57,18 @@ import {
   type PromptLibraryKV,
 } from '@core/features/library/node/prompt-library-service';
 import { LocalSettingsSync } from '@core/features/machines/node/local-settings-sync';
-import type { ModelProviderKeys, ModelSourceOverride } from '@core/features/model-providers/api';
+import type {
+  ModelProviderKeys,
+  ModelSourceOverride,
+  UsageLimitsService,
+} from '@core/features/model-providers/api';
 import { ensureAgentProviderFile } from '@core/features/model-providers/node/agent-provider-files';
 import {
   createEffectiveAgentConfig,
   type EffectiveAgentConfig,
 } from '@core/features/model-providers/node/effective-agent-config';
 import { createModelProviderKeys } from '@core/features/model-providers/node/provider-keys';
+import { createUsageLimitsService } from '@core/features/model-providers/node/usage-limits';
 import { previewServerService } from '@core/features/preview-servers/api/node/preview-server-service-instance';
 import { PreviewServerAccessService } from '@core/features/preview-servers/node/preview-server-access-service';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
@@ -187,6 +192,7 @@ export type ServicesBundle = {
   /** Agent config for a launch, including its model provider source (both UIs). */
   readonly effectiveAgentConfig: EffectiveAgentConfig;
   readonly modelProviderKeys: ModelProviderKeys;
+  readonly usageLimits: UsageLimitsService;
   readonly pullRequestsRegistration: PullRequestsRegistration;
   readonly search: ReturnType<typeof createSearchService>;
   readonly sessionLaunchContexts: TaskSessionLaunchContextResolver;
@@ -256,6 +262,8 @@ export async function bootServices(
   });
   const providerOverrideSettings = createProviderOverrideSettings(db);
   const modelProviderKeys = createModelProviderKeys(encryptedAppSecretsStore);
+  // Reads process.env lazily, so it sees the PATH the login-shell probe fills in.
+  const usageLimits = createUsageLimitsService();
   const effectiveAgentConfig = createEffectiveAgentConfig({
     getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
@@ -870,6 +878,7 @@ export async function bootServices(
     providerSettings: providerOverrideSettings,
     effectiveAgentConfig,
     modelProviderKeys,
+    usageLimits,
     pullRequestsRegistration,
     search: searchService,
     sessionLaunchContexts,

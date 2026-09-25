@@ -97,3 +97,29 @@ export type ModelSourceValue = { modelSource?: string | null; sourceModel?: stri
 export function usesProviderSource(value: ModelSourceValue): boolean {
   return typeof value.modelSource === 'string';
 }
+
+/** One subscription limit window, e.g. the rolling 5 hours or the week. */
+export type UsageWindow = {
+  label: string;
+  usedPercent: number;
+  /** When it resets, as the vendor phrased it or formatted from a timestamp. */
+  resets: string | null;
+};
+
+export type AgentUsage = {
+  agent: 'claude' | 'codex' | 'cursor';
+  plan: string | null;
+  windows: UsageWindow[];
+  /** When the numbers were read (Codex: its last turn; Claude: the last /usage probe). */
+  observedAt: number;
+  /** Why no numbers are shown (not logged in, API-key billing, probe failed, …). */
+  unavailable?: string;
+  /** The vendor's own usage page, where numbers are not available locally (Cursor). */
+  detailsUrl?: string;
+};
+
+export type UsageLimits = { agents: AgentUsage[] };
+
+export type UsageLimitsService = {
+  get(options?: { refresh?: boolean }): Promise<UsageLimits>;
+};

@@ -4,7 +4,7 @@ import { err, ok, type Result } from '@emdash/shared';
 import type { LiveModelProvider, LiveSource } from '@emdash/wire/rpc';
 import { createController, type CallMeta, type Controller } from '@emdash/wire/rpc';
 import type { AgentOperations } from '@core/features/agents/node/controller';
-import type { ModelProviderKeys } from '@core/features/model-providers/api';
+import type { ModelProviderKeys, UsageLimitsService } from '@core/features/model-providers/api';
 import { forwardLiveModel } from '@core/services/runtime-clients/node/forward-live-model';
 import { agentsContract } from '../api';
 import {
@@ -19,6 +19,7 @@ export type CreateAgentsWireControllerOptions = Readonly<{
   operations: AgentOperations;
   runtimes: AgentsRuntimeBroker;
   modelProviderKeys?: ModelProviderKeys;
+  usageLimits?: UsageLimitsService;
 }>;
 
 export function createAgentsWireController(options: CreateAgentsWireControllerOptions): Controller {
@@ -128,6 +129,8 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
       withAgentConfigResult(options.runtimes, input.host, (client) =>
         client.resizeLogin(withoutHost(input), callOptions(meta))
       ),
+    getUsageLimits: async ({ refresh }) =>
+      (await options.usageLimits?.get({ refresh })) ?? { agents: [] },
     modelProviderKeyStatus: async ({ providerId }) => ({
       hasKey: (await options.modelProviderKeys?.hasKey(providerId)) ?? false,
     }),
