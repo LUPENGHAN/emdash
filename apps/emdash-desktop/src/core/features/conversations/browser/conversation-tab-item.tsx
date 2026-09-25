@@ -1,11 +1,8 @@
 import { AgentStatus } from '@emdash/ui/react/components';
-import { toast } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
 import { AgentIcon } from '@core/features/agents/contributions/browser/agent-icon';
 import { formatConversationTitleForDisplay } from '@core/features/conversations/api/browser/conversation-title-utils';
-import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
 import { MAX_CONVERSATION_TITLE_LENGTH } from '@core/primitives/conversations/api';
-import { log } from '@core/primitives/logging/browser/logger';
 import type {
   TabBarItemProps,
   ResolvedTab,
@@ -15,7 +12,7 @@ import {
   GenericTabItem,
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
 import type { ConversationTabResource } from './conversation-tab-resource';
-import { canSwitchToChatUi, switchConversationToChatUi } from './switch-to-chat-ui';
+import { switchConversationUiCommands } from './switch-conversation-ui';
 
 export const ConversationTabBarItem = observer(function ConversationTabBarItem({
   tab,
@@ -25,21 +22,6 @@ export const ConversationTabBarItem = observer(function ConversationTabBarItem({
   const store = tab.resource.store;
   const title = formatConversationTitleForDisplay(store.data.providerId, store.data.title);
   const rawTitle = store.data.title ?? '';
-
-  const switchToChatUi = async () => {
-    const { projectId, taskId } = store.data;
-    try {
-      const conversationId = await switchConversationToChatUi(store.data);
-      getTaskComposition(projectId, taskId)?.paneLayout.open(
-        'acp-chat',
-        { conversationId },
-        { preview: false }
-      );
-    } catch (error) {
-      log.error('switch conversation to chat UI failed', error);
-      toast.error(`Could not open this session in the chat UI: ${String(error)}`);
-    }
-  };
 
   return (
     <GenericTabItem
@@ -61,16 +43,7 @@ export const ConversationTabBarItem = observer(function ConversationTabBarItem({
           shortcut: { commandId: 'workbench.tabRename' },
           run: () => host.requestRename(tab.tabId),
         },
-        ...(canSwitchToChatUi(store.data)
-          ? [
-              {
-                id: 'conversation:switch-to-chat-ui',
-                label: 'Switch to chat UI',
-                group: 'edit',
-                run: () => void switchToChatUi(),
-              },
-            ]
-          : []),
+        ...switchConversationUiCommands(store.data),
       ]}
       renameValue={rawTitle}
       renameMaxLength={MAX_CONVERSATION_TITLE_LENGTH}

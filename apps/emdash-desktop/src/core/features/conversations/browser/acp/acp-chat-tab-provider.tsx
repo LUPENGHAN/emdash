@@ -18,6 +18,7 @@ import {
   GenericTabItem,
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
 import { ConversationAgentIcon } from '../conversation-agent-icon';
+import { switchConversationUiCommands } from '../switch-conversation-ui';
 import { AcpChatPanel } from './acp-chat-panel';
 import { getAcpChatResourceManager } from './acp-chat-resource-manager';
 import { AcpChatTabResource } from './acp-chat-tab-resource';
@@ -67,6 +68,7 @@ export const AcpChatTabBarItem = observer(function AcpChatTabBarItem({
           shortcut: { commandId: 'workbench.tabRename' },
           run: () => host.requestRename(tab.tabId),
         },
+        ...switchConversationUiCommands(conversation?.data),
       ]}
       renameValue={rawTitle}
       renameMaxLength={MAX_CONVERSATION_TITLE_LENGTH}
@@ -116,13 +118,13 @@ export const acpChatTabProvider: TabProvider<
 
   initialize(
     entry: TabEntry<AcpChatState>,
-    _handle: TabHandle,
+    handle: TabHandle,
     ctx: TabViewContext
   ): AcpChatTabResource {
     const taskCtx = ctx as TaskTabContext;
     const manager = getAcpChatResourceManager(taskCtx.taskId, taskCtx.projectId);
     const store = manager.acquire(entry.state.conversationId);
-    return new AcpChatTabResource(store);
+    return new AcpChatTabResource(store, handle);
   },
 
   dispose(entry: TabEntry<AcpChatState>, _resource: AcpChatTabResource, ctx: TabViewContext): void {

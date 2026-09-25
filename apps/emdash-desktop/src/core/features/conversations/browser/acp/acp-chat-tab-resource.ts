@@ -1,5 +1,9 @@
+import { reaction } from 'mobx';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
-import type { TabResource } from '@core/primitives/workbench-shell/browser/tabs/core/tab-provider';
+import type {
+  TabHandle,
+  TabResource,
+} from '@core/primitives/workbench-shell/browser/tabs/core/tab-provider';
 import type { AcpChatStore } from './acp-chat-store';
 
 /**
@@ -11,12 +15,25 @@ import type { AcpChatStore } from './acp-chat-store';
  */
 export class AcpChatTabResource implements TabResource {
   readonly store: AcpChatStore;
+  private readonly disposeCloseOnDelete: () => void;
 
-  constructor(store: AcpChatStore) {
+  constructor(store: AcpChatStore, handle?: TabHandle) {
     this.store = store;
+    const { taskId, conversationId } = store;
+    // Auto-close this tab when the conversation is deleted (mirrors ConversationTabResource),
+    // e.g. after it was switched to a terminal conversation.
+    this.disposeCloseOnDelete = handle
+      ? reaction(
+          () => conversationRegistry.get(taskId)?.conversations.has(conversationId) ?? false,
+          (exists) => {
+            if (!exists) void handle.close();
+          }
+        )
+      : () => {};
   }
 
   dispose(): void {
+    this.disposeCloseOnDelete();
     // AcpChatResourceManager owns the store lifetime.
     // The manager disposes the store after grace when the last tab is closed.
   }
