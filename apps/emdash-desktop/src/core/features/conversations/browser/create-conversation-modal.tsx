@@ -200,7 +200,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
               connectionId={connectionId}
             />
           </Field.Root>
-          {modelOptions ? (
+          {modelOptions && (allowCustomModel || Object.keys(modelOptions).length > 0) ? (
             <Field.Root>
               <Field.Label>Model</Field.Label>
               <Select.Root
@@ -239,7 +239,11 @@ export const CreateConversationModal = observer(function CreateConversationModal
                 <Input
                   className="mt-2"
                   autoFocus
-                  placeholder="Model id, e.g. claude-opus-5-5"
+                  placeholder={
+                    providerId === 'opencode'
+                      ? 'provider/model, e.g. deepseek/deepseek-chat'
+                      : 'Model id, passed to --model'
+                  }
                   value={customModelDraft ?? selectedModel ?? ''}
                   onChange={(event) => {
                     const next = event.target.value;

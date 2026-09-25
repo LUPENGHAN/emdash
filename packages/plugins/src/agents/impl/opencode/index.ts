@@ -70,6 +70,12 @@ export const plugin = definePlugin(
       kind: 'file-drop',
       scope: 'global',
     },
+    // Models come from the user's own OpenCode providers ("provider/model"),
+    // so there is no fixed catalog; terminal sessions accept a typed id.
+    models: {
+      kind: 'selectable',
+      modelOptions: {},
+    },
     prompt: {
       kind: 'argv',
       flag: '--prompt',

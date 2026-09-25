@@ -840,12 +840,14 @@ export function ChatComposer({
   // A previously typed custom id is not in the catalog; keep it selectable.
   if (
     allowCustomModel &&
-    modelItems.length > 0 &&
+    modelOptions &&
     selectedModel &&
     !modelItems.some((m) => m.id === selectedModel)
   ) {
     modelItems.push({ id: selectedModel, name: selectedModel, description: CUSTOM_MODEL_HINT });
   }
+  // An empty catalog still gets a picker when ids can be typed (e.g. OpenCode).
+  const showModelPicker = modelItems.length > 0 || (allowCustomModel && !!modelOptions);
   const selectedAgentItem =
     selectedAgent && agentOptions
       ? (agentOptions.find((a) => a.id === selectedAgent) ?? null)
@@ -880,9 +882,9 @@ export function ChatComposer({
   const collaborationModeItems: ComposerModeItem[] = collaborationModeOptions
     ? Object.entries(collaborationModeOptions).map(([id, opt]) => ({ id, ...opt }))
     : [];
-  const collaborationModeIsFirst = modelItems.length === 0 && !agentOptions?.length;
+  const collaborationModeIsFirst = !showModelPicker && !agentOptions?.length;
   const permissionModeIsFirst =
-    collaborationModeItems.length === 0 && modelItems.length === 0 && !agentOptions?.length;
+    collaborationModeItems.length === 0 && !showModelPicker && !agentOptions?.length;
 
   const canShowQueuedPrompts =
     queuedPrompts.length > 0 &&
@@ -1007,7 +1009,7 @@ export function ChatComposer({
         <div className={styles.toolbar}>
           {/* Left: agent + model selector */}
           <div className={styles.toolbarLeft}>
-            {agentOptions && agentOptions.length > 0 && modelItems.length === 0 && (
+            {agentOptions && agentOptions.length > 0 && !showModelPicker && (
               <ComposerAgentSelector
                 options={agentOptions}
                 selectedId={selectedAgent}
@@ -1016,7 +1018,7 @@ export function ChatComposer({
                 disabled={disabled}
               />
             )}
-            {modelItems.length > 0 && (
+            {showModelPicker && (
               <ComboboxPopover<ModelItem>
                 items={modelItems}
                 value={selectedModel ?? null}
