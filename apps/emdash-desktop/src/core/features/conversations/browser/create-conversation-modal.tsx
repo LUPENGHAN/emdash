@@ -83,8 +83,8 @@ export const CreateConversationModal = observer(function CreateConversationModal
     agentSessions.find((session) => session.sessionId === resumeSessionId) ?? null;
 
   const showAutoApproveToggle = agentSupportsAutoApprove(selectedAgent?.capabilities);
-  // Resuming goes through the CLI's own --resume, so it is always a terminal session.
-  const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities) && !resumeSession;
+  // A resumed session can open in either UI: chat loads it with session/load.
+  const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities);
   const useAcp = showAcpToggle && useChatUiPreference;
   const transport = useAcp ? 'acp' : 'pty';
   // Terminal sessions pass the id to the CLI's --model flag verbatim, so any

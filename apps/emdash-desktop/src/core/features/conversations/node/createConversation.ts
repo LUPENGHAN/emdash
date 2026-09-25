@@ -89,12 +89,9 @@ export async function createConversation(
   }
 
   const conversationType = params.type ?? 'pty';
+  // Terminal conversations resume it via the CLI's --resume; chat UI (ACP) ones load it
+  // with session/load on first activation, which replays its history into the chat.
   const importedSessionId = params.providerSessionId?.trim() || null;
-  if (importedSessionId && conversationType !== 'pty') {
-    throw new Error(
-      'createConversation: only terminal conversations can resume an existing session'
-    );
-  }
 
   const initialQueue = params.initialQueue?.filter((prompt) => prompt.text.trim());
   const configObj: ConversationConfig =
@@ -160,7 +157,8 @@ export async function createConversation(
       config,
       // Null means this conversation has not successfully spawned yet. PTY placeholder
       // ids and ACP/native provider ids are written only after their session exists.
-      // An imported session already exists, so its id makes the first launch a resume.
+      // An imported session already exists, so its id makes the first launch a resume
+      // (PTY) or a session/load (ACP).
       providerSessionId: importedSessionId,
       isInitialConversation: params.isInitialConversation ?? false,
       type: conversationType,

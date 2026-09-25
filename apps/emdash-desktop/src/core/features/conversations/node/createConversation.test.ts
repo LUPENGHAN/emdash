@@ -249,11 +249,21 @@ describe('createConversation', () => {
       expect(hostConversations.reports.providerSessionId).not.toHaveBeenCalled();
     });
 
-    it('refuses to adopt a session into a chat UI conversation', async () => {
-      await expect(
-        createConversation({ ...importParams, type: 'acp' as const }, dependencies())
-      ).rejects.toThrow('only terminal conversations');
-      expect(hostConversations.create).not.toHaveBeenCalled();
+    it('adopts a session into a chat UI conversation without spawning a terminal', async () => {
+      const { launchTuiConversation } = await import('./launch-tui-conversation');
+      const deps = dependencies();
+      await createConversation({ ...importParams, type: 'acp' as const }, deps);
+
+      expect(hostConversations.reports.providerSessionId).toHaveBeenCalledWith({
+        conversationId: 'conv-1',
+        providerSessionId: 'native-1',
+      });
+      expect((deps.db as unknown as ReturnType<typeof fakeDatabase>).inserted[0]).toMatchObject({
+        providerSessionId: 'native-1',
+        type: 'acp',
+      });
+      // ACP sessions load lazily on activation (session/load), never via the PTY path.
+      expect(launchTuiConversation).not.toHaveBeenCalled();
     });
 
     it('rolls back the host record when seeding fails', async () => {

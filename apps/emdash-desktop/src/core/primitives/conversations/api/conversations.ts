@@ -137,8 +137,8 @@ export type CreateConversationParams = {
   /** Transport type: 'pty' (default) uses the terminal/PTY path; 'acp' uses the Agent Client Protocol. */
   type?: ConversationType;
   /**
-   * Resume this existing provider session instead of starting a new one (PTY only).
-   * Used to adopt sessions that were started outside Emdash.
+   * Resume this existing provider session instead of starting a new one. Used to adopt
+   * sessions that were started outside Emdash (terminal: --resume; chat UI: session/load).
    */
   providerSessionId?: string;
 };

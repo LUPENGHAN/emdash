@@ -45,7 +45,9 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
       (await getConversationsClient()).listProjectImportableSessions({ projectId }),
   });
 
-  const resume = async (session: ImportableSession) => {
+  // Chat UI loads the session with ACP session/load and replays its history;
+  // terminal resumes it with the CLI's own --resume.
+  const resume = async (session: ImportableSession, type: 'acp' | 'pty') => {
     const taskManager = getTaskManagerStore(projectId);
     if (!taskManager || !repositoryWorkspaceId || resumingId) return;
     setResumingId(session.sessionId);
@@ -70,7 +72,7 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
         taskId,
         provider: session.providerId,
         title,
-        type: 'pty',
+        type,
         providerSessionId: session.sessionId,
         // The task view opens its initial conversation as the first tab on load.
         isInitialConversation: true,
@@ -125,9 +127,19 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
             </div>
             <Button
               size="sm"
-              variant="secondary"
+              variant="ghost"
+              title="Resume in a terminal, with the CLI's own interface"
               disabled={!repositoryWorkspaceId || resumingId !== null}
-              onClick={() => void resume(session)}
+              onClick={() => void resume(session, 'pty')}
+            >
+              Terminal
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              title="Resume in the chat UI"
+              disabled={!repositoryWorkspaceId || resumingId !== null}
+              onClick={() => void resume(session, 'acp')}
             >
               {resumingId === session.sessionId ? 'Resuming…' : 'Resume'}
             </Button>
