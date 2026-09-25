@@ -199,6 +199,7 @@ export function createConversationsWireController(
       conversationOperations.renameConversation(conversationId, name),
     getConversationsForTask: ({ projectId, taskId }) =>
       conversationOperations.getConversationsForTask(projectId, taskId),
+    listImportableSessions: ({ taskId }) => conversationOperations.listImportableSessions(taskId),
     getConversationsForProject: ({ projectId }) =>
       conversationOperations.getConversationsForProject(projectId),
     markConversationSeen: ({ conversationId }) =>

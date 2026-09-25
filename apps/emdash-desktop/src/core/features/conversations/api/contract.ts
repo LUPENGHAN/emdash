@@ -29,6 +29,7 @@ import type {
   ConversationEvent,
   CreateConversationParams,
   HostConversationRow,
+  ImportableSession,
 } from '@core/primitives/conversations/api';
 import {
   localTerminalFilesSchema,
@@ -224,6 +225,11 @@ export const conversationsContract = defineContract({
   getConversationsForProject: procedure({
     input: z.object({ projectId: z.string() }),
     output: z.custom<Conversation[]>(),
+  }),
+  /** Sessions started outside Emdash in this task's directory, resumable as conversations. */
+  listImportableSessions: procedure({
+    input: z.object({ projectId: z.string(), taskId: z.string() }),
+    output: z.custom<ImportableSession[]>(),
   }),
   markConversationSeen: procedure({
     input: z.object({ conversationId: z.string() }),

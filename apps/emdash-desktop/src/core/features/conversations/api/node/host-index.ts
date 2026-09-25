@@ -65,6 +65,31 @@ export async function createHostConversationRecord(
 }
 
 /**
+ * Seeds a known resume handle on a freshly created host record, for conversations that
+ * adopt a session started outside Emdash. Without it convergence would null the handle
+ * the client row carries (same reason the legacy backfill seeds it).
+ */
+export async function seedHostProviderSessionId(
+  runtimes: ConversationsRuntimeBroker,
+  host: HostRef,
+  conversationId: string,
+  providerSessionId: string
+): Promise<{ success: true } | { success: false; message: string }> {
+  const client = await runtimes.client(host);
+  if (!client.success) {
+    return { success: false, message: client.error.message };
+  }
+  const seeded = await client.data.conversations.reports.providerSessionId({
+    conversationId,
+    providerSessionId,
+  });
+  if (!seeded.success) {
+    return { success: false, message: seeded.error.message };
+  }
+  return { success: true };
+}
+
+/**
  * The compensating delete of the host-first creation flow (spec §6.2, step 4): a direct
  * foreground index call, deliberately not the outbox delete verb — the host is reachable
  * by construction and no session exists yet. If this call itself fails, the record

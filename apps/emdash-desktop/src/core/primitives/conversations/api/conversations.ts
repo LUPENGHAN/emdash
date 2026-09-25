@@ -136,4 +136,19 @@ export type CreateConversationParams = {
   initialQueue?: InitialQueuePrompt[];
   /** Transport type: 'pty' (default) uses the terminal/PTY path; 'acp' uses the Agent Client Protocol. */
   type?: ConversationType;
+  /**
+   * Resume this existing provider session instead of starting a new one (PTY only).
+   * Used to adopt sessions that were started outside Emdash.
+   */
+  providerSessionId?: string;
+};
+
+/** A provider session found on disk that was not started by Emdash. */
+export type ImportableSession = {
+  providerId: 'claude' | 'codex' | 'opencode';
+  sessionId: string;
+  title: string;
+  firstMessage: string | null;
+  /** Epoch milliseconds of the last write to the session. */
+  updatedAt: number;
 };

@@ -13,6 +13,7 @@ import {
   compensateHostConversationRecord,
   conversationIdRegimeFor,
   createHostConversationRecord,
+  seedHostProviderSessionId,
 } from '@core/features/conversations/api/node/host-index';
 import {
   conversationRegistryTable as conversations,
@@ -88,6 +89,12 @@ export async function createConversation(
   }
 
   const conversationType = params.type ?? 'pty';
+  const importedSessionId = params.providerSessionId?.trim() || null;
+  if (importedSessionId && conversationType !== 'pty') {
+    throw new Error(
+      'createConversation: only terminal conversations can resume an existing session'
+    );
+  }
 
   const initialQueue = params.initialQueue?.filter((prompt) => prompt.text.trim());
   const configObj: ConversationConfig =
@@ -131,6 +138,13 @@ export async function createConversation(
     throw new Error(`createConversation: host index registration failed: ${registered.message}`);
   }
   const compensateHostRecord = () => compensateHostConversationRecord(runtimes, identity.host, id);
+  if (importedSessionId) {
+    const seeded = await seedHostProviderSessionId(runtimes, identity.host, id, importedSessionId);
+    if (!seeded.success) {
+      await compensateHostRecord();
+      throw new Error(`createConversation: seeding the imported session failed: ${seeded.message}`);
+    }
+  }
 
   // The registry only touches the query-builder subset that ConversationCreateDb carries.
   const registry = createConversationRegistry(database as unknown as AppDb);
@@ -146,7 +160,8 @@ export async function createConversation(
       config,
       // Null means this conversation has not successfully spawned yet. PTY placeholder
       // ids and ACP/native provider ids are written only after their session exists.
-      providerSessionId: null,
+      // An imported session already exists, so its id makes the first launch a resume.
+      providerSessionId: importedSessionId,
       isInitialConversation: params.isInitialConversation ?? false,
       type: conversationType,
       lastSessionActivityAt: new Date().toISOString(),

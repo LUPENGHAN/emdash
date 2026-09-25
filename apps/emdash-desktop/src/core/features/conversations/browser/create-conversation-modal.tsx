@@ -1,10 +1,13 @@
 import { formatHostRef } from '@emdash/core/primitives/host/api';
 import { Dialog, Field, Input, Select, Switch } from '@emdash/ui/react/primitives';
+import { useQuery } from '@tanstack/react-query';
+import { formatDistanceToNow } from 'date-fns';
 import { observer } from 'mobx-react-lite';
 import { useCallback, useState } from 'react';
 import { hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgents } from '@core/features/agents/api/browser/use-agents';
 import { AgentSelector } from '@core/features/agents/contributions/browser/agent-selector';
+import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { nextDefaultConversationTitle } from '@core/features/conversations/api/browser/conversation-title-utils';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import { useEffectiveProvider } from '@core/features/conversations/api/browser/use-effective-provider';
@@ -61,8 +64,27 @@ export const CreateConversationModal = observer(function CreateConversationModal
   const modelOptions =
     modelsCapability?.kind === 'selectable' ? modelsCapability.modelOptions : null;
 
+  // Sessions started outside Emdash in this task's directory, resumable by id.
+  const { data: importableSessions = [] } = useQuery({
+    queryKey: ['importableSessions', projectId, taskId],
+    enabled: !liveActionDisabledReason,
+    gcTime: 0,
+    queryFn: async () => {
+      try {
+        return await (await getConversationsClient()).listImportableSessions({ projectId, taskId });
+      } catch {
+        return [];
+      }
+    },
+  });
+  const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
+  const agentSessions = importableSessions.filter((session) => session.providerId === providerId);
+  const resumeSession =
+    agentSessions.find((session) => session.sessionId === resumeSessionId) ?? null;
+
   const showAutoApproveToggle = agentSupportsAutoApprove(selectedAgent?.capabilities);
-  const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities);
+  // Resuming goes through the CLI's own --resume, so it is always a terminal session.
+  const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities) && !resumeSession;
   const useAcp = showAcpToggle && useChatUiPreference;
   const transport = useAcp ? 'acp' : 'pty';
   // Terminal sessions pass the id to the CLI's --model flag verbatim, so any
@@ -102,20 +124,23 @@ export const CreateConversationModal = observer(function CreateConversationModal
   );
   const skipPermissions =
     showAutoApproveToggle && (autoApproveOverride ?? taskSettings.autoApproveByDefault);
-  const title = providerId
-    ? nextDefaultConversationTitle(
-        providerId,
-        Array.from(
-          conversationMgr?.conversations.values() ?? [],
-          (conversation) => conversation.data
+  const title = resumeSession
+    ? resumeSession.title.slice(0, 80)
+    : providerId
+      ? nextDefaultConversationTitle(
+          providerId,
+          Array.from(
+            conversationMgr?.conversations.values() ?? [],
+            (conversation) => conversation.data
+          )
         )
-      )
-    : 'Conversation';
+      : 'Conversation';
 
   const handleProviderChange = useCallback(
     (next: typeof providerId) => {
       setProviderOverride(next);
       setCustomModelDraft(null);
+      setResumeSessionId(null);
     },
     [setProviderOverride]
   );
@@ -142,21 +167,26 @@ export const CreateConversationModal = observer(function CreateConversationModal
         autoApprove: skipPermissions,
         provider: providerId,
         title,
-        model: selectedModel ?? undefined,
+        // A resumed session keeps the model it was started with.
+        model: resumeSession ? undefined : (selectedModel ?? undefined),
         modeId: conversationType === 'acp' ? savedPreference?.modeId : undefined,
         effort: conversationType === 'acp' ? savedPreference?.effort : undefined,
         collaborationMode:
           conversationType === 'acp' ? savedPreference?.collaborationMode : undefined,
         type: conversationType,
+        providerSessionId: resumeSession?.sessionId,
       });
-      try {
-        setProviderPreferences((current) =>
-          patchProviderPreference(current, host, providerId, conversationType, {
-            model: selectedModel,
-          })
-        );
-      } catch (preferenceError) {
-        getMementoClient().reportError(preferenceError);
+      // A resumed session's choices are its own; don't remember them as defaults.
+      if (!resumeSession) {
+        try {
+          setProviderPreferences((current) =>
+            patchProviderPreference(current, host, providerId, conversationType, {
+              model: selectedModel,
+            })
+          );
+        } catch (preferenceError) {
+          getMementoClient().reportError(preferenceError);
+        }
       }
       setIsSubmitting(false);
       complete({ conversationId: id, type: conversationType });
@@ -176,6 +206,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
     taskId,
     skipPermissions,
     selectedModel,
+    resumeSession,
     useAcp,
     host,
     savedPreference?.effort,
@@ -200,7 +231,38 @@ export const CreateConversationModal = observer(function CreateConversationModal
               connectionId={connectionId}
             />
           </Field.Root>
-          {modelOptions && (allowCustomModel || Object.keys(modelOptions).length > 0) ? (
+          {agentSessions.length > 0 ? (
+            <Field.Root>
+              <Field.Label>Session</Field.Label>
+              <Select.Root
+                value={resumeSession?.sessionId ?? ''}
+                onValueChange={(value) => setResumeSessionId(value || null)}
+              >
+                <Select.Trigger appearance="input" className="w-full">
+                  <Select.Value placeholder="New session">
+                    {resumeSession ? resumeSession.title : 'New session'}
+                  </Select.Value>
+                </Select.Trigger>
+                <Select.Content align="start" width="trigger">
+                  <Select.Item value="">New session</Select.Item>
+                  {agentSessions.map((session) => (
+                    <Select.Item key={session.sessionId} value={session.sessionId}>
+                      <span className="truncate">{session.title}</span>
+                      <span className="ml-2 shrink-0 text-xs text-foreground-muted">
+                        {formatDistanceToNow(session.updatedAt, { addSuffix: true })}
+                      </span>
+                    </Select.Item>
+                  ))}
+                </Select.Content>
+              </Select.Root>
+              <Field.Description>
+                Resume a session started outside Emdash in this directory.
+              </Field.Description>
+            </Field.Root>
+          ) : null}
+          {!resumeSession &&
+          modelOptions &&
+          (allowCustomModel || Object.keys(modelOptions).length > 0) ? (
             <Field.Root>
               <Field.Label>Model</Field.Label>
               <Select.Root
@@ -288,7 +350,13 @@ export const CreateConversationModal = observer(function CreateConversationModal
           onClick={() => void handleCreateConversation()}
           disabled={Boolean(liveActionDisabledReason) || createDisabled || isSubmitting}
         >
-          {isSubmitting ? 'Creating...' : 'Create'}
+          {isSubmitting
+            ? resumeSession
+              ? 'Resuming...'
+              : 'Creating...'
+            : resumeSession
+              ? 'Resume'
+              : 'Create'}
         </ConfirmButton>
       </Dialog.Footer>
     </>

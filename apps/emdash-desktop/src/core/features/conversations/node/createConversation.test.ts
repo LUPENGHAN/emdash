@@ -82,6 +82,9 @@ function fakeDatabase(options: { failInsert?: boolean } = {}) {
 const hostConversations = {
   create: vi.fn(async (input: { id: string }) => ({ success: true as const, data: input })),
   delete: vi.fn(async () => ({ success: true as const, data: undefined })),
+  reports: {
+    providerSessionId: vi.fn(async () => ({ success: true as const, data: undefined })),
+  },
 };
 const runtimes = {
   client: vi.fn(async () => ({
@@ -220,5 +223,49 @@ describe('createConversation', () => {
     );
     expect((deps.db as unknown as ReturnType<typeof fakeDatabase>).delete).toHaveBeenCalled();
     expect(hostConversations.delete).toHaveBeenCalledWith({ conversationId: 'conv-1' });
+  });
+
+  describe('adopting an existing provider session', () => {
+    const importParams = { ...baseParams, type: 'pty' as const, providerSessionId: 'native-1' };
+
+    it('seeds the handle on the host before inserting a row that resumes it', async () => {
+      const deps = dependencies();
+      await createConversation(importParams, deps);
+
+      expect(hostConversations.reports.providerSessionId).toHaveBeenCalledWith({
+        conversationId: 'conv-1',
+        providerSessionId: 'native-1',
+      });
+      const db = deps.db as unknown as ReturnType<typeof fakeDatabase>;
+      expect(hostConversations.reports.providerSessionId.mock.invocationCallOrder[0]).toBeLessThan(
+        db.insert.mock.invocationCallOrder[0]
+      );
+      expect(db.inserted[0]).toMatchObject({ providerSessionId: 'native-1', type: 'pty' });
+    });
+
+    it('does not seed anything for a fresh conversation', async () => {
+      await createConversation({ ...baseParams, type: 'pty' as const }, dependencies());
+
+      expect(hostConversations.reports.providerSessionId).not.toHaveBeenCalled();
+    });
+
+    it('refuses to adopt a session into a chat UI conversation', async () => {
+      await expect(
+        createConversation({ ...importParams, type: 'acp' as const }, dependencies())
+      ).rejects.toThrow('only terminal conversations');
+      expect(hostConversations.create).not.toHaveBeenCalled();
+    });
+
+    it('rolls back the host record when seeding fails', async () => {
+      hostConversations.reports.providerSessionId.mockResolvedValueOnce({
+        success: false,
+        error: { type: 'not-found', message: 'gone' },
+      } as never);
+      const deps = dependencies();
+
+      await expect(createConversation(importParams, deps)).rejects.toThrow('gone');
+      expect(hostConversations.delete).toHaveBeenCalledWith({ conversationId: 'conv-1' });
+      expect((deps.db as unknown as ReturnType<typeof fakeDatabase>).insert).not.toHaveBeenCalled();
+    });
   });
 });
