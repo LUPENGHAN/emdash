@@ -78,3 +78,22 @@ export type ModelProviderKeys = {
   clear(providerId: string): Promise<void>;
   listModels(input: { providerId: string; baseUrl: string; apiKey?: string }): Promise<string[]>;
 };
+
+/** A per-conversation source; `null` means the agent's own login/config. */
+export type ModelSourceOverride = { modelSource: string | null; sourceModel?: string };
+
+/** The conversation's own source choice, or undefined to use the agent's default. */
+export function sourceOverrideOf(
+  config: { modelSource?: string | null; sourceModel?: string } | null | undefined
+): ModelSourceOverride | undefined {
+  if (!config || config.modelSource === undefined) return undefined;
+  return { modelSource: config.modelSource, sourceModel: config.sourceModel };
+}
+
+/** A conversation's source: absent = agent default, null = own login, id = that provider. */
+export type ModelSourceValue = { modelSource?: string | null; sourceModel?: string };
+
+/** True when a provider (rather than the agent's own login or default) is selected. */
+export function usesProviderSource(value: ModelSourceValue): boolean {
+  return typeof value.modelSource === 'string';
+}

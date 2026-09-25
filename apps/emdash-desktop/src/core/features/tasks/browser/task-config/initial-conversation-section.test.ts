@@ -34,6 +34,9 @@ const mocks = vi.hoisted(() => ({
   lastChatComposerProps: null as unknown,
 }));
 
+vi.mock('@core/features/model-providers/contributions/browser/model-source-select', () => ({
+  ModelSourceSelect: () => null,
+}));
 vi.mock('@emdash/ui/react/components', () => ({
   ChatComposer: (props: unknown) => {
     mocks.lastChatComposerProps = props;

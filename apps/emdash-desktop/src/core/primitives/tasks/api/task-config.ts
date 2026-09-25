@@ -21,6 +21,9 @@ const v1Schema = z.object({
       initialPrompt: z.string().optional(),
       initialQueue: z.array(initialQueuePromptSchema).optional(),
       model: z.string().optional(),
+      /** Model provider source: id, null = the agent's own login, absent = agent default. */
+      modelSource: z.string().nullable().optional(),
+      sourceModel: z.string().optional(),
       type: z.enum(['pty', 'acp']).optional(),
     })
     .optional(),

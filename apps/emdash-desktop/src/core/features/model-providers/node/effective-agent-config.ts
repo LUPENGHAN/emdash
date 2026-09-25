@@ -1,5 +1,5 @@
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
-import { isProviderCapableAgent, type ModelProvider } from '../api';
+import { isProviderCapableAgent, type ModelProvider, type ModelSourceOverride } from '../api';
 import { buildSourceLaunch, type AgentProviderFile } from './source-launch';
 
 export type EffectiveAgentConfigDeps = {
@@ -9,9 +9,6 @@ export type EffectiveAgentConfigDeps = {
   ensureProviderFile: (file: AgentProviderFile) => Promise<void>;
   warn?: (message: string, details: Record<string, unknown>) => void;
 };
-
-/** A per-conversation choice; `null` source means the agent's own login/config. */
-export type ModelSourceOverride = { modelSource: string | null; sourceModel?: string };
 
 /**
  * The agent config a launch should use: the user's own env/args plus, when the agent is

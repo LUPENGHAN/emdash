@@ -23,6 +23,8 @@ function makeInitialConversationState(
     setIssueContextEditorOpen: () => {},
     model: null,
     setModel: () => {},
+    source: {},
+    setSource: () => {},
     useChatUi: false,
     setUseChatUi: () => {},
     initialPromptSupported: true,
@@ -33,6 +35,29 @@ function makeInitialConversationState(
 }
 
 describe('buildInitialConversation', () => {
+  it('carries a provider source and drops the agent catalog model', () => {
+    const built = buildInitialConversation(
+      makeInitialConversationState(agent('claude'), false, {
+        model: 'claude-opus-5-5',
+        source: { modelSource: 'newapi', sourceModel: 'moonshotai/kimi-k3' },
+      })
+    );
+    expect(built).toEqual(
+      expect.objectContaining({ modelSource: 'newapi', sourceModel: 'moonshotai/kimi-k3' })
+    );
+    expect(built?.model).toBeUndefined();
+  });
+
+  it("keeps an explicit own-login source and the agent's model", () => {
+    const built = buildInitialConversation(
+      makeInitialConversationState(agent('codex'), false, {
+        model: 'gpt-6-sol',
+        source: { modelSource: null },
+      })
+    );
+    expect(built).toEqual(expect.objectContaining({ modelSource: null, model: 'gpt-6-sol' }));
+  });
+
   it('uses the draft auto-approve value for supported providers', () => {
     expect(buildInitialConversation(makeInitialConversationState(agent('claude'), true))).toEqual(
       expect.objectContaining({ provider: 'claude', autoApprove: true })

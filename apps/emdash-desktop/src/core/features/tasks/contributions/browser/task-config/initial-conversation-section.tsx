@@ -19,6 +19,8 @@ import { AgentSelector } from '@core/features/agents/contributions/browser/agent
 import { useEffectiveProvider } from '@core/features/conversations/api/browser/use-effective-provider';
 import { IntegrationIcon } from '@core/features/integrations/contributions/browser/integration-icon';
 import { usePromptLibrary } from '@core/features/library/api/browser/prompts/use-prompt-library';
+import { usesProviderSource, type ModelSourceValue } from '@core/features/model-providers/api';
+import { ModelSourceSelect } from '@core/features/model-providers/contributions/browser/model-source-select';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 import { buildIssueContextText } from '@core/features/tasks/browser/context-bar/context-actions';
 import { appendInitialConversationText } from '@core/features/tasks/browser/create-task-modal/initial-conversation-text';
@@ -54,6 +56,9 @@ export type InitialConversationState = {
   /** Selected model id, or null to use the agent CLI default. */
   model: string | null;
   setModel: (model: string | null) => void;
+  /** Model provider source for the initial conversation. */
+  source: ModelSourceValue;
+  setSource: (source: ModelSourceValue) => void;
   connectionId?: string;
   /** Whether to start this conversation as an ACP chat UI conversation. */
   useChatUi: boolean;
@@ -86,6 +91,7 @@ export function useInitialConversationState(
   );
   const [issueContextEditorOpen, setIssueContextEditorOpen] = useState(false);
   const [model, setModel] = useState<string | null>(null);
+  const [source, setSource] = useState<ModelSourceValue>({});
   const [issueMentionContexts, setIssueMentionContexts] = useState<Record<string, string>>({});
   const [useChatUiPreference, setUseChatUiPreference] = useLocalStorage(
     'initial-conversation:chat-ui-enabled',
@@ -106,10 +112,12 @@ export function useInitialConversationState(
     setIssueContext(null);
     setIssueContextEditorOpen(false);
     setModel(null);
+    setSource({});
     setIssueMentionContexts({});
   } else if (providerChanged) {
     setPrevProviderId(providerId);
     setModel(null);
+    setSource({});
   }
 
   const capabilities = agents?.find((agent) => agent.id === providerId)?.capabilities;
@@ -133,6 +141,8 @@ export function useInitialConversationState(
     setIssueContextEditorOpen,
     model,
     setModel,
+    source,
+    setSource,
     connectionId,
     useChatUi,
     setUseChatUi: setUseChatUiPreference,
@@ -356,6 +366,12 @@ export function InitialConversationField({
           </div>
         ) : null}
 
+        <ModelSourceSelect
+          agentId={state.provider}
+          value={state.source}
+          onChange={state.setSource}
+        />
+
         {canToggleChatUi ? (
           <div className="flex items-center gap-2">
             <Switch
@@ -379,7 +395,8 @@ export function InitialConversationField({
           editorApiRef={editorApiRef}
           renderMentionIcon={renderMentionIcon}
           queryCommands={canDeliverInitialPrompt ? querySlashItems : undefined}
-          modelOptions={modelOptions}
+          // A provider source has its own model picker above.
+          modelOptions={usesProviderSource(state.source) ? null : modelOptions}
           selectedModel={state.model ?? undefined}
           onModelChange={(modelId) => state.setModel(modelId || null)}
           allowCustomModel={!state.useChatUi}

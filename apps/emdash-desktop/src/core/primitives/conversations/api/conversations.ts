@@ -38,6 +38,9 @@ export type Conversation = {
   /** Initial queued prompts to deliver on first ACP spawn. Only present before sessionId is set. */
   initialQueue?: InitialQueuePrompt[];
   isInitialConversation: boolean | null;
+  /** Model provider source: provider id, null = the agent's own login, absent = agent default. */
+  modelSource?: string | null;
+  sourceModel?: string;
   agentStatus?: AgentStatus | null;
   agentStatusSeen?: boolean;
   /** Transport type: 'pty' (default) uses the terminal/PTY path; 'acp' uses the Agent Client Protocol. */
@@ -136,6 +139,10 @@ export type CreateConversationParams = {
   initialQueue?: InitialQueuePrompt[];
   /** Transport type: 'pty' (default) uses the terminal/PTY path; 'acp' uses the Agent Client Protocol. */
   type?: ConversationType;
+  /** Model provider to run on: provider id, null = the agent's own login, absent = default. */
+  modelSource?: string | null;
+  /** Model on that provider. */
+  sourceModel?: string;
   /**
    * Resume this existing provider session instead of starting a new one. Used to adopt
    * sessions that were started outside Emdash (terminal: --resume; chat UI: session/load).

@@ -8,6 +8,7 @@ import type {
   EnsureConversationSessionRequest,
   EnsureConversationSessionResult,
 } from '@core/features/conversations/api/node/types';
+import { sourceOverrideOf, type ModelSourceOverride } from '@core/features/model-providers/api';
 import type { TaskSessionLaunchContextSource } from '@core/features/tasks/api/node/task-session-launch-context';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import type { Conversation } from '@core/primitives/conversations/api';
@@ -40,7 +41,11 @@ export type TuiConversationProviderOptions = {
 
 export type TuiConversationProviderDependencies = {
   db: AppDb;
-  getProviderConfig(providerId: string): Promise<ProviderCustomConfig | undefined>;
+  /** Agent config for a launch; `override` is the conversation's own model source. */
+  getProviderConfig(
+    providerId: string,
+    override?: ModelSourceOverride
+  ): Promise<ProviderCustomConfig | undefined>;
   getTaskSettings(): Promise<{ autoTrustWorktrees: boolean }>;
   getTerminalColorEnv(): Promise<Record<string, string>>;
   /**
@@ -131,7 +136,10 @@ export class TuiConversationProvider implements ConversationProvider {
       !agentSession.isResuming && mode === 'start' ? initialPrompt : undefined;
     const [providerConfig, taskSettings, colorEnv, launchContext, gitCredentials] =
       await Promise.all([
-        this.dependencies.getProviderConfig(conversation.providerId),
+        this.dependencies.getProviderConfig(
+          conversation.providerId,
+          sourceOverrideOf(conversation)
+        ),
         conversation.autoApprove === true
           ? Promise.resolve(undefined)
           : this.dependencies.getTaskSettings(),

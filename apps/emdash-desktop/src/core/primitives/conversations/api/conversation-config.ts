@@ -23,6 +23,10 @@ const ptyConfigV1 = z.object({
   initialPrompt: z.string().optional(),
   /** Model to pass to the agent CLI. Empty string or absent = CLI default. */
   model: z.string().optional(),
+  /** Model provider this conversation runs on: its id, null = the agent's own login, absent = agent default. */
+  modelSource: z.string().nullable().optional(),
+  /** Model on that provider. */
+  sourceModel: z.string().optional(),
 });
 
 const acpConfigV1 = z.object({
@@ -41,6 +45,10 @@ const acpConfigV1 = z.object({
   effort: z.string().optional(),
   /** Last user-selected provider collaboration mode, such as Codex Default or Plan. */
   collaborationMode: z.string().optional(),
+  /** Model provider this conversation runs on: its id, null = the agent's own login, absent = agent default. */
+  modelSource: z.string().nullable().optional(),
+  /** Model on that provider. */
+  sourceModel: z.string().optional(),
 });
 
 export const conversationConfig = defineVersionedSchema()

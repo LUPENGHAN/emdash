@@ -57,7 +57,7 @@ import {
   type PromptLibraryKV,
 } from '@core/features/library/node/prompt-library-service';
 import { LocalSettingsSync } from '@core/features/machines/node/local-settings-sync';
-import type { ModelProviderKeys } from '@core/features/model-providers/api';
+import type { ModelProviderKeys, ModelSourceOverride } from '@core/features/model-providers/api';
 import { ensureAgentProviderFile } from '@core/features/model-providers/node/agent-provider-files';
 import {
   createEffectiveAgentConfig,
@@ -288,7 +288,8 @@ export async function bootServices(
   });
   const tuiConversationDependencies = {
     db,
-    getProviderConfig: (providerId: string) => effectiveAgentConfig(providerId),
+    getProviderConfig: (providerId: string, override?: ModelSourceOverride) =>
+      effectiveAgentConfig(providerId, override),
     getTaskSettings: () => appSettingsService.get('tasks'),
     getTerminalColorEnv,
     // Late-bound: the git-credentials service is constructed further down in

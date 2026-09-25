@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { secret } from '@emdash/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { anthropicBaseUrl, openAiBaseUrl, type ModelProvider } from '../api';
+import {
+  anthropicBaseUrl,
+  openAiBaseUrl,
+  sourceOverrideOf,
+  usesProviderSource,
+  type ModelProvider,
+} from '../api';
 import { agentProviderFilePath, ensureAgentProviderFile } from './agent-provider-files';
 import { createEffectiveAgentConfig } from './effective-agent-config';
 import { createModelProviderKeys } from './provider-keys';
@@ -203,5 +209,26 @@ describe('createModelProviderKeys', () => {
         headers: { Authorization: 'Bearer sk-1' },
       })
     );
+  });
+});
+
+describe('per-conversation source', () => {
+  it('follows the agent default unless the conversation chose a source', () => {
+    expect(sourceOverrideOf(undefined)).toBeUndefined();
+    expect(sourceOverrideOf({ sourceModel: 'm' })).toBeUndefined();
+    expect(sourceOverrideOf({ modelSource: null })).toEqual({
+      modelSource: null,
+      sourceModel: undefined,
+    });
+    expect(sourceOverrideOf({ modelSource: 'p', sourceModel: 'm' })).toEqual({
+      modelSource: 'p',
+      sourceModel: 'm',
+    });
+  });
+
+  it('treats only a provider id as a provider source', () => {
+    expect(usesProviderSource({})).toBe(false);
+    expect(usesProviderSource({ modelSource: null })).toBe(false);
+    expect(usesProviderSource({ modelSource: 'p' })).toBe(true);
   });
 });

@@ -17,6 +17,7 @@ import {
   setConversationAcpConfigOption,
   type AcpPersistedConfigKey,
 } from '@core/features/conversations/node/set-acp-config-option';
+import { sourceOverrideOf, type ModelSourceOverride } from '@core/features/model-providers/api';
 import type { ProjectAttachmentError } from '@core/features/projects/api';
 import {
   requireAttachedProjectOrThrow,
@@ -82,7 +83,10 @@ export type CreateConversationsWireControllerOptions = Readonly<{
   workspaceIdentity: WorkspaceIdentityResolver;
   resolveTarget?: (conversationId: string) => Promise<ConversationRuntimeTarget>;
   hooks?: ConversationRuntimeHooks;
-  getProviderEnv?: (providerId: string) => Promise<Record<string, string> | undefined>;
+  getProviderEnv?: (
+    providerId: string,
+    override?: ModelSourceOverride
+  ) => Promise<Record<string, string> | undefined>;
   sessionLaunchContexts: Pick<TaskSessionLaunchContextResolver, 'resolve'>;
   logger: Logger;
   projects: Pick<ProjectAttachmentManager, 'requireAttached'>;
@@ -385,7 +389,12 @@ async function resolveConversationRuntimeTarget(
   conversationId: string,
   workspaceIdentity: WorkspaceIdentityResolver,
   db: AppDb,
-  getProviderEnv: ((providerId: string) => Promise<Record<string, string> | undefined>) | undefined,
+  getProviderEnv:
+    | ((
+        providerId: string,
+        override?: ModelSourceOverride
+      ) => Promise<Record<string, string> | undefined>)
+    | undefined,
   sessionLaunchContexts: Pick<TaskSessionLaunchContextResolver, 'resolve'>
 ): Promise<ConversationRuntimeTarget> {
   const [row] = await db
@@ -425,7 +434,9 @@ async function resolveConversationRuntimeTarget(
   // Resolve the ACP agent environment in main from provider and project/task settings. The
   // renderer supplies only a conversation id and cannot inject spawn variables.
   const [providerEnv, launchContext] = await Promise.all([
-    row.providerId && getProviderEnv ? getProviderEnv(row.providerId) : undefined,
+    row.providerId && getProviderEnv
+      ? getProviderEnv(row.providerId, sourceOverrideOf(row.config))
+      : undefined,
     row.type === 'acp' && workspacePath
       ? sessionLaunchContexts.resolve({
           projectId: row.projectId,

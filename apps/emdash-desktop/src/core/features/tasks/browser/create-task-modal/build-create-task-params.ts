@@ -1,4 +1,5 @@
 import { nextDefaultConversationTitle } from '@core/features/conversations/api/browser/conversation-title-utils';
+import { usesProviderSource } from '@core/features/model-providers/api';
 import type { InitialConversationState } from '@core/features/tasks/contributions/browser/task-config/initial-conversation-section';
 import { extractIssueMentionTargets } from '@core/primitives/issues/api';
 import type { TaskConfig } from '@core/primitives/tasks/api';
@@ -48,7 +49,10 @@ export function buildInitialConversation(
         ? { initialPrompt: buildFinalPrompt(state.issueContext, state.prompt) }
         : {}),
     autoApprove: state.autoApprove,
-    model: state.model ?? undefined,
+    // A provider source brings its own model choice; the agent catalog model does not apply.
+    model: usesProviderSource(state.source) ? undefined : (state.model ?? undefined),
+    ...(state.source.modelSource !== undefined && { modelSource: state.source.modelSource }),
+    ...(state.source.sourceModel && { sourceModel: state.source.sourceModel }),
     type,
   };
 }

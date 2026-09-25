@@ -225,6 +225,18 @@ describe('createConversation', () => {
     expect(hostConversations.delete).toHaveBeenCalledWith({ conversationId: 'conv-1' });
   });
 
+  it("stores the conversation's model source in its config", async () => {
+    await createConversation(
+      { ...baseParams, type: 'pty' as const, modelSource: 'newapi', sourceModel: 'kimi' },
+      dependencies()
+    );
+    expect(hostConversations.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ modelSource: 'newapi', sourceModel: 'kimi' }),
+      })
+    );
+  });
+
   describe('adopting an existing provider session', () => {
     const importParams = { ...baseParams, type: 'pty' as const, providerSessionId: 'native-1' };
 

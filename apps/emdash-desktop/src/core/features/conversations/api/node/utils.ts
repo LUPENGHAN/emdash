@@ -33,6 +33,8 @@ export function mapConversationRowToConversation(row: ConversationRow): Conversa
     autoApprove: config?.autoApprove,
     sessionId: row.providerSessionId ?? undefined,
     model: config?.model,
+    ...(config?.modelSource !== undefined && { modelSource: config.modelSource }),
+    ...(config?.sourceModel && { sourceModel: config.sourceModel }),
     modeId: config?.type === 'acp' ? config.modeId : undefined,
     effort: config?.type === 'acp' ? config.effort : undefined,
     collaborationMode: config?.type === 'acp' ? config.collaborationMode : undefined,

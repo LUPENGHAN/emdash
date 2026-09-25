@@ -403,7 +403,8 @@ export const desktopNodeControllers = {
         db,
         logger,
         projects,
-        getProviderEnv: async (providerId) => (await effectiveAgentConfig(providerId))?.env,
+        getProviderEnv: async (providerId, override) =>
+          (await effectiveAgentConfig(providerId, override))?.env,
         sessionLaunchContexts,
         runtimes,
         taskSessions,

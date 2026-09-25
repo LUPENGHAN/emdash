@@ -12,6 +12,8 @@ import { nextDefaultConversationTitle } from '@core/features/conversations/api/b
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import { useEffectiveProvider } from '@core/features/conversations/api/browser/use-effective-provider';
 import { providerPreferencesMemento } from '@core/features/conversations/contributions/mementos';
+import { usesProviderSource, type ModelSourceValue } from '@core/features/model-providers/api';
+import { ModelSourceSelect } from '@core/features/model-providers/contributions/browser/model-source-select';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 // TODO(conversations-extraction): Pass task settings into the modal instead of importing task hooks.
 import { useTaskSettings } from '@core/features/tasks/api/browser/hooks/useTaskSettings';
@@ -78,6 +80,8 @@ export const CreateConversationModal = observer(function CreateConversationModal
     },
   });
   const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
+  const [source, setSource] = useState<ModelSourceValue>({});
+  const providerSource = usesProviderSource(source);
   const agentSessions = importableSessions.filter((session) => session.providerId === providerId);
   const resumeSession =
     agentSessions.find((session) => session.sessionId === resumeSessionId) ?? null;
@@ -141,6 +145,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
       setProviderOverride(next);
       setCustomModelDraft(null);
       setResumeSessionId(null);
+      setSource({});
     },
     [setProviderOverride]
   );
@@ -167,8 +172,11 @@ export const CreateConversationModal = observer(function CreateConversationModal
         autoApprove: skipPermissions,
         provider: providerId,
         title,
-        // A resumed session keeps the model it was started with.
-        model: resumeSession ? undefined : (selectedModel ?? undefined),
+        // A resumed session keeps the model it was started with; a provider source brings
+        // its own model choice.
+        model: resumeSession || providerSource ? undefined : (selectedModel ?? undefined),
+        ...(source.modelSource !== undefined && { modelSource: source.modelSource }),
+        ...(source.sourceModel && { sourceModel: source.sourceModel }),
         modeId: conversationType === 'acp' ? savedPreference?.modeId : undefined,
         effort: conversationType === 'acp' ? savedPreference?.effort : undefined,
         collaborationMode:
@@ -207,6 +215,8 @@ export const CreateConversationModal = observer(function CreateConversationModal
     skipPermissions,
     selectedModel,
     resumeSession,
+    source,
+    providerSource,
     useAcp,
     host,
     savedPreference?.effort,
@@ -260,7 +270,9 @@ export const CreateConversationModal = observer(function CreateConversationModal
               </Field.Description>
             </Field.Root>
           ) : null}
+          <ModelSourceSelect agentId={providerId} value={source} onChange={setSource} />
           {!resumeSession &&
+          !providerSource &&
           modelOptions &&
           (allowCustomModel || Object.keys(modelOptions).length > 0) ? (
             <Field.Root>
