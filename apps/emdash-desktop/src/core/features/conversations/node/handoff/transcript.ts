@@ -11,6 +11,7 @@ import {
   listFilesRecursive,
   openOpenCodeDb,
   parseJsonLines,
+  piSessionsDir,
   type ExternalSessionEnv,
 } from '../external-sessions';
 
@@ -31,6 +32,9 @@ export async function readTranscript(
   if (providerId === 'claude') await readClaude(env, sessionId, cwd, turns);
   else if (providerId === 'codex') await readCodex(env, sessionId, turns);
   else if (providerId === 'opencode') readOpenCode(env, sessionId, turns);
+  else if (providerId === 'pi' || providerId === 'oh-my-pi') {
+    await readPiFamily(providerId, env, sessionId, turns);
+  }
   return turns.list;
 }
 
@@ -100,6 +104,25 @@ async function readCodex(
     if (payload.type === 'item_completed' && item?.type === 'AgentMessage') {
       const content = Array.isArray(item.content) ? item.content : [];
       turns.add('assistant', content.map((part) => String(asRecord(part)?.text ?? '')).join('\n'));
+    }
+  }
+}
+
+async function readPiFamily(
+  agent: 'pi' | 'oh-my-pi',
+  env: ExternalSessionEnv,
+  sessionId: string,
+  turns: TurnCollector
+): Promise<void> {
+  // Files are named `<timestamp>_<session id>.jsonl`.
+  const files = await listFilesRecursive(piSessionsDir(agent, env), '.jsonl');
+  const file = files.find((candidate) => candidate.endsWith(`_${sessionId}.jsonl`));
+  if (!file) return;
+  for (const record of parseJsonLines(await readFile(file, 'utf8'))) {
+    if (record.type !== 'message') continue;
+    const message = asRecord(record.message);
+    if (message?.role === 'user' || message?.role === 'assistant') {
+      turns.add(message.role, claudeText(message.content));
     }
   }
 }

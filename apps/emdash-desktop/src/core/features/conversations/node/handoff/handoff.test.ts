@@ -76,6 +76,34 @@ describe('readTranscript', () => {
   });
 });
 
+describe('readTranscript for Pi-family sessions', () => {
+  it('reads user and assistant text by session id, skipping tool results', async () => {
+    const dir = path.join(home, '.omp', 'agent', 'sessions', '-repo');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      path.join(dir, '2026-09-25T05-16-09Z_omp-7.jsonl'),
+      jsonl(
+        { type: 'title', v: 1, title: 't' },
+        { type: 'session', id: 'omp-7', cwd },
+        { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Hi' }] } },
+        {
+          type: 'message',
+          message: { role: 'toolResult', content: [{ type: 'text', text: 'x' }] },
+        },
+        {
+          type: 'message',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] },
+        }
+      )
+    );
+
+    expect(await readTranscript('oh-my-pi', 'omp-7', cwd, { home, env: {} })).toEqual([
+      { role: 'user', text: 'Hi' },
+      { role: 'assistant', text: 'Hello' },
+    ]);
+  });
+});
+
 describe('prepareHandoff', () => {
   function deps(overrides: Partial<HandoffDeps> = {}): HandoffDeps {
     return {

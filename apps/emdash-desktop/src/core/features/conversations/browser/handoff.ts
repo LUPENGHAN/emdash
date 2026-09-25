@@ -13,6 +13,10 @@ const HANDOFF_TARGETS: { id: AgentProviderId; name: string }[] = [
   { id: 'claude' as AgentProviderId, name: 'Claude' },
   { id: 'codex' as AgentProviderId, name: 'Codex' },
   { id: 'opencode' as AgentProviderId, name: 'OpenCode' },
+  { id: 'pi' as AgentProviderId, name: 'Pi' },
+  { id: 'oh-my-pi' as AgentProviderId, name: 'Oh My Pi' },
+  // A target only receives the handoff message, so it needs no transcript reader.
+  { id: 'cursor' as AgentProviderId, name: 'Cursor' },
 ];
 
 /**

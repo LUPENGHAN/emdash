@@ -5,7 +5,8 @@ import type { Conversation, ConversationType } from '@core/primitives/conversati
 import { log } from '@core/primitives/logging/browser/logger';
 
 /** Providers whose session ids resume both in the CLI (--resume) and in ACP (session/load). */
-const SWITCHABLE_PROVIDERS = new Set(['claude', 'codex', 'opencode']);
+// Pi has no chat (ACP) adapter, so it stays terminal-only.
+const SWITCHABLE_PROVIDERS = new Set(['claude', 'codex', 'opencode', 'oh-my-pi']);
 
 /** The UI a conversation would switch to: terminal ⇄ chat. */
 export function switchTarget(conversation: Conversation): ConversationType {

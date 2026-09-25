@@ -152,7 +152,7 @@ export type CreateConversationParams = {
 
 /** A provider session found on disk that was not started by Emdash. */
 export type ImportableSession = {
-  providerId: 'claude' | 'codex' | 'opencode';
+  providerId: 'claude' | 'codex' | 'opencode' | 'pi' | 'oh-my-pi';
   sessionId: string;
   title: string;
   firstMessage: string | null;

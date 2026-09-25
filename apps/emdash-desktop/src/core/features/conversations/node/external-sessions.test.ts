@@ -207,4 +207,43 @@ describe('listExternalSessions', () => {
       ['x-wt', worktree],
     ]);
   });
+
+  it('finds Pi and Oh My Pi sessions by their header cwd, preferring the OMP title line', async () => {
+    const piDir = path.join(home, '.pi', 'agent', 'sessions', '--repo--');
+    const ompDir = path.join(home, '.omp', 'agent', 'sessions', '-repo');
+    await mkdir(piDir, { recursive: true });
+    await mkdir(ompDir, { recursive: true });
+    const message = (role: string, text: string) => ({
+      type: 'message',
+      message: { role, content: [{ type: 'text', text }] },
+    });
+    await writeFile(
+      path.join(piDir, '2026-09-02T01-55-25Z_pi-1.jsonl'),
+      jsonl({ type: 'session', id: 'pi-1', cwd: project }, message('user', 'ping'))
+    );
+    // Opened but never used: not listed.
+    await writeFile(
+      path.join(piDir, '2026-09-03T00-00-00Z_pi-empty.jsonl'),
+      jsonl({ type: 'session', id: 'pi-empty', cwd: project })
+    );
+    await writeFile(
+      path.join(ompDir, '2026-09-25T05-16-09Z_omp-1.jsonl'),
+      jsonl(
+        { type: 'title', v: 1, title: 'Fix sync' },
+        { type: 'session', id: 'omp-1', cwd: project },
+        message('user', 'sync is broken')
+      )
+    );
+    await writeFile(
+      path.join(ompDir, '2026-09-25T06-00-00Z_omp-other.jsonl'),
+      jsonl({ type: 'session', id: 'omp-other', cwd: '/elsewhere' }, message('user', 'x'))
+    );
+
+    const sessions = await listExternalSessions(project, { env, readers: noOpenCode });
+
+    expect(bySessionId(sessions).map((s) => [s.providerId, s.sessionId, s.title])).toEqual([
+      ['oh-my-pi', 'omp-1', 'Fix sync'],
+      ['pi', 'pi-1', 'ping'],
+    ]);
+  });
 });

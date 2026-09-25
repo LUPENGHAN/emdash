@@ -50,6 +50,8 @@ export async function listExternalSessions(
   const results = await Promise.all([
     readClaudeSessions(env, cwds).catch(() => []),
     readCodexSessions(env, cwds).catch(() => []),
+    readPiFamilySessions('pi', env, cwds).catch(() => []),
+    readPiFamilySessions('oh-my-pi', env, cwds).catch(() => []),
     Promise.resolve()
       .then(() => readers.opencode(env, cwds))
       .catch(() => []),
@@ -238,6 +240,71 @@ async function readCodexTitles(file: string): Promise<Map<string, string>> {
     // No index yet.
   }
   return titles;
+}
+
+// ── Pi / Oh My Pi ────────────────────────────────────────────────────────────
+
+export type PiFamilyAgent = 'pi' | 'oh-my-pi';
+
+/** Pi and its fork Oh My Pi keep one JSONL file per session, per cwd, under here. */
+export function piSessionsDir(agent: PiFamilyAgent, { home, env }: ExternalSessionEnv): string {
+  return agent === 'pi'
+    ? path.join(env.PI_CODING_AGENT_DIR ?? path.join(home, '.pi', 'agent'), 'sessions')
+    : path.join(home, '.omp', 'agent', 'sessions');
+}
+
+async function readPiFamilySessions(
+  agent: PiFamilyAgent,
+  env: ExternalSessionEnv,
+  cwds: Set<string>
+): Promise<ImportableSession[]> {
+  // Directory names encode the cwd lossily (and differently per fork); the header is truth.
+  const files = await listFilesRecursive(piSessionsDir(agent, env), '.jsonl');
+  const sessions: ImportableSession[] = [];
+  for (const file of files) {
+    const session = await readPiFamilySession(agent, file, cwds).catch(() => null);
+    if (session) sessions.push(session);
+  }
+  return dedupe(sessions);
+}
+
+async function readPiFamilySession(
+  agent: PiFamilyAgent,
+  file: string,
+  cwds: Set<string>
+): Promise<ImportableSession | null> {
+  const { head, mtimeMs } = await readHeadAndTail(file, 0);
+  let sessionId: string | null = null;
+  let sessionCwd: string | null = null;
+  let title: string | null = null;
+  let firstMessage: string | null = null;
+  for (const record of parseJsonLines(head)) {
+    if (record.type === 'title' && typeof record.title === 'string' && record.title.trim()) {
+      title = record.title.trim(); // Oh My Pi keeps a rewritable title line on top.
+    } else if (record.type === 'session') {
+      if (typeof record.cwd !== 'string' || !cwds.has(record.cwd)) return null;
+      sessionId = typeof record.id === 'string' ? record.id : null;
+      sessionCwd = record.cwd;
+    } else if (record.type === 'message') {
+      const message = asRecord(record.message);
+      if (message?.role !== 'user') continue;
+      const text = claudeText(message.content);
+      if (!isNoise(text)) {
+        firstMessage = text;
+        break;
+      }
+    }
+  }
+  // A session nobody spoke in is not worth resuming.
+  if (!sessionId || !sessionCwd || !firstMessage) return null;
+  return {
+    providerId: agent,
+    sessionId,
+    title: clip(title ?? firstMessage),
+    firstMessage: clip(firstMessage, 400),
+    updatedAt: mtimeMs,
+    cwd: sessionCwd,
+  };
 }
 
 // ── OpenCode ─────────────────────────────────────────────────────────────────

@@ -20,6 +20,8 @@ const AGENT_NAMES: Record<ImportableSession['providerId'], string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  pi: 'Pi',
+  'oh-my-pi': 'Oh My Pi',
 };
 
 /** Where a session ran, when it was not the project directory itself. */

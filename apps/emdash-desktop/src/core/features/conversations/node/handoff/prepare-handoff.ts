@@ -15,6 +15,9 @@ const AGENT_NAMES: Record<string, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  pi: 'Pi',
+  'oh-my-pi': 'Oh My Pi',
+  cursor: 'Cursor',
 };
 
 export type HandoffSource = {
