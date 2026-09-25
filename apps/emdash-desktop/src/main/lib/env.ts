@@ -4,7 +4,7 @@ import { log } from './logger';
 const buildSchema = z.object({
   VITE_POSTHOG_KEY: z.string().optional(),
   VITE_POSTHOG_HOST: z.string().optional(),
-  VITE_BUILD: z.enum(['canary', 'prod']).default('prod'),
+  VITE_BUILD: z.enum(['canary', 'prod', 'fork']).default('prod'),
   VITE_FEEDBACK_RELAY_URL: z.string().optional(),
 });
 

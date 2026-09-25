@@ -5,7 +5,7 @@ import _electronUpdater, {
   type Logger as UpdaterLogger,
 } from 'electron-updater';
 import { updateEvents } from '@core/features/updates/node';
-import { IS_CANARY, UPDATE_CHANNEL } from '@core/primitives/app-identity/api/app-identity';
+import { IS_CANARY, IS_FORK, UPDATE_CHANNEL } from '@core/primitives/app-identity/api/app-identity';
 import { resolveAppVersion } from '@main/core/app/utils';
 import { log } from '@main/lib/logger';
 import { formatUpdaterError, getUpdaterErrorDetails, sanitizeUpdaterLogArgs } from './utils';
@@ -72,7 +72,7 @@ export class UpdateService implements Disposable {
 
     this.updateState.currentVersion = await resolveAppVersion();
 
-    if (import.meta.env.DEV) return;
+    if (import.meta.env.DEV || IS_FORK) return;
 
     this.setupAutoUpdater();
     this.setupEventListeners();
