@@ -17,14 +17,22 @@ VITE_BUILD=fork pnpm exec electron-vite build >/dev/null
 rm -rf release/mac-arm64
 CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac dir --arm64 \
   --publish never --config electron-builder.fork.config.ts
-# Sign with a stable local identity when one exists, so macOS privacy grants (e.g. the
-# Documents access a login shell needs) survive rebuilds; ad-hoc signatures change on
-# every build and re-prompt. Create it once in Keychain Access → Certificate Assistant
-# → Create a Certificate… (type: Code Signing), named as below.
-sign_identity="${EMDASH_FORK_SIGN_IDENTITY:-Emdash Fork Local}"
-if security find-identity -v -p codesigning | grep -q "\"$sign_identity\""; then
+# Sign with a stable identity when one is configured, so macOS privacy and keychain
+# grants (Documents access for the login shell, the fork's Safe Storage item) survive
+# rebuilds; ad-hoc signatures change on every build and re-prompt. The identity (name or
+# SHA-1, e.g. an "Apple Development" certificate) comes from $EMDASH_FORK_SIGN_IDENTITY,
+# else ~/.config/emdash-fork/sign-identity, else a certificate named "Emdash Fork Local".
+identity_file="$HOME/.config/emdash-fork/sign-identity"
+sign_identity="${EMDASH_FORK_SIGN_IDENTITY:-}"
+if [ -z "$sign_identity" ] && [ -s "$identity_file" ]; then
+  sign_identity="$(tr -d '[:space:]' < "$identity_file")"
+fi
+sign_identity="${sign_identity:-Emdash Fork Local}"
+if security find-identity -v -p codesigning | grep -qF "$sign_identity"; then
+  echo "Signing with a stable identity"
   codesign --force --deep --sign "$sign_identity" "$bundle"
 else
+  echo "No stable signing identity; signing ad-hoc"
   codesign --force --deep --sign - "$bundle"
 fi
 
