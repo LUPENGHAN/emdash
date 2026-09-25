@@ -3,6 +3,10 @@ import {
   conversationRegistryTable as conversations,
   liveConversations,
 } from '@core/features/conversations/api/node/registry';
+import {
+  liveWorkspaces,
+  workspaceRegistryTable as workspaces,
+} from '@core/features/workspaces/api/node/registry';
 import type { ImportableSession } from '@core/primitives/conversations/api';
 import type { AppDb } from '@core/services/app-db/node/db';
 import { projects, tasks } from '@core/services/app-db/node/schema';
@@ -30,8 +34,9 @@ export async function listImportableSessions(
 }
 
 /**
- * Sessions started outside Emdash in a project's own checkout (not its worktrees),
- * i.e. the history of `claude` / `codex` / `opencode` run from the project directory.
+ * Sessions started outside Emdash anywhere in a project: its checkout and every live local
+ * worktree Emdash knows (its own, plus ones adopted from Claude Code, Codex, …). Each is
+ * tagged with its workspace so it can be resumed right there, without a new worktree.
  */
 export async function listProjectImportableSessions(
   db: ListDb,
@@ -44,7 +49,29 @@ export async function listProjectImportableSessions(
     .from(projects)
     .where(eq(projects.id, projectId))
     .limit(1);
-  return listForWorkspace(db, workspaceIdentity, projectRow?.workspaceId ?? null, list);
+  const repositoryId = projectRow?.workspaceId;
+  const identity = repositoryId ? await workspaceIdentity.resolve(repositoryId) : null;
+  // Session stores are read from this machine's disk; remote workspaces are not covered.
+  if (!repositoryId || !identity || identity.host.type === 'remote') return [];
+
+  const worktrees = await db
+    .select({ id: workspaces.id, path: workspaces.path, location: workspaces.location })
+    .from(workspaces)
+    .where(and(eq(workspaces.parentId, repositoryId), liveWorkspaces()));
+  const workspaceByPath = new Map([[identity.path, repositoryId]]);
+  for (const worktree of worktrees) {
+    if (worktree.path && worktree.location !== 'remote') {
+      workspaceByPath.set(worktree.path, worktree.id);
+    }
+  }
+
+  const sessions = await list([...workspaceByPath.keys()], {
+    exclude: await sessionsInTasks(db),
+  });
+  return sessions.map((session) => ({
+    ...session,
+    workspaceId: workspaceByPath.get(session.cwd),
+  }));
 }
 
 /**
@@ -63,6 +90,11 @@ async function listForWorkspace(
   // Session stores are read from this machine's disk; remote workspaces are not covered.
   if (!identity || identity.host.type === 'remote') return [];
 
+  return list(identity.path, { exclude: await sessionsInTasks(db) });
+}
+
+/** Session handles (and conversation ids) of live conversations that belong to a task. */
+async function sessionsInTasks(db: ListDb): Promise<Set<string>> {
   const known = await db
     .select({ id: conversations.id, providerSessionId: conversations.providerSessionId })
     .from(conversations)
@@ -72,5 +104,5 @@ async function listForWorkspace(
     exclude.add(row.id);
     if (row.providerSessionId) exclude.add(row.providerSessionId);
   }
-  return list(identity.path, { exclude });
+  return exclude;
 }

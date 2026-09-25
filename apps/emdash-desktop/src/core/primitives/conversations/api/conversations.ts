@@ -151,6 +151,10 @@ export type ImportableSession = {
   firstMessage: string | null;
   /** Epoch milliseconds of the last write to the session. */
   updatedAt: number;
+  /** Directory the session ran in: one of the directories that were scanned. */
+  cwd: string;
+  /** Emdash workspace of that directory, for project-wide listings (checkout or worktree). */
+  workspaceId?: string;
 };
 
 /** What a receiving agent gets when a conversation is handed off to it. */

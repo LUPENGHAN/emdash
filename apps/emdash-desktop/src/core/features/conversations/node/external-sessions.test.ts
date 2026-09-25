@@ -156,6 +156,7 @@ describe('listExternalSessions', () => {
         title: 'old',
         firstMessage: null,
         updatedAt: 1,
+        cwd: project,
       },
       {
         providerId: 'opencode',
@@ -163,6 +164,7 @@ describe('listExternalSessions', () => {
         title: 'new',
         firstMessage: null,
         updatedAt: 9,
+        cwd: project,
       },
     ]);
 
@@ -170,5 +172,39 @@ describe('listExternalSessions', () => {
 
     expect(opencode.mock.calls[0]?.[1]).toEqual(new Set([project]));
     expect(sessions.map((s) => s.sessionId)).toEqual(['ses_new', 'ses_old']);
+  });
+
+  it('scans several directories at once and tags each session with its own', async () => {
+    const worktree = path.join(project, '.claude', 'worktrees', 'feature-x');
+    await mkdir(worktree, { recursive: true });
+    await writeClaude('main-1', project, {
+      type: 'user',
+      cwd: project,
+      message: { content: 'On the checkout' },
+    });
+    await writeClaude('wt-1', worktree, {
+      type: 'user',
+      cwd: worktree,
+      message: { content: 'In the worktree' },
+    });
+    await writeCodex(
+      'rollout-9.jsonl',
+      { type: 'session_meta', payload: { id: 'x-wt', cwd: worktree } },
+      {
+        type: 'event_msg',
+        payload: { type: 'user_message', message: 'Codex in the worktree' },
+      }
+    );
+
+    const sessions = await listExternalSessions([project, worktree], {
+      env,
+      readers: noOpenCode,
+    });
+
+    expect(bySessionId(sessions).map((s) => [s.sessionId, s.cwd])).toEqual([
+      ['main-1', project],
+      ['wt-1', worktree],
+      ['x-wt', worktree],
+    ]);
   });
 });

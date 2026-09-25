@@ -22,6 +22,16 @@ const AGENT_NAMES: Record<ImportableSession['providerId'], string> = {
   opencode: 'OpenCode',
 };
 
+/** Where a session ran, when it was not the project directory itself. */
+export function sessionLocationLabel(cwd: string, projectPath: string | undefined): string | null {
+  if (!projectPath || cwd === projectPath) return null;
+  const name = cwd.split('/').filter(Boolean).pop() ?? cwd;
+  if (cwd.includes('/.claude/worktrees/')) return `Claude worktree · ${name}`;
+  if (cwd.includes('/.codex/worktrees/')) return `Codex worktree · ${name}`;
+  if (cwd.includes('/emdash/worktrees/')) return `Emdash worktree · ${name}`;
+  return `Worktree · ${name}`;
+}
+
 /**
  * Sessions of Claude Code / Codex / OpenCode that were run in this project's directory
  * outside Emdash. Resuming one opens it as a task on the project checkout itself (no
@@ -49,7 +59,9 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
   // terminal resumes it with the CLI's own --resume.
   const resume = async (session: ImportableSession, type: 'acp' | 'pty') => {
     const taskManager = getTaskManagerStore(projectId);
-    if (!taskManager || !repositoryWorkspaceId || resumingId) return;
+    // Resume where the session ran: the checkout or the worktree it was started in.
+    const workspaceId = session.workspaceId ?? repositoryWorkspaceId;
+    if (!taskManager || !workspaceId || resumingId) return;
     setResumingId(session.sessionId);
     const taskId = crypto.randomUUID();
     const title = session.title.slice(0, 80);
@@ -61,7 +73,7 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
         workspaceConfig: {
           version: '2',
           git: { kind: 'none' },
-          workspace: { kind: 'repository-instance', workspaceId: repositoryWorkspaceId },
+          workspace: { kind: 'repository-instance', workspaceId },
         },
       });
       const created = await (
@@ -100,7 +112,7 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
           No Claude Code, Codex or OpenCode sessions found for {project?.path ?? 'this project'}.
         </p>
         <p className="text-xs">
-          Sessions started in this directory from a terminal or IDE show up here.
+          Sessions started in this directory or its worktrees from a terminal or IDE show up here.
         </p>
       </div>
     );
@@ -109,8 +121,8 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
   return (
     <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
       <p className="mb-3 text-xs text-foreground-muted">
-        Sessions started in {project?.path} outside Emdash. Resuming opens one as a task on the
-        project directory.
+        Sessions started in {project?.path} and its worktrees outside Emdash. Resuming opens one as
+        a task right where it ran, without creating a new worktree.
       </p>
       <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
         {sessions.map((session) => (
@@ -123,13 +135,19 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
               <p className="text-xs text-foreground-muted">
                 {AGENT_NAMES[session.providerId]} ·{' '}
                 {formatDistanceToNow(session.updatedAt, { addSuffix: true })}
+                {sessionLocationLabel(session.cwd, project?.path) ? (
+                  <span className="text-foreground-passive">
+                    {' · '}
+                    {sessionLocationLabel(session.cwd, project?.path)}
+                  </span>
+                ) : null}
               </p>
             </div>
             <Button
               size="sm"
               variant="ghost"
               title="Resume in a terminal, with the CLI's own interface"
-              disabled={!repositoryWorkspaceId || resumingId !== null}
+              disabled={!(session.workspaceId ?? repositoryWorkspaceId) || resumingId !== null}
               onClick={() => void resume(session, 'pty')}
             >
               Terminal
@@ -138,7 +156,7 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
               size="sm"
               variant="secondary"
               title="Resume in the chat UI"
-              disabled={!repositoryWorkspaceId || resumingId !== null}
+              disabled={!(session.workspaceId ?? repositoryWorkspaceId) || resumingId !== null}
               onClick={() => void resume(session, 'acp')}
             >
               {resumingId === session.sessionId ? 'Resuming…' : 'Resume'}

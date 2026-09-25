@@ -31,7 +31,7 @@ export type ExternalSessionReaders = {
 const defaultReaders: ExternalSessionReaders = { opencode: readOpenCodeSessions };
 
 export async function listExternalSessions(
-  cwd: string,
+  dirs: string | readonly string[],
   options: {
     exclude?: ReadonlySet<string>;
     env?: ExternalSessionEnv;
@@ -40,7 +40,12 @@ export async function listExternalSessions(
 ): Promise<ImportableSession[]> {
   const env = options.env ?? { home: homedir(), env: process.env };
   const readers = options.readers ?? defaultReaders;
-  const cwds = await cwdVariants(cwd);
+  // Each scanned directory, as given and as resolved, maps back to the caller's spelling.
+  const variantToDir = new Map<string, string>();
+  for (const dir of typeof dirs === 'string' ? [dirs] : dirs) {
+    for (const variant of await cwdVariants(dir)) variantToDir.set(variant, dir);
+  }
+  const cwds = new Set(variantToDir.keys());
 
   const results = await Promise.all([
     readClaudeSessions(env, cwds).catch(() => []),
@@ -53,6 +58,7 @@ export async function listExternalSessions(
   return results
     .flat()
     .filter((session) => !exclude.has(session.sessionId))
+    .map((session) => ({ ...session, cwd: variantToDir.get(session.cwd) ?? session.cwd }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -90,7 +96,7 @@ async function readClaudeSessions(
     }
     for (const entry of entries) {
       if (!entry.endsWith('.jsonl')) continue;
-      const session = await readClaudeSession(path.join(dir, entry), cwds).catch(() => null);
+      const session = await readClaudeSession(path.join(dir, entry), cwd, cwds).catch(() => null);
       if (session) sessions.push(session);
     }
   }
@@ -99,6 +105,7 @@ async function readClaudeSessions(
 
 async function readClaudeSession(
   file: string,
+  dirCwd: string,
   cwds: Set<string>
 ): Promise<ImportableSession | null> {
   const { head, tail, mtimeMs } = await readHeadAndTail(file);
@@ -128,6 +135,7 @@ async function readClaudeSession(
     title: clip(customTitle ?? firstMessage),
     firstMessage: clip(firstMessage, 400),
     updatedAt: mtimeMs,
+    cwd: sessionCwd ?? dirCwd,
   };
 }
 
@@ -167,6 +175,7 @@ async function readCodexSession(
 ): Promise<ImportableSession | null> {
   const { head, mtimeMs } = await readHeadAndTail(file, 0, CODEX_HEAD_BYTES);
   let sessionId: string | null = null;
+  let sessionCwd = '';
   let firstMessage: string | null = null;
   for (const record of parseJsonLines(head)) {
     const payload = asRecord(record.payload);
@@ -177,6 +186,7 @@ async function readCodexSession(
       const source = payload.thread_source;
       if (!cwd || !cwds.has(cwd) || (source !== undefined && source !== 'user')) return null;
       sessionId = String(payload.id ?? payload.session_id ?? '') || null;
+      sessionCwd = cwd;
       continue;
     }
     const text = codexUserText(payload);
@@ -194,6 +204,7 @@ async function readCodexSession(
     title: clip(title),
     firstMessage: firstMessage ? clip(firstMessage, 400) : null,
     updatedAt: mtimeMs,
+    cwd: sessionCwd,
   };
 }
 
@@ -247,13 +258,13 @@ function readOpenCodeSessions(env: ExternalSessionEnv, cwds: Set<string>): Impor
     // Top-level, unarchived sessions that have at least one message.
     const rows = db
       .prepare(
-        `SELECT s.id, s.title, s.time_updated AS updated FROM session s
+        `SELECT s.id, s.title, s.directory AS dir, s.time_updated AS updated FROM session s
          WHERE s.directory IN (${placeholders})
            AND s.parent_id IS NULL AND s.time_archived IS NULL
            AND EXISTS (SELECT 1 FROM message m WHERE m.session_id = s.id)
          ORDER BY s.time_updated DESC LIMIT 200`
       )
-      .all(...cwds) as { id: string; title: string; updated: number }[];
+      .all(...cwds) as { id: string; title: string; dir: string; updated: number }[];
     // OpenCode names sessions after the fact; ones it never named keep a placeholder.
     const firstUserText = db.prepare(
       `SELECT json_extract(p.data, '$.text') AS text FROM part p
@@ -273,6 +284,7 @@ function readOpenCodeSessions(env: ExternalSessionEnv, cwds: Set<string>): Impor
         title: clip(first ?? row.title),
         firstMessage: first ? clip(first, 400) : null,
         updatedAt: row.updated,
+        cwd: row.dir,
       };
     });
   } finally {
