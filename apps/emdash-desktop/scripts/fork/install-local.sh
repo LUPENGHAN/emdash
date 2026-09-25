@@ -28,5 +28,8 @@ rm -rf "/Applications/Emdash Fork.app"
 ditto "$bundle" "/Applications/Emdash Fork.app"
 # Leave a single registered copy so Launch Services opens the installed one.
 rm -rf "$app_dir/release/mac-arm64"
-open "/Applications/Emdash Fork.app"
+# Launch with a clean environment, as the Dock would: `open` otherwise hands the
+# caller's environment (e.g. ANTHROPIC_BASE_URL) to the app and its agents.
+env -i HOME="$HOME" USER="$USER" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  /usr/bin/open "/Applications/Emdash Fork.app"
 echo "Installed and launched /Applications/Emdash Fork.app"

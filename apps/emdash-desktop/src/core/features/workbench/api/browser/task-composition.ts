@@ -302,19 +302,50 @@ export class TaskComposition {
     await this.space.ready;
     await this.paneLayout.hydrate();
     this._paneHydrated = true;
+    this.watchLateInitialConversations();
 
     if (this.paneLayout.focusedPane.tabOrder.length !== 0) return;
     runInAction(() => {
       for (const [id, store] of this._conversations.conversations) {
         if (!store.isInitialConversation) continue;
-        if (store.data.type === 'acp') {
-          this.paneLayout.open('acp-chat', { conversationId: id }, { preview: false });
-        } else {
-          this.paneLayout.open('conversation', { conversationId: id }, { preview: false });
-        }
+        this.openConversationTab(id, store.data.type);
         return;
       }
     });
+  }
+
+  /**
+   * An initial conversation can arrive after the pane was seeded — e.g. a session
+   * adopted into a task that was provisioned a moment earlier. Open it if the pane is
+   * still empty then; conversations present at hydration are never reopened.
+   */
+  private watchLateInitialConversations(): void {
+    const seen = new Set(this._conversations.conversations.keys());
+    this._disposers.push(
+      reaction(
+        () => [...this._conversations.conversations.keys()],
+        (ids) => {
+          for (const id of ids) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const store = this._conversations.conversations.get(id);
+            if (!store?.isInitialConversation) continue;
+            if (this.paneLayout.focusedPane.tabOrder.length !== 0) continue;
+            runInAction(() => this.openConversationTab(id, store.data.type));
+          }
+        }
+      )
+    );
+  }
+
+  private openConversationTab(conversationId: string, type: string | undefined): void {
+    this.paneLayout.open(
+      type === 'acp' ? 'acp-chat' : 'conversation',
+      { conversationId },
+      {
+        preview: false,
+      }
+    );
   }
 
   activate(): void {
