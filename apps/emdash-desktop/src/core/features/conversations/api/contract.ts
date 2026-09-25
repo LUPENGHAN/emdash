@@ -28,6 +28,7 @@ import type {
   Conversation,
   ConversationEvent,
   CreateConversationParams,
+  HandoffPreparation,
   HostConversationRow,
   ImportableSession,
 } from '@core/primitives/conversations/api';
@@ -230,6 +231,11 @@ export const conversationsContract = defineContract({
   listImportableSessions: procedure({
     input: z.object({ projectId: z.string(), taskId: z.string() }),
     output: z.custom<ImportableSession[]>(),
+  }),
+  /** Transcript file + first message for handing a conversation to another agent. */
+  prepareHandoff: procedure({
+    input: z.object({ conversationId: z.string() }),
+    output: z.custom<HandoffPreparation>(),
   }),
   /** Same, for the project's own checkout: its terminal/IDE session history. */
   listProjectImportableSessions: procedure({

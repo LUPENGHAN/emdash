@@ -57,7 +57,7 @@ export async function listExternalSessions(
 }
 
 /** The task path as given and as resolved, so symlinked roots (/tmp, /var) still match. */
-async function cwdVariants(cwd: string): Promise<Set<string>> {
+export async function cwdVariants(cwd: string): Promise<Set<string>> {
   const variants = new Set([path.resolve(cwd)]);
   try {
     variants.add(await realpath(cwd));
@@ -131,7 +131,7 @@ async function readClaudeSession(
   };
 }
 
-function claudeText(content: unknown): string {
+export function claudeText(content: unknown): string {
   if (typeof content === 'string') return content.trim();
   if (!Array.isArray(content)) return '';
   return content
@@ -197,7 +197,7 @@ async function readCodexSession(
   };
 }
 
-function codexUserText(payload: Record<string, unknown>): string | null {
+export function codexUserText(payload: Record<string, unknown>): string | null {
   if (payload.type === 'user_message' && typeof payload.message === 'string') {
     return payload.message.trim();
   }
@@ -231,15 +231,17 @@ async function readCodexTitles(file: string): Promise<Map<string, string>> {
 
 // ── OpenCode ─────────────────────────────────────────────────────────────────
 
-function readOpenCodeSessions(
-  { home, env }: ExternalSessionEnv,
-  cwds: Set<string>
-): ImportableSession[] {
+/** OpenCode's SQLite session store, opened read-only. */
+export function openOpenCodeDb({ home, env }: ExternalSessionEnv): Database.Database {
   const dataHome = env.XDG_DATA_HOME ?? path.join(home, '.local', 'share');
-  const db = new Database(path.join(dataHome, 'opencode', 'opencode.db'), {
+  return new Database(path.join(dataHome, 'opencode', 'opencode.db'), {
     readonly: true,
     fileMustExist: true,
   });
+}
+
+function readOpenCodeSessions(env: ExternalSessionEnv, cwds: Set<string>): ImportableSession[] {
+  const db = openOpenCodeDb(env);
   try {
     const placeholders = [...cwds].map(() => '?').join(', ');
     // Top-level, unarchived sessions that have at least one message.
@@ -305,7 +307,7 @@ async function readHeadAndTail(
 }
 
 /** Parses complete JSON lines, skipping partial lines at buffer edges. */
-function* parseJsonLines(text: string): Generator<Record<string, unknown>> {
+export function* parseJsonLines(text: string): Generator<Record<string, unknown>> {
   for (const line of text.split('\n')) {
     if (!line.startsWith('{')) continue;
     try {
@@ -317,7 +319,7 @@ function* parseJsonLines(text: string): Generator<Record<string, unknown>> {
   }
 }
 
-async function listFilesRecursive(dir: string, ext: string): Promise<string[]> {
+export async function listFilesRecursive(dir: string, ext: string): Promise<string[]> {
   try {
     const entries = await readdir(dir, { recursive: true });
     const files = entries.filter((entry) => entry.endsWith(ext)).map((e) => path.join(dir, e));
@@ -330,7 +332,7 @@ async function listFilesRecursive(dir: string, ext: string): Promise<string[]> {
   }
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
@@ -340,7 +342,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
  * Slash commands, system/hook injections, caveats and Claude's compaction hand-over
  * summary are not something the user said.
  */
-function isNoise(text: string): boolean {
+export function isNoise(text: string): boolean {
   return (
     !text ||
     text.startsWith('<') ||

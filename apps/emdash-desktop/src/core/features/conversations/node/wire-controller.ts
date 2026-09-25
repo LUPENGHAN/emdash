@@ -203,6 +203,7 @@ export function createConversationsWireController(
     getConversationsForTask: ({ projectId, taskId }) =>
       conversationOperations.getConversationsForTask(projectId, taskId),
     listImportableSessions: ({ taskId }) => conversationOperations.listImportableSessions(taskId),
+    prepareHandoff: ({ conversationId }) => conversationOperations.prepareHandoff(conversationId),
     listProjectImportableSessions: ({ projectId }) =>
       conversationOperations.listProjectImportableSessions(projectId),
     getConversationsForProject: ({ projectId }) =>

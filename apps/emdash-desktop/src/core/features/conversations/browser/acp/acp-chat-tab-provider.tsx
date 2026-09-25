@@ -18,6 +18,7 @@ import {
   GenericTabItem,
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
 import { ConversationAgentIcon } from '../conversation-agent-icon';
+import { handoffCommands } from '../handoff';
 import { switchConversationUiCommands } from '../switch-conversation-ui';
 import { AcpChatPanel } from './acp-chat-panel';
 import { getAcpChatResourceManager } from './acp-chat-resource-manager';
@@ -69,6 +70,7 @@ export const AcpChatTabBarItem = observer(function AcpChatTabBarItem({
           run: () => host.requestRename(tab.tabId),
         },
         ...switchConversationUiCommands(conversation?.data),
+        ...handoffCommands(conversation?.data),
       ]}
       renameValue={rawTitle}
       renameMaxLength={MAX_CONVERSATION_TITLE_LENGTH}

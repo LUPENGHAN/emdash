@@ -152,3 +152,11 @@ export type ImportableSession = {
   /** Epoch milliseconds of the last write to the session. */
   updatedAt: number;
 };
+
+/** What a receiving agent gets when a conversation is handed off to it. */
+export type HandoffPreparation = {
+  /** First message for the receiving agent: short, pointing at the transcript file. */
+  prompt: string;
+  /** Workspace-relative transcript path, or null when the session had no readable text. */
+  transcriptPath: string | null;
+};
