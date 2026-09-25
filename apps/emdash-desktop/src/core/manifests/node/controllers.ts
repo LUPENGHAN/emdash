@@ -42,6 +42,8 @@ import type { PromptLibraryService } from '@core/features/library/node/prompt-li
 import { createPromptLibraryWireController } from '@core/features/library/node/wire-controller';
 import { createMachinesWireController } from '@core/features/machines/node/wire-controller';
 import { createMcpWireController } from '@core/features/mcp/node/wire-controller';
+import type { ModelProviderKeys } from '@core/features/model-providers/api';
+import type { EffectiveAgentConfig } from '@core/features/model-providers/node/effective-agent-config';
 import type { PreviewServerAccessOperations } from '@core/features/preview-servers/node/preview-server-access-service';
 import { createPreviewServersWireController } from '@core/features/preview-servers/node/wire-controller';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
@@ -141,6 +143,8 @@ export type DesktopControllerContext = {
   readonly projects: ProjectAttachmentManager;
   readonly projectSettings: ProjectSettingsService;
   readonly providerSettings: ProviderOverrideSettings;
+  readonly effectiveAgentConfig: EffectiveAgentConfig;
+  readonly modelProviderKeys: ModelProviderKeys;
   readonly reconcileSweep: ReconcileSweepHandle;
   readonly hosts: Hosts;
   readonly runtimeClients: {
@@ -185,13 +189,14 @@ export const desktopNodeControllers = {
       createAccountWireController(accountService, { logger, telemetry }),
   },
   agents: {
-    create: ({ agentDependencies, providerSettings, runtimes }) =>
+    create: ({ agentDependencies, providerSettings, runtimes, modelProviderKeys }) =>
       createAgentsWireController({
         operations: createAgentOperations({
           ...agentDependencies,
           providerOverrideSettings: providerSettings,
         }),
         runtimes,
+        modelProviderKeys,
       }),
   },
   appSettings: {
@@ -386,7 +391,7 @@ export const desktopNodeControllers = {
       hostIsReachable,
       logger,
       projects,
-      providerSettings,
+      effectiveAgentConfig,
       runtimes,
       sessionLaunchContexts,
       taskSessions,
@@ -398,7 +403,7 @@ export const desktopNodeControllers = {
         db,
         logger,
         projects,
-        getProviderEnv: async (providerId) => (await providerSettings.getItem(providerId))?.env,
+        getProviderEnv: async (providerId) => (await effectiveAgentConfig(providerId))?.env,
         sessionLaunchContexts,
         runtimes,
         taskSessions,

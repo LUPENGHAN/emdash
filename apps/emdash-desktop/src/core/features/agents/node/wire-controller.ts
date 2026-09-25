@@ -4,6 +4,7 @@ import { err, ok, type Result } from '@emdash/shared';
 import type { LiveModelProvider, LiveSource } from '@emdash/wire/rpc';
 import { createController, type CallMeta, type Controller } from '@emdash/wire/rpc';
 import type { AgentOperations } from '@core/features/agents/node/controller';
+import type { ModelProviderKeys } from '@core/features/model-providers/api';
 import { forwardLiveModel } from '@core/services/runtime-clients/node/forward-live-model';
 import { agentsContract } from '../api';
 import {
@@ -17,6 +18,7 @@ import {
 export type CreateAgentsWireControllerOptions = Readonly<{
   operations: AgentOperations;
   runtimes: AgentsRuntimeBroker;
+  modelProviderKeys?: ModelProviderKeys;
 }>;
 
 export function createAgentsWireController(options: CreateAgentsWireControllerOptions): Controller {
@@ -126,6 +128,24 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
       withAgentConfigResult(options.runtimes, input.host, (client) =>
         client.resizeLogin(withoutHost(input), callOptions(meta))
       ),
+    modelProviderKeyStatus: async ({ providerId }) => ({
+      hasKey: (await options.modelProviderKeys?.hasKey(providerId)) ?? false,
+    }),
+    setModelProviderKey: async ({ providerId, apiKey }) => {
+      if (!options.modelProviderKeys) throw new Error('Provider keys are unavailable');
+      await options.modelProviderKeys.set(providerId, apiKey);
+    },
+    clearModelProviderKey: async ({ providerId }) => {
+      await options.modelProviderKeys?.clear(providerId);
+    },
+    listModelProviderModels: async (input) => {
+      if (!options.modelProviderKeys) return err({ message: 'Provider keys are unavailable' });
+      try {
+        return ok(await options.modelProviderKeys.listModels(input));
+      } catch (error) {
+        return err({ message: error instanceof Error ? error.message : String(error) });
+      }
+    },
     markUrlHandled: (input, meta) =>
       withAgentConfigResult(options.runtimes, input.host, (client) =>
         client.markUrlHandled(withoutHost(input), callOptions(meta))

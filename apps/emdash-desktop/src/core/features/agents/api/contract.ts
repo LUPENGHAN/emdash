@@ -166,6 +166,30 @@ export const agentsContract = defineContract({
   loginOutput: liveLog({
     key: providerInputSchema,
   }),
+  // Model provider API keys (encrypted store). Keys can be set, cleared and checked from
+  // the renderer, never read back.
+  modelProviderKeyStatus: procedure({
+    input: z.object({ providerId: z.string() }),
+    output: z.object({ hasKey: z.boolean() }),
+  }),
+  setModelProviderKey: procedure({
+    input: z.object({ providerId: z.string(), apiKey: z.string().min(1) }),
+    output: z.void(),
+  }),
+  clearModelProviderKey: procedure({
+    input: z.object({ providerId: z.string() }),
+    output: z.void(),
+  }),
+  /** The provider's model ids (GET /v1/models); doubles as a connection test. */
+  listModelProviderModels: fallible({
+    input: z.object({
+      providerId: z.string(),
+      baseUrl: z.string(),
+      apiKey: z.string().optional(),
+    }),
+    data: z.array(z.string()),
+    error: z.object({ message: z.string() }),
+  }),
 });
 
 export type AgentsContract = typeof agentsContract;

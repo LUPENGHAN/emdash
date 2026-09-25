@@ -6,6 +6,7 @@ import {
   systemSettingsPage,
 } from '@core/features/machines/contributions/settings-page';
 import { mcpSettingsPage } from '@core/features/mcp/contributions/settings-page';
+import { providersSettingsPage } from '@core/features/model-providers/contributions/settings-page';
 import {
   agentsSettingsPage,
   browserSettingsPage,
@@ -29,6 +30,7 @@ export const settingsPageContributions = [
   localWorkspacesSettingsPage,
   conversationsSettingsPage,
   agentsSettingsPage,
+  providersSettingsPage,
   mcpSettingsPage,
   skillsSettingsPage,
   machinesConnectionsPage,

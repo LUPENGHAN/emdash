@@ -61,6 +61,10 @@ export type InterfaceSettings = {
 export type ProviderCustomConfig = {
   extraArgs?: string;
   env?: Record<string, string>;
+  /** Id of a configured model provider to run this agent on; absent = its own login/config. */
+  modelSource?: string;
+  /** Model to use on that provider; absent = the agent's default. */
+  sourceModel?: string;
 };
 export type ProviderCustomConfigs = Record<string, ProviderCustomConfig>;
 

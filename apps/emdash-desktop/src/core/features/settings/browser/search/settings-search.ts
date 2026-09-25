@@ -213,6 +213,15 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['chats', 'sessions', 'orphaned', 'history', 'agents'],
   },
 
+  // Providers
+  {
+    id: 'providers',
+    label: 'Providers',
+    tab: 'providers',
+    description: 'Gateways such as new-api that agents can run on instead of their own login.',
+    keywords: ['new-api', 'gateway', 'api key', 'base url', 'model provider', 'proxy', 'relay'],
+  },
+
   // Prompts
   {
     id: 'prompts',

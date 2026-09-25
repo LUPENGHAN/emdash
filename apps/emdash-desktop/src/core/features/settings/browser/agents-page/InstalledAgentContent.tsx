@@ -1,8 +1,18 @@
-import { Button, Collapsible, Field, Input, Label, Tooltip } from '@emdash/ui/react/primitives';
+import {
+  Button,
+  Collapsible,
+  Field,
+  Input,
+  Label,
+  Select,
+  Tooltip,
+} from '@emdash/ui/react/primitives';
 import { useForm } from '@tanstack/react-form';
 import { ChevronRight, Info, RotateCcw } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useState } from 'react';
+import { defaultSourceLabel, isProviderCapableAgent } from '@core/features/model-providers/api';
+import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import {
   EnvironmentVariableInputs,
@@ -31,6 +41,9 @@ const FieldTooltip: React.FC<{ content: string }> = ({ content }) => (
 );
 
 export interface InstalledAgentContentProps {
+  agentId: string;
+  /** Set for agents on a remote machine, where local providers do not apply. */
+  connectionId?: string;
   storedConfig: ProviderCustomConfig | undefined;
   isOverridden: boolean;
   isLoading: boolean;
@@ -57,6 +70,8 @@ function makeDefaultValues(cfg: ProviderCustomConfig | undefined) {
 }
 
 export const InstalledAgentContent = observer(function InstalledAgentContent({
+  agentId,
+  connectionId,
   storedConfig,
   isOverridden,
   isLoading,
@@ -87,7 +102,10 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
         }
       }
 
-      const isAtDefaults = extraArgs.trim() === '' && envEntries.every((e) => !e.key.trim());
+      const isAtDefaults =
+        extraArgs.trim() === '' &&
+        envEntries.every((e) => !e.key.trim()) &&
+        !storedConfig?.modelSource;
 
       if (isAtDefaults) {
         reset(undefined, {
@@ -117,6 +135,23 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-2">
+      {connectionId ? null : (
+        <ModelSourceFields
+          agentId={agentId}
+          storedConfig={storedConfig}
+          onChange={(patch) => {
+            const next = { ...(storedConfig ?? {}), ...patch };
+            const empty = !next.extraArgs && !next.env && !next.modelSource;
+            if (empty) {
+              reset(undefined, {
+                onError: (err) => log.error('Failed to reset agent config:', err),
+              });
+            } else {
+              update(next, { onError: (err) => log.error('Failed to save agent config:', err) });
+            }
+          }}
+        />
+      )}
       <Collapsible.Root open={open} onOpenChange={setOpen}>
         <Collapsible.Trigger
           hideChevron
@@ -191,6 +226,100 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
           )}
         </Collapsible.Panel>
       </Collapsible.Root>
+    </div>
+  );
+});
+
+/**
+ * Which login/config the agent runs on: its own (official subscription or its own config)
+ * or a model provider configured under Settings → Providers, plus that provider's model.
+ */
+const ModelSourceFields = observer(function ModelSourceFields({
+  agentId,
+  storedConfig,
+  onChange,
+}: {
+  agentId: string;
+  storedConfig: ProviderCustomConfig | undefined;
+  onChange: (patch: Pick<ProviderCustomConfig, 'modelSource' | 'sourceModel'>) => void;
+}) {
+  const { value } = useAppSettingsKey('modelProviders');
+  const providers = value?.providers ?? [];
+
+  if (agentId === 'cursor') {
+    return (
+      <Field.Root className="mb-3">
+        <Label>Source</Label>
+        <p className="text-sm text-foreground-muted">
+          {defaultSourceLabel(agentId)}. The Cursor CLI cannot run on a custom provider.
+        </p>
+      </Field.Root>
+    );
+  }
+  if (!isProviderCapableAgent(agentId)) return null;
+
+  const sourceId = storedConfig?.modelSource ?? '';
+  const provider = providers.find((candidate) => candidate.id === sourceId);
+  const model = storedConfig?.sourceModel ?? '';
+
+  return (
+    <div className="mb-3 space-y-3">
+      <Field.Root>
+        <Label>Source</Label>
+        <Select.Root
+          value={sourceId}
+          onValueChange={(next) =>
+            onChange({ modelSource: next || undefined, sourceModel: undefined })
+          }
+        >
+          <Select.Trigger appearance="input" className="w-full">
+            <Select.Value placeholder={defaultSourceLabel(agentId)}>
+              {provider?.name ?? (sourceId ? 'Missing provider' : defaultSourceLabel(agentId))}
+            </Select.Value>
+          </Select.Trigger>
+          <Select.Content align="start" width="trigger">
+            <Select.Item value="">{defaultSourceLabel(agentId)}</Select.Item>
+            {providers.map((candidate) => (
+              <Select.Item key={candidate.id} value={candidate.id}>
+                {candidate.name}
+              </Select.Item>
+            ))}
+          </Select.Content>
+        </Select.Root>
+        {providers.length === 0 ? (
+          <Field.Description>
+            Add a gateway under Settings → Providers to use it here.
+          </Field.Description>
+        ) : null}
+      </Field.Root>
+      {provider ? (
+        <Field.Root>
+          <Label>Model</Label>
+          <Select.Root
+            value={model}
+            onValueChange={(next) =>
+              onChange({ modelSource: sourceId, sourceModel: next || undefined })
+            }
+          >
+            <Select.Trigger appearance="input" className="w-full">
+              <Select.Value placeholder="Agent default">{model || 'Agent default'}</Select.Value>
+            </Select.Trigger>
+            <Select.Content align="start" width="trigger">
+              <Select.Item value="">Agent default</Select.Item>
+              {provider.models.map((id) => (
+                <Select.Item key={id} value={id}>
+                  {id}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+          {provider.models.length === 0 ? (
+            <Field.Description>
+              Load the provider&apos;s models with “Test &amp; load models” in Settings → Providers.
+            </Field.Description>
+          ) : null}
+        </Field.Root>
+      ) : null}
     </div>
   );
 });

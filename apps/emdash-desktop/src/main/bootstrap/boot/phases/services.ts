@@ -57,6 +57,13 @@ import {
   type PromptLibraryKV,
 } from '@core/features/library/node/prompt-library-service';
 import { LocalSettingsSync } from '@core/features/machines/node/local-settings-sync';
+import type { ModelProviderKeys } from '@core/features/model-providers/api';
+import { ensureAgentProviderFile } from '@core/features/model-providers/node/agent-provider-files';
+import {
+  createEffectiveAgentConfig,
+  type EffectiveAgentConfig,
+} from '@core/features/model-providers/node/effective-agent-config';
+import { createModelProviderKeys } from '@core/features/model-providers/node/provider-keys';
 import { previewServerService } from '@core/features/preview-servers/api/node/preview-server-service-instance';
 import { PreviewServerAccessService } from '@core/features/preview-servers/node/preview-server-access-service';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
@@ -177,6 +184,9 @@ export type ServicesBundle = {
   readonly projects: ProjectAttachmentManager;
   readonly projectSettings: ProjectSettingsService;
   readonly providerSettings: ReturnType<typeof createProviderOverrideSettings>;
+  /** Agent config for a launch, including its model provider source (both UIs). */
+  readonly effectiveAgentConfig: EffectiveAgentConfig;
+  readonly modelProviderKeys: ModelProviderKeys;
   readonly pullRequestsRegistration: PullRequestsRegistration;
   readonly search: ReturnType<typeof createSearchService>;
   readonly sessionLaunchContexts: TaskSessionLaunchContextResolver;
@@ -245,6 +255,14 @@ export async function bootServices(
     appSettingsService.off('app-settings:changed', handleFileSearchSettingsChanged);
   });
   const providerOverrideSettings = createProviderOverrideSettings(db);
+  const modelProviderKeys = createModelProviderKeys(encryptedAppSecretsStore);
+  const effectiveAgentConfig = createEffectiveAgentConfig({
+    getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
+    getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
+    getApiKey: modelProviderKeys.read,
+    ensureProviderFile: (file) => ensureAgentProviderFile(file),
+    warn: (message, details) => log.warn(message, details),
+  });
   const workspacePlacement = new WorkspacePlacementResolver({
     broker: runtimes,
     getSettings: () => appSettingsService,
@@ -270,7 +288,7 @@ export async function bootServices(
   });
   const tuiConversationDependencies = {
     db,
-    getProviderConfig: (providerId: string) => providerOverrideSettings.getItem(providerId),
+    getProviderConfig: (providerId: string) => effectiveAgentConfig(providerId),
     getTaskSettings: () => appSettingsService.get('tasks'),
     getTerminalColorEnv,
     // Late-bound: the git-credentials service is constructed further down in
@@ -849,6 +867,8 @@ export async function bootServices(
     projects: projectManager,
     projectSettings: projectSettingsService,
     providerSettings: providerOverrideSettings,
+    effectiveAgentConfig,
+    modelProviderKeys,
     pullRequestsRegistration,
     search: searchService,
     sessionLaunchContexts,

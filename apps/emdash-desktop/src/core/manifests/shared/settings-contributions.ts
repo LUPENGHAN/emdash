@@ -4,6 +4,7 @@ import {
   browserSettingsContribution,
 } from '@core/features/browser/contributions/settings';
 import { filesSettingsContribution } from '@core/features/editor/contributions/settings';
+import { modelProvidersSettingsContribution } from '@core/features/model-providers/contributions/settings';
 import {
   localProjectSettingsSchemaContribution,
   projectSettingsContribution,
@@ -34,6 +35,7 @@ export const appSettingsSchemaContributions = {
   tasks: taskSettingsContribution,
   files: filesSettingsContribution,
   defaultAgent: defaultAgentSettingsContribution,
+  modelProviders: modelProvidersSettingsContribution,
   keyboard: keyboardSettingsContribution,
   notifications: notificationSettingsContribution,
   theme: themeSettingsContribution,
