@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import {
   conversationRegistryTable as conversations,
   liveConversations,
@@ -48,8 +48,10 @@ export async function listProjectImportableSessions(
 }
 
 /**
- * Sessions already backing a live conversation are left out, as are Emdash's own
- * spawns (their handle is the conversation id).
+ * Sessions already backing a live conversation in some task are left out, as are
+ * Emdash's own spawns (their handle is the conversation id). A conversation whose task
+ * was deleted (kept, but unlinked) no longer hides its session: it is reachable from
+ * nowhere else, so it must be resumable again.
  */
 async function listForWorkspace(
   db: ListDb,
@@ -64,7 +66,7 @@ async function listForWorkspace(
   const known = await db
     .select({ id: conversations.id, providerSessionId: conversations.providerSessionId })
     .from(conversations)
-    .where(liveConversations());
+    .where(and(liveConversations(), isNotNull(conversations.taskId)));
   const exclude = new Set<string>();
   for (const row of known) {
     exclude.add(row.id);
