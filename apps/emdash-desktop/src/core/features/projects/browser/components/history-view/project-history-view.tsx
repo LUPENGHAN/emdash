@@ -72,6 +72,8 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
         title,
         type: 'pty',
         providerSessionId: session.sessionId,
+        // The task view opens its initial conversation as the first tab on load.
+        isInitialConversation: true,
       });
       if (!created.success) throw new Error(created.error.type);
       navigate(taskViewDef({ projectId, taskId }));
