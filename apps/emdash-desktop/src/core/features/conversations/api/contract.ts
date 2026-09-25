@@ -231,6 +231,11 @@ export const conversationsContract = defineContract({
     input: z.object({ projectId: z.string(), taskId: z.string() }),
     output: z.custom<ImportableSession[]>(),
   }),
+  /** Same, for the project's own checkout: its terminal/IDE session history. */
+  listProjectImportableSessions: procedure({
+    input: z.object({ projectId: z.string() }),
+    output: z.custom<ImportableSession[]>(),
+  }),
   markConversationSeen: procedure({
     input: z.object({ conversationId: z.string() }),
     output: z.void(),

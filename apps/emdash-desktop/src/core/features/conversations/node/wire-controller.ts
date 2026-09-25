@@ -200,6 +200,8 @@ export function createConversationsWireController(
     getConversationsForTask: ({ projectId, taskId }) =>
       conversationOperations.getConversationsForTask(projectId, taskId),
     listImportableSessions: ({ taskId }) => conversationOperations.listImportableSessions(taskId),
+    listProjectImportableSessions: ({ projectId }) =>
+      conversationOperations.listProjectImportableSessions(projectId),
     getConversationsForProject: ({ projectId }) =>
       conversationOperations.getConversationsForProject(projectId),
     markConversationSeen: ({ conversationId }) =>

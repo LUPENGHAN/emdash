@@ -17,7 +17,7 @@ import { getConversationsForTask } from './getConversationsForTask';
 import { hydrateConversation } from './hydrateConversation';
 import { linkConversationToTask } from './link-conversation-to-task';
 import { listHostConversations } from './list-host-conversations';
-import { listImportableSessions } from './list-importable-sessions';
+import { listImportableSessions, listProjectImportableSessions } from './list-importable-sessions';
 import { markConversationSeen } from './markConversationSeen';
 import { renameConversation } from './renameConversation';
 
@@ -77,6 +77,8 @@ export function createConversationOperations(dependencies: {
     getConversationsForProject: (projectId: string) => getConversationsForProject(db, projectId),
     listImportableSessions: (taskId: string) =>
       listImportableSessions(db, dependencies.workspaceIdentity, taskId),
+    listProjectImportableSessions: (projectId: string) =>
+      listProjectImportableSessions(db, dependencies.workspaceIdentity, projectId),
     markConversationSeen: (conversationId: string) => markConversationSeen(db, conversationId),
     listHostConversations: (scope: Parameters<typeof listHostConversations>[1]) =>
       listHostConversations(db, scope),

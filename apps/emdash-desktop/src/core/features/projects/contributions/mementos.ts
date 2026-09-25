@@ -8,7 +8,7 @@ export type ProjectTaskSortBy = z.infer<typeof projectTaskSortBySchema>;
 
 const projectViewV1Schema = z.object({
   version: z.literal('1'),
-  activeView: z.enum(['tasks', 'pull-request', 'workspaces', 'settings']),
+  activeView: z.enum(['tasks', 'history', 'pull-request', 'workspaces', 'settings']),
   taskViewTab: z.enum(['active', 'archived']),
   taskSortBy: projectTaskSortBySchema.optional(),
   selectedIssueProvider: z.string().optional(),
