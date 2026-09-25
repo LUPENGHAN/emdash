@@ -22,6 +22,7 @@ const AGENT_NAMES: Record<ImportableSession['providerId'], string> = {
   opencode: 'OpenCode',
   pi: 'Pi',
   'oh-my-pi': 'Oh My Pi',
+  cursor: 'Cursor',
 };
 
 /** Where a session ran, when it was not the project directory itself. */
@@ -145,21 +146,28 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
                 ) : null}
               </p>
             </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              title="Resume in a terminal, with the CLI's own interface"
-              disabled={!(session.workspaceId ?? repositoryWorkspaceId) || resumingId !== null}
-              onClick={() => void resume(session, 'pty')}
-            >
-              Terminal
-            </Button>
+            {session.resumeIn ? null : (
+              <Button
+                size="sm"
+                variant="ghost"
+                title="Resume in a terminal, with the CLI's own interface"
+                disabled={!(session.workspaceId ?? repositoryWorkspaceId) || resumingId !== null}
+                onClick={() => void resume(session, 'pty')}
+              >
+                Terminal
+              </Button>
+            )}
             <Button
               size="sm"
               variant="secondary"
-              title="Resume in the chat UI"
+              title={
+                session.resumeIn === 'pty'
+                  ? 'Resume in a terminal (this session lives in the CLI’s terminal store)'
+                  : 'Resume in the chat UI'
+              }
               disabled={!(session.workspaceId ?? repositoryWorkspaceId) || resumingId !== null}
-              onClick={() => void resume(session, 'acp')}
+              // Sessions tied to one UI's store (Cursor) resume there; others default to chat.
+              onClick={() => void resume(session, session.resumeIn ?? 'acp')}
             >
               {resumingId === session.sessionId ? 'Resuming…' : 'Resume'}
             </Button>

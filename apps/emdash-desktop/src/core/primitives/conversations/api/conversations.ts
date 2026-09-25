@@ -152,7 +152,7 @@ export type CreateConversationParams = {
 
 /** A provider session found on disk that was not started by Emdash. */
 export type ImportableSession = {
-  providerId: 'claude' | 'codex' | 'opencode' | 'pi' | 'oh-my-pi';
+  providerId: 'claude' | 'codex' | 'opencode' | 'pi' | 'oh-my-pi' | 'cursor';
   sessionId: string;
   title: string;
   firstMessage: string | null;
@@ -162,6 +162,11 @@ export type ImportableSession = {
   cwd: string;
   /** Emdash workspace of that directory, for project-wide listings (checkout or worktree). */
   workspaceId?: string;
+  /**
+   * Set when the session can only be resumed in one UI (Cursor keeps terminal and chat
+   * sessions in separate stores); absent = either.
+   */
+  resumeIn?: ConversationType;
 };
 
 /** What a receiving agent gets when a conversation is handed off to it. */

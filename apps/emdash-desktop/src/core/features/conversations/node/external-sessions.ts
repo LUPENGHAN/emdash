@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import type { ImportableSession } from '@core/primitives/conversations/api';
+import { readCursorSessions } from './cursor-sessions';
 
 /**
  * Discovers agent sessions that were started outside Emdash (terminal, IDE, the
@@ -52,6 +53,7 @@ export async function listExternalSessions(
     readCodexSessions(env, cwds).catch(() => []),
     readPiFamilySessions('pi', env, cwds).catch(() => []),
     readPiFamilySessions('oh-my-pi', env, cwds).catch(() => []),
+    readCursorSessions(env, cwds, (text) => clip(text)).catch(() => []),
     Promise.resolve()
       .then(() => readers.opencode(env, cwds))
       .catch(() => []),

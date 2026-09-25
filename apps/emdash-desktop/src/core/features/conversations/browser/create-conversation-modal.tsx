@@ -88,8 +88,10 @@ export const CreateConversationModal = observer(function CreateConversationModal
 
   const showAutoApproveToggle = agentSupportsAutoApprove(selectedAgent?.capabilities);
   // A resumed session can open in either UI: chat loads it with session/load.
-  const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities);
-  const useAcp = showAcpToggle && useChatUiPreference;
+  // Sessions tied to one UI's store (Cursor) must resume in that UI.
+  const lockedUi = resumeSession?.resumeIn;
+  const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities) && !lockedUi;
+  const useAcp = lockedUi ? lockedUi === 'acp' : showAcpToggle && useChatUiPreference;
   const transport = useAcp ? 'acp' : 'pty';
   // Terminal sessions pass the id to the CLI's --model flag verbatim, so any
   // model the CLI knows works, including ones newer than the catalog above.

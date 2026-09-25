@@ -1,6 +1,7 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { cursorHome, readCursorTurns } from '../cursor-sessions';
 import {
   asRecord,
   claudeProjectDirName,
@@ -34,6 +35,8 @@ export async function readTranscript(
   else if (providerId === 'opencode') readOpenCode(env, sessionId, turns);
   else if (providerId === 'pi' || providerId === 'oh-my-pi') {
     await readPiFamily(providerId, env, sessionId, turns);
+  } else if (providerId === 'cursor') {
+    await readCursor(env, sessionId, turns);
   }
   return turns.list;
 }
@@ -124,6 +127,29 @@ async function readPiFamily(
     if (message?.role === 'user' || message?.role === 'assistant') {
       turns.add(message.role, claudeText(message.content));
     }
+  }
+}
+
+/** Cursor keeps chat sessions in acp-sessions/<id>/ and terminal ones in chats/<hash>/<id>/. */
+async function readCursor(
+  env: ExternalSessionEnv,
+  sessionId: string,
+  turns: TurnCollector
+): Promise<void> {
+  const root = cursorHome(env);
+  const candidates = [path.join(root, 'acp-sessions', sessionId, 'store.db')];
+  try {
+    for (const bucket of await readdir(path.join(root, 'chats'))) {
+      candidates.push(path.join(root, 'chats', bucket, sessionId, 'store.db'));
+    }
+  } catch {
+    // No terminal sessions.
+  }
+  for (const store of candidates) {
+    const found = readCursorTurns(store);
+    if (found.length === 0) continue;
+    for (const turn of found) turns.add(turn.role, turn.text);
+    return;
   }
 }
 
