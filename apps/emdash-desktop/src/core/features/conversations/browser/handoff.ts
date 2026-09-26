@@ -29,6 +29,7 @@ const HANDOFF_TARGETS: { id: AgentProviderId; name: string }[] = [
  */
 export async function handOffConversation(
   conversation: Conversation,
+  /** Preselected in the dialog; the user may pick another agent there. */
   target: { id: AgentProviderId; name: string }
 ): Promise<void> {
   const manager = conversationRegistry.get(conversation.taskId);
@@ -64,20 +65,23 @@ export async function handOffConversation(
   );
 }
 
-/** Tab-menu commands: one "Hand off to …" per other agent. */
+/** Tab-menu command: "Hand off", whose dialog picks the agent, model and source. */
 export function handoffCommands(conversation: Conversation | undefined) {
   if (!conversation) return [];
-  return HANDOFF_TARGETS.filter((target) => target.id !== conversation.providerId).map(
-    (target) => ({
-      id: `conversation:handoff-${target.id}`,
-      label: `Hand off to ${target.name}…`,
+  // Default to the first other agent: Claude and Codex hand off to each other.
+  const target = HANDOFF_TARGETS.find((candidate) => candidate.id !== conversation.providerId);
+  if (!target) return [];
+  return [
+    {
+      id: 'conversation:handoff',
+      label: 'Hand off',
       group: 'handoff',
       run: () => {
         void handOffConversation(conversation, target).catch((error: unknown) => {
           log.error('conversation handoff failed', error);
-          toast.error(`Could not hand off to ${target.name}: ${String(error)}`);
+          toast.error(`Could not hand off: ${String(error)}`);
         });
       },
-    })
-  );
+    },
+  ];
 }
