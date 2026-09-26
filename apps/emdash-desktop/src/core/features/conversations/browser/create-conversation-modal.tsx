@@ -101,19 +101,12 @@ export const CreateConversationModal = observer(function CreateConversationModal
   const savedPreference = providerId
     ? providerPreference(providerPreferences, host, providerId, transport)
     : undefined;
-  const savedModelUnsupported =
-    !allowCustomModel &&
-    savedPreference?.model !== undefined &&
-    modelOptions !== null &&
-    modelOptions[savedPreference.model] === undefined;
   const hasModelOverride =
     preferenceKey !== null && Object.prototype.hasOwnProperty.call(modelOverrides, preferenceKey);
   const selectedModel =
     preferenceKey !== null && hasModelOverride
       ? (modelOverrides[preferenceKey] ?? null)
-      : savedModelUnsupported
-        ? null
-        : (savedPreference?.model ?? null);
+      : (savedPreference?.model ?? null);
   const [customModelDraft, setCustomModelDraft] = useState<string | null>(null);
   const isCustomModel =
     allowCustomModel &&
@@ -301,6 +294,9 @@ export const CreateConversationModal = observer(function CreateConversationModal
                 </Select.Trigger>
                 <Select.Content align="start" width="trigger">
                   <Select.Item value="">Default model</Select.Item>
+                  {!isCustomModel && selectedModel && !modelOptions[selectedModel] ? (
+                    <Select.Item value={selectedModel}>{selectedModel}</Select.Item>
+                  ) : null}
                   {Object.entries(modelOptions).map(([id, option]) => (
                     <Select.Item key={id} value={id}>
                       {option.name}

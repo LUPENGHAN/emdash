@@ -44,9 +44,6 @@ import {
 } from '../api/runtime-adapter';
 import { conversationWireEvents } from './event-host';
 
-// Mirrors the renderer's bound so the main → runtime hop does not time out first.
-const ACP_HISTORY_LOAD_TIMEOUT_MS = 180_000;
-
 type ConversationRuntimeTarget = Readonly<{
   conversationId: string;
   projectId: string;
@@ -228,18 +225,21 @@ export function createConversationsWireController(
           client.acp.attach(input, callOptions(meta))
         );
       },
-      loadHistory: async (input, meta) => {
-        const runtimeTarget = await target(input.conversationId);
+      startSession: async ({ conversationId, mode }, meta) => {
+        const runtimeTarget = await target(conversationId);
+        const input = runtimeTarget.acpInput;
+        if (!input) throw missingAcpInputError(runtimeTarget);
         return withConversationRuntime(options, Promise.resolve(runtimeTarget), async (client) => {
-          // First load spawns the agent and replays the session; see ACP_HISTORY_LOAD_TIMEOUT_MS.
-          const result = await client.acp.loadHistory(input, {
-            ...callOptions(meta),
-            timeoutMs: ACP_HISTORY_LOAD_TIMEOUT_MS,
-          });
+          const result = await client.acp.startSession(
+            { ...input, mode },
+            { ...callOptions(meta), timeoutMs: 0 }
+          );
           await persistClearedConfiguration(hooks, runtimeTarget, result, options.logger);
           return result;
         });
       },
+      loadHistory: (input, meta) =>
+        run(input.conversationId, (client) => client.acp.loadHistory(input, callOptions(meta))),
       terminate: (input, meta) =>
         run(input.conversationId, (client) => client.acp.terminate(input, callOptions(meta))),
       sendPrompt: (input, meta) =>
@@ -297,8 +297,10 @@ export function createConversationsWireController(
         ),
     },
     tui: {
-      start: (input, meta) =>
-        run(input.conversationId, (client) => client.tuiAgents.start(input, callOptions(meta))),
+      startSession: (input, meta) =>
+        run(input.conversationId, (client) =>
+          client.tuiAgents.startSession(input, callOptions(meta))
+        ),
       resume: (input, meta) =>
         run(input.conversationId, (client) => client.tuiAgents.resume(input, callOptions(meta))),
       stop: (input, meta) =>
@@ -422,13 +424,11 @@ async function resolveConversationRuntimeTarget(
 
   const identity = row.workspaceId ? await workspaceIdentity.resolve(row.workspaceId) : null;
   const acpConfig = row.config?.type === 'acp' ? row.config : undefined;
-  const initialQueue =
-    row.sessionId === null
-      ? acpConfig?.initialQueue?.length
-        ? acpConfig.initialQueue
-        : acpConfig?.initialPrompt?.trim()
-          ? [{ text: acpConfig.initialPrompt }]
-          : undefined
+  // The runtime owns consumption. A provider pointer alone does not prove dispatch.
+  const initialQueue = acpConfig?.initialQueue?.length
+    ? acpConfig.initialQueue
+    : acpConfig?.initialPrompt?.trim()
+      ? [{ text: acpConfig.initialPrompt }]
       : undefined;
   const workspacePath = identity?.path;
   // Resolve the ACP agent environment in main from provider and project/task settings. The

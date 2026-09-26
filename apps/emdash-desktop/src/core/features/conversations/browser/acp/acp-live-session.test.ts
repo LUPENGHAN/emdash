@@ -5,7 +5,6 @@ import { reaction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
-  ACP_HISTORY_LOAD_TIMEOUT_MS,
   AcpLiveSession,
   AcpPromptDeliveryUnknownError,
   remoteValueState,
@@ -110,9 +109,10 @@ describe('AcpLiveSession.loadHistory', () => {
       success: true,
       data: { turns: [], nextCursor: null, unavailable: true },
     });
-    expect(loadHistory).toHaveBeenCalledWith(
-      { conversationId: 'conversation-1', before: undefined, limit: 100 },
-      { timeoutMs: ACP_HISTORY_LOAD_TIMEOUT_MS }
-    );
+    expect(loadHistory).toHaveBeenCalledWith({
+      conversationId: 'conversation-1',
+      before: undefined,
+      limit: 100,
+    });
   });
 });
