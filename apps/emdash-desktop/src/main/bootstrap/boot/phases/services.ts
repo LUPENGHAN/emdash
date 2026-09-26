@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import {
   hostRef,
   isLocalHostRef,
@@ -5,7 +6,7 @@ import {
   type HostRef,
 } from '@emdash/core/primitives/host/api';
 import { integrationPluginRegistry } from '@emdash/plugins/integrations';
-import { err, ok } from '@emdash/shared';
+import { err, ok, secret } from '@emdash/shared';
 import { runWithTimeout } from '@emdash/shared/scheduling';
 import { peek } from '@emdash/wire/state';
 import { app, powerMonitor } from 'electron';
@@ -86,6 +87,8 @@ import {
 import { createProjectAttachmentAdapter } from '@core/features/projects/node/project-attachment-adapter';
 import { createProjectAttachmentManager } from '@core/features/projects/node/project-attachment-manager';
 import { migrateAppWorktreeRootToLocalHostDefault } from '@core/features/projects/node/settings/migrations/app-worktree-root';
+import type { RemoteAccessService } from '@core/features/remote-access/api';
+import { createRemoteAccessService } from '@core/features/remote-access/node/remote-access-service';
 import { createSearchService } from '@core/features/search/node/search-service';
 import { TaskService } from '@core/features/tasks/api/node/task-service';
 import type { TaskSessionCleanup } from '@core/features/tasks/api/node/task-session-cleanup';
@@ -150,11 +153,13 @@ import { getTerminalColorEnv } from '@main/core/terminal-shell/color-env';
 import { runLocalCommand } from '@main/core/utils/exec';
 import { cleanupLegacyOperationsDatabases } from '@main/db/legacy-operations-cleanup';
 import type { DesktopRuntimes } from '@main/gateway/desktop-runtimes';
+import { openRemoteWireSession } from '@main/gateway/desktop-wire';
 import { createDesktopWorkspaceRuntimeAcquirer } from '@main/gateway/workspace-runtime';
 import { setBrowserCorsRelaxationSettings } from '@main/host/browser/browser-profile-session';
 import { browserWebContentsRegistry } from '@main/host/browser/browser-webcontents-registry';
 import { HostAttachmentRegistry } from '@main/host/host-attachment-registry';
 import { createSystemNotificationSink } from '@main/host/notifications/system-notification-sink';
+import { createRemoteAccessServer } from '@main/host/remote-access-server';
 import { encryptedAppSecretsStore } from '@main/host/secrets/encrypted-app-secrets-store';
 import { toPlaintextSecretStore } from '@main/host/secrets/plaintext-secret-store';
 import { setTrayVisible } from '@main/host/tray';
@@ -193,6 +198,7 @@ export type ServicesBundle = {
   readonly effectiveAgentConfig: EffectiveAgentConfig;
   readonly modelProviderKeys: ModelProviderKeys;
   readonly usageLimits: UsageLimitsService;
+  readonly remoteAccess: RemoteAccessService;
   readonly pullRequestsRegistration: PullRequestsRegistration;
   readonly search: ReturnType<typeof createSearchService>;
   readonly sessionLaunchContexts: TaskSessionLaunchContextResolver;
@@ -264,6 +270,31 @@ export async function bootServices(
   const modelProviderKeys = createModelProviderKeys(encryptedAppSecretsStore);
   // Reads process.env lazily, so it sees the PATH the login-shell probe fills in.
   const usageLimits = createUsageLimitsService();
+  const REMOTE_ACCESS_TOKEN_KEY = 'remote-access-token';
+  const remoteAccess = createRemoteAccessService({
+    getSettings: () => appSettingsService.get('remoteAccess'),
+    onSettingsChanged: (listener) => {
+      const handler = (key: AppSettingsKey) => {
+        if (key === 'remoteAccess') listener();
+      };
+      appSettingsService.on('app-settings:changed', handler);
+      return () => appSettingsService.off('app-settings:changed', handler);
+    },
+    readToken: async () =>
+      (await encryptedAppSecretsStore.getSecret(REMOTE_ACCESS_TOKEN_KEY))?.expose() ?? null,
+    writeToken: (token) =>
+      encryptedAppSecretsStore.setSecret(
+        REMOTE_ACCESS_TOKEN_KEY,
+        secret(token, REMOTE_ACCESS_TOKEN_KEY)
+      ),
+    server: createRemoteAccessServer({
+      rendererRoot: join(app.getAppPath(), 'out', 'renderer'),
+      openSession: openRemoteWireSession,
+    }),
+    warn: (message, details) => log.warn(message, details),
+  });
+  void remoteAccess.apply();
+  appScope.add(() => remoteAccess.dispose());
   const effectiveAgentConfig = createEffectiveAgentConfig({
     getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
@@ -879,6 +910,7 @@ export async function bootServices(
     effectiveAgentConfig,
     modelProviderKeys,
     usageLimits,
+    remoteAccess,
     pullRequestsRegistration,
     search: searchService,
     sessionLaunchContexts,

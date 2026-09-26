@@ -164,6 +164,8 @@ export {
   reconnectingTransport,
   requestWirePort,
   streamTransport,
+  webSocketTransport,
+  type WebSocketLike,
   type DomPortLike,
   type ExposeWireOptions,
   type IpcMainInvokeEventLike,

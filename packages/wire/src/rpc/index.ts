@@ -153,6 +153,7 @@ export {
   type ReconnectingTransportOptions,
 } from '../api/transports/reconnecting';
 export { streamTransport } from '../api/transports/stream';
+export { webSocketTransport, type WebSocketLike } from '../api/transports/websocket';
 export { applyValidation, type ValidatePolicy } from '../api/validation';
 export { type LeasedLiveModelProvider } from '../live/replica/leased-provider';
 export { type LiveModelMutationEnvelope, type LiveModelProvider } from '../live/replica/provider';

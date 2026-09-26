@@ -1,3 +1,5 @@
+// Must run first: browser access stand-ins for the Electron preload (see browser-host).
+import '@renderer/lib/runtime/browser-host';
 import {
   connectSession,
   createChatContext,

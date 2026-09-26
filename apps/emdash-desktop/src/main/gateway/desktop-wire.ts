@@ -1,5 +1,13 @@
 import type { PendingLease } from '@emdash/shared';
-import { exposeWireToWindows, WireError, type Controller, type LiveSource } from '@emdash/wire/rpc';
+import {
+  createWireSessionHub,
+  exposeWireToWindows,
+  WireError,
+  type Controller,
+  type LiveSource,
+  type WireSessionHub,
+  type WireTransport,
+} from '@emdash/wire/rpc';
 import { ipcMain, MessageChannelMain } from 'electron';
 import { DESKTOP_WIRE_CHANNEL } from '@core/manifests/shared/wire-channels';
 import type { ControllersBundle } from '@main/bootstrap/boot/phases/controllers';
@@ -30,6 +38,25 @@ export function installDesktopWire(): void {
       channel: DESKTOP_WIRE_CHANNEL,
     })
   );
+}
+
+let remoteHub: WireSessionHub | undefined;
+let nextRemoteSession = 0;
+
+/**
+ * Serves the same controllers as the window to a remote client (browser access): each
+ * transport gets its own session. Returns a function that ends the session.
+ */
+export function openRemoteWireSession(transport: WireTransport): () => void {
+  if (!remoteHub) {
+    remoteHub = createWireSessionHub(createLazyRoutingController());
+    const hub = remoteHub;
+    scope.add(async () => {
+      await hub.dispose();
+    });
+  }
+  nextRemoteSession += 1;
+  return remoteHub.open(`remote-${nextRemoteSession}`, transport);
 }
 
 /** Provides the controllers bundle; releases any wire traffic queued so far. */

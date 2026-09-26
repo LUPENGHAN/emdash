@@ -17,6 +17,7 @@ export const settingsPageTabSchema = z.enum([
   'mcp',
   'skills',
   'connections',
+  'remote-access',
   'docs',
 ]);
 

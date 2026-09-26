@@ -21,3 +21,4 @@ export {
   type ReconnectingTransportOptions,
 } from './reconnecting';
 export { streamTransport } from './stream';
+export { webSocketTransport, type WebSocketLike } from './websocket';

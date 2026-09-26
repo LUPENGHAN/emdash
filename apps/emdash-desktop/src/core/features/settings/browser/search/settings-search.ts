@@ -222,6 +222,15 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['new-api', 'gateway', 'api key', 'base url', 'model provider', 'proxy', 'relay'],
   },
 
+  // Remote access
+  {
+    id: 'remote-access',
+    label: 'Remote access',
+    tab: 'remote-access',
+    description: 'Use this Emdash from a browser on another computer.',
+    keywords: ['browser', 'web', 'remote', 'zerotier', 'tailscale', 'link', 'another computer'],
+  },
+
   // Prompts
   {
     id: 'prompts',

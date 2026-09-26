@@ -9,6 +9,7 @@ import {
   localProjectSettingsSchemaContribution,
   projectSettingsContribution,
 } from '@core/features/projects/contributions/settings';
+import { remoteAccessSettingsContribution } from '@core/features/remote-access/contributions/settings';
 import { changesViewModeSettingsContribution } from '@core/features/source-control/contributions/settings';
 import { taskSettingsContribution } from '@core/features/tasks/contributions/settings';
 import { terminalSettingsContribution } from '@core/features/terminals/contributions/settings';
@@ -36,6 +37,7 @@ export const appSettingsSchemaContributions = {
   files: filesSettingsContribution,
   defaultAgent: defaultAgentSettingsContribution,
   modelProviders: modelProvidersSettingsContribution,
+  remoteAccess: remoteAccessSettingsContribution,
   keyboard: keyboardSettingsContribution,
   notifications: notificationSettingsContribution,
   theme: themeSettingsContribution,

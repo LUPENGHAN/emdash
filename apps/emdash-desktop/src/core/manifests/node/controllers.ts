@@ -51,6 +51,8 @@ import type { ProjectSettingsService } from '@core/features/projects/api/node/se
 import type { ProjectDeletionDependencies } from '@core/features/projects/node/operations/deleteProject';
 import { getProjectById } from '@core/features/projects/node/operations/getProjects';
 import { createProjectsWireController } from '@core/features/projects/node/wire-controller';
+import type { RemoteAccessService } from '@core/features/remote-access/api';
+import { createRemoteAccessWireController } from '@core/features/remote-access/node/wire-controller';
 import { createRepositoryWireController } from '@core/features/repository/node/wire-controller';
 import type { SearchService } from '@core/features/search/node/search-service';
 import { createSearchWireController } from '@core/features/search/node/wire-controller';
@@ -146,6 +148,7 @@ export type DesktopControllerContext = {
   readonly effectiveAgentConfig: EffectiveAgentConfig;
   readonly modelProviderKeys: ModelProviderKeys;
   readonly usageLimits: UsageLimitsService;
+  readonly remoteAccess: RemoteAccessService;
   readonly reconcileSweep: ReconcileSweepHandle;
   readonly hosts: Hosts;
   readonly runtimeClients: {
@@ -223,6 +226,9 @@ export const desktopNodeControllers = {
   },
   machines: {
     create: ({ runtimes, ssh }) => createMachinesWireController(ssh.machines, runtimes),
+  },
+  remoteAccess: {
+    create: ({ remoteAccess }) => createRemoteAccessWireController(remoteAccess),
   },
   projectSettings: {
     create: ({ runtimes, workspaceIdentity }) =>

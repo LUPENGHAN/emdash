@@ -46,7 +46,7 @@ export function streamTransport(input: ReadableLike, output: WritableLike): Wire
   return {
     post(message) {
       if (disconnected) throw new Error('Stream transport disconnected');
-      output.write(encodeFrame(message));
+      output.write(encodeWireFrame(message));
     },
     onMessage(cb): Unsubscribe {
       messageListeners.add(cb);
@@ -65,7 +65,8 @@ export function streamTransport(input: ReadableLike, output: WritableLike): Wire
   };
 }
 
-function encodeFrame(message: WireMessage): Uint8Array {
+/** One wire message as a self-contained frame (the stream format, shared by WebSockets). */
+export function encodeWireFrame(message: WireMessage): Uint8Array<ArrayBuffer> {
   if (message.kind === 'blob-chunk') {
     const header = encodeJson({
       kind: message.kind,
@@ -90,6 +91,18 @@ function encodeFrame(message: WireMessage): Uint8Array {
   writeU32(frame, 1, header.byteLength);
   frame.set(header, HEADER_BYTES);
   return frame;
+}
+
+/** Decodes exactly one frame; null when the bytes are not one complete, valid frame. */
+export function decodeWireFrame(bytes: Uint8Array): WireMessage | null {
+  let decoded: WireMessage | null = null;
+  let invalid = false;
+  const rest = emitParsedFrames(
+    new Uint8Array(bytes),
+    new Set([(message: WireMessage) => (decoded = message)]),
+    () => (invalid = true)
+  );
+  return invalid || rest.byteLength > 0 ? null : decoded;
 }
 
 function emitParsedFrames(
