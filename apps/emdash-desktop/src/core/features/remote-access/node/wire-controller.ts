@@ -4,7 +4,7 @@ import { remoteAccessContract, type RemoteAccessService } from '../api';
 export function createRemoteAccessWireController(service: RemoteAccessService): Controller {
   return createController(remoteAccessContract, {
     status: () => service.status(),
-    link: () => service.link(),
+    links: () => service.links(),
     regenerateToken: () => service.regenerateToken(),
   });
 }

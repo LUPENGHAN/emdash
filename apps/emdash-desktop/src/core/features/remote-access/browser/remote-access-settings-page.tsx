@@ -3,7 +3,12 @@ import { Button, Field, Input, Select, Switch, toast } from '@emdash/ui/react/pr
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
-import { DEFAULT_REMOTE_ACCESS_SETTINGS, type RemoteAccessStatus } from '../api';
+import {
+  ALL_ADDRESSES,
+  DEFAULT_REMOTE_ACCESS_SETTINGS,
+  type RemoteAccessLink,
+  type RemoteAccessStatus,
+} from '../api';
 import { getRemoteAccessClient } from '../api/browser/client';
 
 const STATUS_KEY = ['remoteAccessStatus'];
@@ -21,9 +26,9 @@ export function RemoteAccessSettingsPage() {
     queryFn: async () => (await getRemoteAccessClient()).status(),
     refetchInterval: 3_000,
   });
-  const { data: link } = useQuery({
+  const { data: links = [] } = useQuery({
     queryKey: [...LINK_KEY, status?.url ?? null],
-    queryFn: async () => (await getRemoteAccessClient()).link(),
+    queryFn: async () => (await getRemoteAccessClient()).links(),
     enabled: status?.state === 'listening',
   });
 
@@ -40,8 +45,12 @@ export function RemoteAccessSettingsPage() {
     }
   };
 
-  const addresses = status?.addresses ?? [];
+  const addresses = [
+    ...(status?.addresses ?? []),
+    { name: 'All addresses', address: ALL_ADDRESSES },
+  ];
   const knownAddress = addresses.some((entry) => entry.address === settings.host);
+  const selected = addresses.find((entry) => entry.address === settings.host);
 
   return (
     <div className="space-y-8 pb-4">
@@ -65,9 +74,7 @@ export function RemoteAccessSettingsPage() {
           <Select.Root value={settings.host} onValueChange={(host) => host && void save({ host })}>
             <Select.Trigger appearance="input" className="w-full">
               <Select.Value>
-                {addresses.find((entry) => entry.address === settings.host)?.name
-                  ? `${addresses.find((entry) => entry.address === settings.host)!.name} · ${settings.host}`
-                  : settings.host}
+                {selected ? `${selected.name} · ${selected.address}` : settings.host}
               </Select.Value>
             </Select.Trigger>
             <Select.Content align="start" width="trigger">
@@ -82,8 +89,9 @@ export function RemoteAccessSettingsPage() {
             </Select.Content>
           </Select.Root>
           <Field.Description>
-            Pick the ZeroTier address to reach this computer from your other devices. There is no
-            HTTPS, so avoid addresses on networks you don’t control.
+            {settings.host === ALL_ADDRESSES
+              ? 'Every network this computer joins can reach it, including public Wi-Fi. There is no HTTPS, so anyone on such a network could capture the sign-in; prefer the ZeroTier address when you can.'
+              : 'Pick the ZeroTier address to reach this computer from your other devices. There is no HTTPS, so avoid addresses on networks you don’t control.'}
           </Field.Description>
         </Field.Root>
         <Field.Root>
@@ -104,23 +112,12 @@ export function RemoteAccessSettingsPage() {
           />
         </Field.Root>
         <StatusLine status={status} enabled={settings.enabled} />
-        {link ? (
+        {links.length > 0 ? (
           <Field.Root>
-            <Field.Label>Link</Field.Label>
-            <div className="flex gap-2">
-              <Input readOnly value={link} className="font-mono text-xs" />
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(link)
-                    .then(() => toast.success('Link copied'))
-                    .catch(() => toast.error('Could not copy; select the link and copy it'))
-                }
-              >
-                Copy
-              </Button>
-            </div>
+            <Field.Label>{links.length > 1 ? 'Links' : 'Link'}</Field.Label>
+            {links.map((link) => (
+              <LinkRow key={link.url} link={link} labelled={links.length > 1} />
+            ))}
             <Field.Description>
               Anyone who opens this link can run agents and commands on this computer as you. Only
               open it on your own devices.
@@ -157,5 +154,27 @@ function StatusLine({ status, enabled }: { status?: RemoteAccessStatus; enabled:
       Listening at {status.url} ·{' '}
       {status.clients === 1 ? '1 browser connected' : `${status.clients} browsers connected`}
     </p>
+  );
+}
+
+function LinkRow({ link, labelled }: { link: RemoteAccessLink; labelled: boolean }) {
+  return (
+    <div className="flex flex-col gap-1">
+      {labelled ? <span className="text-xs text-foreground-muted">{link.name}</span> : null}
+      <div className="flex gap-2">
+        <Input readOnly value={link.url} className="font-mono text-xs" />
+        <Button
+          variant="secondary"
+          onClick={() =>
+            void navigator.clipboard
+              .writeText(link.url)
+              .then(() => toast.success('Link copied'))
+              .catch(() => toast.error('Could not copy; select the link and copy it'))
+          }
+        >
+          Copy
+        </Button>
+      </div>
+    </div>
   );
 }

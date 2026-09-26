@@ -1,11 +1,16 @@
 import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
-import type {
-  RemoteAccessAddress,
-  RemoteAccessService,
-  RemoteAccessSettings,
-  RemoteAccessStatus,
+import {
+  ALL_ADDRESSES,
+  type RemoteAccessAddress,
+  type RemoteAccessLink,
+  type RemoteAccessService,
+  type RemoteAccessSettings,
+  type RemoteAccessStatus,
 } from '../api';
+
+/** A private-network address may come up after Emdash (ZeroTier at login): keep trying. */
+export const START_RETRY_MS = 30_000;
 
 /** The HTTP + WebSocket server the service drives; lives in the desktop main process. */
 export type RemoteAccessServer = {
@@ -22,6 +27,7 @@ export type RemoteAccessServiceDeps = {
   server: RemoteAccessServer;
   listAddresses?: () => RemoteAccessAddress[];
   warn?: (message: string, details: Record<string, unknown>) => void;
+  setTimer?: (callback: () => void, ms: number) => () => void;
 };
 
 export type ManagedRemoteAccessService = RemoteAccessService & {
@@ -34,6 +40,13 @@ export function createRemoteAccessService(
   deps: RemoteAccessServiceDeps
 ): ManagedRemoteAccessService {
   const listAddresses = deps.listAddresses ?? localIpv4Addresses;
+  const setTimer =
+    deps.setTimer ??
+    ((callback: () => void, ms: number) => {
+      const timer = setTimeout(callback, ms);
+      return () => clearTimeout(timer);
+    });
+  let cancelRetry: (() => void) | null = null;
   let running: { host: string; port: number; token: string } | null = null;
   let error: string | null = null;
   let queue: Promise<void> = Promise.resolve();
@@ -53,6 +66,8 @@ export function createRemoteAccessService(
   };
 
   const reconcile = async (): Promise<void> => {
+    cancelRetry?.();
+    cancelRetry = null;
     const settings = await deps.getSettings();
     if (!settings.enabled) {
       if (running) await deps.server.stop();
@@ -82,6 +97,7 @@ export function createRemoteAccessService(
         port: wanted.port,
         error,
       });
+      cancelRetry = setTimer(() => void serialize(reconcile), START_RETRY_MS);
     }
   };
 
@@ -100,9 +116,26 @@ export function createRemoteAccessService(
         clients: running ? deps.server.clientCount() : 0,
       };
     },
-    async link(): Promise<string | null> {
+    async links(): Promise<RemoteAccessLink[]> {
       await queue;
-      return running ? `${baseUrl(running)}/connect?token=${running.token}` : null;
+      if (!running) return [];
+      const { port, token } = running;
+      // Every network's address, loopback (this computer only) last.
+      const hosts =
+        running.host === ALL_ADDRESSES
+          ? [...listAddresses()].sort(
+              (a, b) => Number(a.address === '127.0.0.1') - Number(b.address === '127.0.0.1')
+            )
+          : [
+              listAddresses().find((entry) => entry.address === running!.host) ?? {
+                name: running.host,
+                address: running.host,
+              },
+            ];
+      return hosts.map((entry) => ({
+        name: entry.name,
+        url: `${baseUrl({ host: entry.address, port })}/connect?token=${token}`,
+      }));
     },
     regenerateToken: () =>
       serialize(async () => {
@@ -111,6 +144,7 @@ export function createRemoteAccessService(
       }),
     async dispose(): Promise<void> {
       unsubscribe();
+      cancelRetry?.();
       await serialize(async () => {
         if (running) await deps.server.stop();
         running = null;

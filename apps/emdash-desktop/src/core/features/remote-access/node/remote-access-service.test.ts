@@ -6,6 +6,7 @@ function setup(initial: Partial<RemoteAccessSettings> = {}) {
   let settings: RemoteAccessSettings = { ...DEFAULT_REMOTE_ACCESS_SETTINGS, ...initial };
   let stored: string | null = null;
   const listeners = new Set<() => void>();
+  const timers: (() => void)[] = [];
   const server = {
     start: vi.fn<RemoteAccessServer['start']>(async () => {}),
     stop: vi.fn<RemoteAccessServer['stop']>(async () => {}),
@@ -22,14 +23,22 @@ function setup(initial: Partial<RemoteAccessSettings> = {}) {
       stored = token;
     },
     server,
-    listAddresses: () => [{ name: 'This computer only', address: '127.0.0.1' }],
+    listAddresses: () => [
+      { name: 'This computer only', address: '127.0.0.1' },
+      { name: 'ZeroTier (feth1)', address: '10.147.17.5' },
+      { name: 'en0', address: '192.168.1.8' },
+    ],
+    setTimer: (callback) => {
+      timers.push(callback);
+      return () => timers.splice(timers.indexOf(callback), 1);
+    },
   });
   const change = async (next: Partial<RemoteAccessSettings>) => {
     settings = { ...settings, ...next };
     for (const listener of listeners) listener();
     await service.status();
   };
-  return { service, server, change, token: () => stored };
+  return { service, server, change, timers, token: () => stored };
 }
 
 describe('createRemoteAccessService', () => {
@@ -37,7 +46,7 @@ describe('createRemoteAccessService', () => {
     const { service, server, change, token } = setup();
     await service.apply();
     expect(server.start).not.toHaveBeenCalled();
-    expect(await service.link()).toBeNull();
+    expect(await service.links()).toEqual([]);
 
     await change({ enabled: true, host: '10.147.17.5', port: 7788 });
 
@@ -48,7 +57,9 @@ describe('createRemoteAccessService', () => {
       url: 'http://10.147.17.5:7788',
       clients: 2,
     });
-    expect(await service.link()).toBe(`http://10.147.17.5:7788/connect?token=${token()}`);
+    expect(await service.links()).toEqual([
+      { name: 'ZeroTier (feth1)', url: `http://10.147.17.5:7788/connect?token=${token()}` },
+    ]);
   });
 
   it('restarts on address changes and stops when disabled', async () => {
@@ -74,11 +85,28 @@ describe('createRemoteAccessService', () => {
     expect(server.start).toHaveBeenLastCalledWith(expect.objectContaining({ token: token() }));
   });
 
-  it('reports a server that cannot start', async () => {
-    const { service, server } = setup({ enabled: true });
-    server.start.mockRejectedValueOnce(new Error('listen EADDRINUSE'));
+  it('reports a server that cannot start and retries until the address exists', async () => {
+    const { service, server, timers } = setup({ enabled: true, host: '10.147.17.5' });
+    server.start.mockRejectedValueOnce(new Error('listen EADDRNOTAVAIL'));
     await service.apply();
-    expect(await service.status()).toMatchObject({ state: 'error', error: 'listen EADDRINUSE' });
-    expect(await service.link()).toBeNull();
+    expect(await service.status()).toMatchObject({ state: 'error', error: 'listen EADDRNOTAVAIL' });
+    expect(await service.links()).toEqual([]);
+    expect(timers).toHaveLength(1);
+
+    // ZeroTier came up: the retry succeeds and no further retry is scheduled.
+    timers[0]!();
+    expect((await service.status()).state).toBe('listening');
+    expect(server.start).toHaveBeenCalledTimes(2);
+    expect(timers).toHaveLength(0);
+  });
+
+  it('on all addresses, offers a link per network with loopback last', async () => {
+    const { service, token } = setup({ enabled: true, host: '0.0.0.0' });
+    await service.apply();
+    expect((await service.links()).map((link) => [link.name, link.url])).toEqual([
+      ['ZeroTier (feth1)', `http://10.147.17.5:7788/connect?token=${token()}`],
+      ['en0', `http://192.168.1.8:7788/connect?token=${token()}`],
+      ['This computer only', `http://127.0.0.1:7788/connect?token=${token()}`],
+    ]);
   });
 });

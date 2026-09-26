@@ -8,7 +8,7 @@ import { z } from 'zod';
  */
 export const remoteAccessSettingsSchema = z.object({
   enabled: z.boolean(),
-  /** The local address to listen on; never all interfaces by default. */
+  /** The local address to listen on, or ALL_ADDRESSES; loopback by default. */
   host: z.string().min(1),
   port: z.number().int().min(1024).max(65_535),
 });
@@ -21,11 +21,17 @@ export const DEFAULT_REMOTE_ACCESS_SETTINGS: RemoteAccessSettings = {
   port: 7788,
 };
 
+/** Listen on every interface (every network this computer is on). */
+export const ALL_ADDRESSES = '0.0.0.0';
+
 export type RemoteAccessAddress = { name: string; address: string };
+
+/** A sign-in link for one of the addresses browsers can reach. */
+export type RemoteAccessLink = { name: string; url: string };
 
 export type RemoteAccessStatus = {
   state: 'off' | 'listening' | 'error';
-  /** The address browsers open, without the access token. */
+  /** Where it listens, e.g. `http://10.147.17.5:7788` or `http://0.0.0.0:7788`. */
   url: string | null;
   error: string | null;
   /** Local IPv4 addresses to listen on, loopback first. */
@@ -36,8 +42,8 @@ export type RemoteAccessStatus = {
 
 export interface RemoteAccessService {
   status(): Promise<RemoteAccessStatus>;
-  /** The link that signs a browser in; null while access is off. */
-  link(): Promise<string | null>;
+  /** Links that sign a browser in, one per reachable address; empty while access is off. */
+  links(): Promise<RemoteAccessLink[]>;
   /** Invalidates the current link and disconnects every browser. */
   regenerateToken(): Promise<void>;
 }
@@ -48,6 +54,6 @@ const voidInput = z.void();
 
 export const remoteAccessContract = defineContract({
   status: procedure({ input: voidInput, output: z.custom<RemoteAccessStatus>() }),
-  link: procedure({ input: voidInput, output: z.string().nullable() }),
+  links: procedure({ input: voidInput, output: z.custom<RemoteAccessLink[]>() }),
   regenerateToken: procedure({ input: voidInput, output: z.void() }),
 });
