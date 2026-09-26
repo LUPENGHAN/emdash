@@ -8,7 +8,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { RemoteAccessServer } from '@core/features/remote-access/node/remote-access-service';
 
 const COOKIE = 'emdash_remote';
-const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
+// A year: each device signs in with the link about once; a new link still signs all out.
+const COOKIE_MAX_AGE_S = 365 * 24 * 60 * 60;
 const WIRE_PATH = '/wire';
 const CONNECT_PATH = '/connect';
 

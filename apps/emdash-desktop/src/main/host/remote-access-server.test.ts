@@ -83,6 +83,7 @@ describe('createRemoteAccessServer', () => {
     const setCookie = String(connect.headers['set-cookie']);
     expect(setCookie).toContain('HttpOnly');
     expect(setCookie).toContain('SameSite=Strict');
+    expect(setCookie).toContain(`Max-Age=${365 * 24 * 60 * 60}`);
     const cookie = setCookie.split(';')[0]!;
 
     const app = await get(port, '/', cookie);
