@@ -1,12 +1,12 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { WireMessage, WireTransport } from '@emdash/wire/rpc';
 import { webSocketTransport, type WebSocketLike } from '@emdash/wire/rpc';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WebSocket } from 'ws';
+import { createWebSocketStream, WebSocket } from 'ws';
 import { createRemoteAccessServer } from './remote-access-server';
 
 const TOKEN = 'secret-token-123';
@@ -32,9 +32,13 @@ function get(port: number, pathname: string, cookie?: string): Promise<Response>
   });
 }
 
-function openSocket(port: number, headers: Record<string, string>): Promise<WebSocket> {
+function openSocket(
+  port: number,
+  headers: Record<string, string>,
+  pathname = '/wire'
+): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/wire`, { headers });
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${pathname}`, { headers });
     socket.once('open', () => resolve(socket));
     socket.once('error', reject);
   });
@@ -59,6 +63,7 @@ describe('createRemoteAccessServer', () => {
         transport.onMessage((message) => transport.post(message));
         return vi.fn();
       },
+      info: () => ({ name: 'studio-mac', version: '1.2.6' }),
     });
     // Find a free port, then listen on it.
     const probe = await import('node:net').then(({ createServer }) => createServer());
@@ -121,5 +126,30 @@ describe('createRemoteAccessServer', () => {
     await server.stop();
     await closed;
     expect(server.clientCount()).toBe(0);
+  });
+
+  it('reports its name and build to signed-in apps', async () => {
+    expect((await get(port, '/info')).status).toBe(401);
+    const info = await get(port, '/info', `emdash_remote=${TOKEN}`);
+    expect(JSON.parse(info.body)).toEqual({ name: 'studio-mac', version: '1.2.6' });
+  });
+
+  it('tunnels raw TCP to an address this computer can reach', async () => {
+    const echo = createNetServer((socket) => socket.pipe(socket));
+    await new Promise<void>((resolve) => echo.listen(0, '127.0.0.1', () => resolve()));
+    const echoPort = (echo.address() as AddressInfo).port;
+    const headers = { cookie: `emdash_remote=${TOKEN}`, origin: `http://127.0.0.1:${port}` };
+
+    await expect(
+      openSocket(port, { origin: headers.origin }, `/tunnel?host=127.0.0.1&port=${echoPort}`)
+    ).rejects.toThrow();
+    const socket = await openSocket(port, headers, `/tunnel?host=127.0.0.1&port=${echoPort}`);
+    const stream = createWebSocketStream(socket);
+    const reply = new Promise<string>((resolve) => stream.once('data', (d) => resolve(String(d))));
+    stream.write('ping');
+
+    expect(await reply).toBe('ping');
+    stream.destroy();
+    await new Promise<void>((resolve) => echo.close(() => resolve()));
   });
 });

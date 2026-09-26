@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import {
   hostRef,
@@ -87,7 +88,7 @@ import {
 import { createProjectAttachmentAdapter } from '@core/features/projects/node/project-attachment-adapter';
 import { createProjectAttachmentManager } from '@core/features/projects/node/project-attachment-manager';
 import { migrateAppWorktreeRootToLocalHostDefault } from '@core/features/projects/node/settings/migrations/app-worktree-root';
-import type { RemoteAccessService } from '@core/features/remote-access/api';
+import type { RemoteAccessService, RemoteClientService } from '@core/features/remote-access/api';
 import { createRemoteAccessService } from '@core/features/remote-access/node/remote-access-service';
 import { createSearchService } from '@core/features/search/node/search-service';
 import { TaskService } from '@core/features/tasks/api/node/task-service';
@@ -153,17 +154,20 @@ import { getTerminalColorEnv } from '@main/core/terminal-shell/color-env';
 import { runLocalCommand } from '@main/core/utils/exec';
 import { cleanupLegacyOperationsDatabases } from '@main/db/legacy-operations-cleanup';
 import type { DesktopRuntimes } from '@main/gateway/desktop-runtimes';
-import { openRemoteWireSession } from '@main/gateway/desktop-wire';
+import { openRemoteWireSession, setRemoteRouting } from '@main/gateway/desktop-wire';
 import { createDesktopWorkspaceRuntimeAcquirer } from '@main/gateway/workspace-runtime';
 import { setBrowserCorsRelaxationSettings } from '@main/host/browser/browser-profile-session';
 import { browserWebContentsRegistry } from '@main/host/browser/browser-webcontents-registry';
 import { HostAttachmentRegistry } from '@main/host/host-attachment-registry';
 import { createSystemNotificationSink } from '@main/host/notifications/system-notification-sink';
 import { createRemoteAccessServer } from '@main/host/remote-access-server';
+import { setRemoteBrowserProxyPort } from '@main/host/remote-client/browser-proxy';
+import { createRemoteClientService } from '@main/host/remote-client/remote-client-service';
 import { encryptedAppSecretsStore } from '@main/host/secrets/encrypted-app-secrets-store';
 import { toPlaintextSecretStore } from '@main/host/secrets/plaintext-secret-store';
 import { setTrayVisible } from '@main/host/tray';
 import { installUpdateNotifications } from '@main/host/updates/update-notifications';
+import { getMainWindow } from '@main/host/window';
 import { applyNativeTheme, isAppFocused } from '@main/host/window';
 import { log } from '@main/lib/logger';
 import { telemetryService } from '@main/lib/telemetry';
@@ -199,6 +203,7 @@ export type ServicesBundle = {
   readonly modelProviderKeys: ModelProviderKeys;
   readonly usageLimits: UsageLimitsService;
   readonly remoteAccess: RemoteAccessService;
+  readonly remoteClient: RemoteClientService;
   readonly pullRequestsRegistration: PullRequestsRegistration;
   readonly search: ReturnType<typeof createSearchService>;
   readonly sessionLaunchContexts: TaskSessionLaunchContextResolver;
@@ -290,11 +295,37 @@ export async function bootServices(
     server: createRemoteAccessServer({
       rendererRoot: join(app.getAppPath(), 'out', 'renderer'),
       openSession: openRemoteWireSession,
+      info: () => ({ name: hostname(), version: app.getVersion() }),
     }),
     warn: (message, details) => log.warn(message, details),
   });
   void remoteAccess.apply();
   appScope.add(() => remoteAccess.dispose());
+  const REMOTE_SERVER_TOKEN_PREFIX = 'remote-server-token:';
+  const remoteClient = createRemoteClientService({
+    storePath: join(app.getPath('userData'), 'remote-servers.json'),
+    secrets: {
+      read: async (serverId) =>
+        (
+          await encryptedAppSecretsStore.getSecret(`${REMOTE_SERVER_TOKEN_PREFIX}${serverId}`)
+        )?.expose() ?? null,
+      write: (serverId, token) =>
+        encryptedAppSecretsStore.setSecret(
+          `${REMOTE_SERVER_TOKEN_PREFIX}${serverId}`,
+          secret(token, `${REMOTE_SERVER_TOKEN_PREFIX}${serverId}`)
+        ),
+      remove: (serverId) =>
+        encryptedAppSecretsStore.deleteSecret(`${REMOTE_SERVER_TOKEN_PREFIX}${serverId}`),
+    },
+    localVersion: app.getVersion(),
+    setRouting: setRemoteRouting,
+    setBrowserProxyPort: setRemoteBrowserProxyPort,
+    reloadWindow: () => getMainWindow()?.webContents.reload(),
+    warn: (message, details) => log.warn(message, details),
+  });
+  // Before the gateway registers controllers: window traffic waits for the choice.
+  void remoteClient.start();
+  appScope.add(() => remoteClient.dispose());
   const effectiveAgentConfig = createEffectiveAgentConfig({
     getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
@@ -911,6 +942,7 @@ export async function bootServices(
     modelProviderKeys,
     usageLimits,
     remoteAccess,
+    remoteClient,
     pullRequestsRegistration,
     search: searchService,
     sessionLaunchContexts,

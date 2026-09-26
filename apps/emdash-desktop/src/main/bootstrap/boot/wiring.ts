@@ -126,6 +126,7 @@ export function createDesktopWireOptions(
     modelProviderKeys: services.modelProviderKeys,
     usageLimits: services.usageLimits,
     remoteAccess: services.remoteAccess,
+    remoteClient: services.remoteClient,
     reconcileSweep: services.reconcileSweep,
     search: services.search,
     sessionLaunchContexts: services.sessionLaunchContexts,

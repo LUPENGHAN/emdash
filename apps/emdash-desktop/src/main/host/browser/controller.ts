@@ -10,13 +10,16 @@ import { getAppSettingsService } from '@main/bootstrap/core/service-instances';
 import { configureBrowserProfileSession } from '@main/host/browser/browser-profile-session';
 import { browserWebContentsRegistry } from '@main/host/browser/browser-webcontents-registry';
 import { isBrowserPartition } from '@main/host/browser/webview-security';
+import { applyRemoteBrowserProxy } from '@main/host/remote-client/browser-proxy';
 
 export const browserOperations = {
-  registerSession: (args: { browserId: string; partition: string }) => {
+  registerSession: async (args: { browserId: string; partition: string }) => {
     if (!args.browserId.trim() || !isBrowserPartition(args.partition)) {
       return { success: false as const, error: 'Invalid browser session' };
     }
     configureBrowserProfileSession(args.partition);
+    // While driving another computer, the page must load through it from the start.
+    await applyRemoteBrowserProxy(args.partition);
     browserWebContentsRegistry.registerSession(args);
     return { success: true as const };
   },

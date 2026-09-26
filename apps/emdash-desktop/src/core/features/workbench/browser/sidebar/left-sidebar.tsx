@@ -3,6 +3,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { automationsViewDef } from '@core/features/automations/contributions/views';
 import { UsageLimitsPanel } from '@core/features/model-providers/contributions/browser/usage-limits-panel';
+import { ConnectionSwitcher } from '@core/features/remote-access/contributions/browser/connection-switcher';
 import { settingsViewDef } from '@core/features/settings/contributions/views';
 import { useOpenModal } from '@core/manifests/browser/modal-api';
 import { BoundShortcut } from '@core/primitives/keybindings/browser/shortcut';
@@ -70,6 +71,7 @@ export const LeftSidebar: React.FC = observer(function LeftSidebar() {
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
+          <ConnectionSwitcher />
           <UsageLimitsPanel />
           <SidebarMenu>
             <SidebarSearchTrigger />

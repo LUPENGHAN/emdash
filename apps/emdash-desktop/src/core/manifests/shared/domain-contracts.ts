@@ -16,7 +16,12 @@ import { machinesContract, machinesDomain } from '@core/features/machines/api';
 import { mcpContract, mcpDomain } from '@core/features/mcp/api';
 import { previewServersContract, previewServersDomain } from '@core/features/preview-servers/api';
 import { projectsDomain, projectsWireContract } from '@core/features/projects/api';
-import { remoteAccessContract, remoteAccessDomain } from '@core/features/remote-access/api';
+import {
+  remoteAccessContract,
+  remoteAccessDomain,
+  remoteClientContract,
+  remoteClientDomain,
+} from '@core/features/remote-access/api';
 import { repositoryContract, repositoryDomain } from '@core/features/repository/api';
 import { searchContract, searchDomain } from '@core/features/search/api';
 import { skillsContract, skillsDomain } from '@core/features/skills/api';
@@ -60,6 +65,7 @@ export const desktopDomainContracts = {
   [loggingDomain]: loggingWireContract,
   [machinesDomain]: machinesContract,
   [remoteAccessDomain]: remoteAccessContract,
+  [remoteClientDomain]: remoteClientContract,
   [projectSettingsDomain]: projectSettingsContract,
   [projectWorkspacesDomain]: projectWorkspacesContract,
   [promptLibraryDomain]: promptLibraryContract,

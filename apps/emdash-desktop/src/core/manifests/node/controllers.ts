@@ -51,7 +51,8 @@ import type { ProjectSettingsService } from '@core/features/projects/api/node/se
 import type { ProjectDeletionDependencies } from '@core/features/projects/node/operations/deleteProject';
 import { getProjectById } from '@core/features/projects/node/operations/getProjects';
 import { createProjectsWireController } from '@core/features/projects/node/wire-controller';
-import type { RemoteAccessService } from '@core/features/remote-access/api';
+import type { RemoteAccessService, RemoteClientService } from '@core/features/remote-access/api';
+import { createRemoteClientWireController } from '@core/features/remote-access/node/remote-client-wire-controller';
 import { createRemoteAccessWireController } from '@core/features/remote-access/node/wire-controller';
 import { createRepositoryWireController } from '@core/features/repository/node/wire-controller';
 import type { SearchService } from '@core/features/search/node/search-service';
@@ -149,6 +150,7 @@ export type DesktopControllerContext = {
   readonly modelProviderKeys: ModelProviderKeys;
   readonly usageLimits: UsageLimitsService;
   readonly remoteAccess: RemoteAccessService;
+  readonly remoteClient: RemoteClientService;
   readonly reconcileSweep: ReconcileSweepHandle;
   readonly hosts: Hosts;
   readonly runtimeClients: {
@@ -229,6 +231,9 @@ export const desktopNodeControllers = {
   },
   remoteAccess: {
     create: ({ remoteAccess }) => createRemoteAccessWireController(remoteAccess),
+  },
+  remoteClient: {
+    create: ({ remoteClient }) => createRemoteClientWireController(remoteClient),
   },
   projectSettings: {
     create: ({ runtimes, workspaceIdentity }) =>

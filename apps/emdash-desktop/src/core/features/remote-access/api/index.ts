@@ -57,3 +57,63 @@ export const remoteAccessContract = defineContract({
   links: procedure({ input: voidInput, output: z.custom<RemoteAccessLink[]>() }),
   regenerateToken: procedure({ input: voidInput, output: z.void() }),
 });
+
+// ── Client side: this app driving another computer's Emdash ────────────────────────
+
+/** What a serving Emdash reports about itself at `/info`. */
+export type RemoteServerInfo = { name: string; version: string };
+
+/** A computer this app can switch to; its token stays in the encrypted secrets store. */
+export type RemoteServer = {
+  id: string;
+  name: string;
+  /** e.g. `http://10.147.17.5:7788` */
+  baseUrl: string;
+};
+
+export type RemoteClientState = {
+  /** The computer this window drives: null for this one. */
+  activeServerId: string | null;
+  servers: RemoteServer[];
+  connection: 'local' | 'connecting' | 'connected' | 'reconnecting' | 'failed';
+  /** Why the last connect or switch failed, e.g. an unreachable address. */
+  error: string | null;
+  /** Set when the other computer runs a different Emdash build. */
+  versionMismatch: { local: string; remote: string } | null;
+};
+
+export interface RemoteClientService {
+  state(): Promise<RemoteClientState>;
+  /** Checks the link against the other computer, then saves it. */
+  addServer(input: { link: string; name?: string }): Promise<RemoteServer>;
+  removeServer(id: string): Promise<void>;
+  /** Drives the given computer (null: this one) and reloads the window. */
+  switchTo(serverId: string | null): Promise<void>;
+}
+
+export const remoteClientDomain = 'remoteClient' as const;
+
+export const remoteClientContract = defineContract({
+  state: procedure({ input: voidInput, output: z.custom<RemoteClientState>() }),
+  addServer: procedure({
+    input: z.object({ link: z.string().min(1), name: z.string().optional() }),
+    output: z.custom<RemoteServer>(),
+  }),
+  removeServer: procedure({ input: z.object({ id: z.string() }), output: z.void() }),
+  switchTo: procedure({ input: z.object({ serverId: z.string().nullable() }), output: z.void() }),
+});
+
+/**
+ * Domains this window keeps on its own computer while driving another: the OS shell
+ * (links, clipboard, dialogs, window), the built-in browser, app updates and logs, and
+ * the switch itself. Everything else is the other computer's.
+ */
+export const LOCAL_ONLY_DOMAINS: ReadonlySet<string> = new Set([
+  'host',
+  'browser',
+  'logging',
+  'updates',
+  'devPerf',
+  'telemetry',
+  remoteClientDomain,
+]);

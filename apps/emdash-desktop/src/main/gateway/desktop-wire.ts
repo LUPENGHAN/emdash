@@ -34,9 +34,13 @@ export function installDesktopWire(): void {
   // Validation happens inside each routed controller: `createController`
   // applies the environment default at every controller site.
   scope.add(
-    exposeWireToWindows({ ipcMain, createMessageChannel }, createLazyRoutingController(), {
-      channel: DESKTOP_WIRE_CHANNEL,
-    })
+    exposeWireToWindows(
+      { ipcMain, createMessageChannel },
+      createLazyRoutingController({ followRemote: true }),
+      {
+        channel: DESKTOP_WIRE_CHANNEL,
+      }
+    )
   );
 }
 
@@ -49,7 +53,9 @@ let nextRemoteSession = 0;
  */
 export function openRemoteWireSession(transport: WireTransport): () => void {
   if (!remoteHub) {
-    remoteHub = createWireSessionHub(createLazyRoutingController());
+    // Browsers served by this computer always get this computer's controllers, even
+    // while its own window drives another one.
+    remoteHub = createWireSessionHub(createLazyRoutingController({ followRemote: false }));
     const hub = remoteHub;
     scope.add(async () => {
       await hub.dispose();
@@ -57,6 +63,44 @@ export function openRemoteWireSession(transport: WireTransport): () => void {
   }
   nextRemoteSession += 1;
   return remoteHub.open(`remote-${nextRemoteSession}`, transport);
+}
+
+/** Controllers answering for another computer this window drives; null for this one. */
+let remoteRouting: Promise<Record<string, Controller> | null> = Promise.resolve(null);
+/** The settled value of `remoteRouting`; undefined while it is pending. */
+let settledRemote: Record<string, Controller> | null | undefined = null;
+let mergedFor: { local: Record<string, Controller>; remote: Record<string, Controller> } | null =
+  null;
+let merged: Record<string, Controller> | null = null;
+
+/**
+ * Routes the window's traffic to another computer's controllers (the remote client),
+ * or back to this one with null. Traffic waits while the promise is pending. Domains
+ * the remote set omits (the local-only ones) keep answering here.
+ */
+export function setRemoteRouting(next: Promise<Record<string, Controller> | null>): void {
+  remoteRouting = next;
+  settledRemote = undefined;
+  void next.then(
+    (controllers) => {
+      if (remoteRouting === next) settledRemote = controllers;
+    },
+    () => {
+      if (remoteRouting === next) settledRemote = null;
+    }
+  );
+}
+
+function withRemote(
+  local: Record<string, Controller>,
+  remote: Record<string, Controller> | null
+): Record<string, Controller> {
+  if (!remote) return local;
+  if (mergedFor?.local !== local || mergedFor.remote !== remote) {
+    mergedFor = { local, remote };
+    merged = { ...local, ...remote };
+  }
+  return merged!;
 }
 
 /** Provides the controllers bundle; releases any wire traffic queued so far. */
@@ -72,26 +116,37 @@ function createMessageChannel() {
   return { port1: channel.port1, port2: channel.port2 };
 }
 
-function createLazyRoutingController(): Controller {
+function createLazyRoutingController({ followRemote }: { followRemote: boolean }): Controller {
+  const ready = (): Record<string, Controller> | null => {
+    if (!registeredControllers) return null;
+    if (!followRemote) return registeredControllers;
+    return settledRemote === undefined ? null : withRemote(registeredControllers, settledRemote);
+  };
+  const whenReady = async (): Promise<Record<string, Controller>> => {
+    const local = registeredControllers ?? (await controllersPromise);
+    if (!followRemote) return local;
+    return withRemote(local, await remoteRouting.catch(() => null));
+  };
   return {
     async call(path, input, meta) {
-      const controllers = registeredControllers ?? (await controllersPromise);
-      const routed = route(path, controllers);
+      const routed = route(path, ready() ?? (await whenReady()));
       return await routed.controller.call(routed.path, input, meta);
     },
     resolveLive(topic) {
-      if (registeredControllers) {
-        const routed = route(topic, registeredControllers);
+      const controllers = ready();
+      if (controllers) {
+        const routed = route(topic, controllers);
         return routed.controller.resolveLive(routed.path);
       }
-      return deferredLiveSource(topic);
+      return deferredLiveSource(topic, whenReady);
     },
     acquireLive(topic) {
-      if (registeredControllers) {
-        const routed = route(topic, registeredControllers);
+      const controllers = ready();
+      if (controllers) {
+        const routed = route(topic, controllers);
         return routed.controller.acquireLive(routed.path);
       }
-      return deferredLiveLease(topic);
+      return deferredLiveLease(topic, whenReady);
     },
   };
 }
@@ -101,8 +156,11 @@ function createLazyRoutingController(): Controller {
  * waits for registration and then delegates to the routed source. An unknown
  * topic surfaces as NOT_FOUND at first use, matching the routed behavior.
  */
-function deferredLiveSource(topic: string): LiveSource {
-  const resolved = controllersPromise.then((controllers) => {
+function deferredLiveSource(
+  topic: string,
+  whenReady: () => Promise<Record<string, Controller>>
+): LiveSource {
+  const resolved = whenReady().then((controllers) => {
     const routed = route(topic, controllers);
     const source = routed.controller.resolveLive(routed.path);
     if (!source) throw new WireError('NOT_FOUND', `Unknown live topic '${topic}'`);
@@ -125,9 +183,12 @@ function deferredLiveSource(topic: string): LiveSource {
  * the two deferred variants intentionally mirror their routed counterparts'
  * error codes.
  */
-function deferredLiveLease(topic: string): PendingLease<LiveSource> {
+function deferredLiveLease(
+  topic: string,
+  whenReady: () => Promise<Record<string, Controller>>
+): PendingLease<LiveSource> {
   let inner: PendingLease<LiveSource> | null | undefined;
-  const acquired = controllersPromise.then((controllers) => {
+  const acquired = whenReady().then((controllers) => {
     const routed = route(topic, controllers);
     inner = routed.controller.acquireLive(routed.path);
     if (!inner) throw new WireError('UNKNOWN_TOPIC', `Unknown live topic '${topic}'`);

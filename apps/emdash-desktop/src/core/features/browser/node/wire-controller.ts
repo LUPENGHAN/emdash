@@ -4,7 +4,10 @@ import { browserContract } from '../api';
 import { browserEvents } from './event-host';
 
 export type BrowserOperations = {
-  registerSession(input: { browserId: string; partition: string }): BrowserActionResult;
+  registerSession(input: {
+    browserId: string;
+    partition: string;
+  }): BrowserActionResult | Promise<BrowserActionResult>;
   unregisterSession(browserId: string): BrowserActionResult;
   bindWebContents(input: { browserId: string; webContentsId: number }): BrowserActionResult;
   setActiveBrowser(browserId: string | null): BrowserActionResult;

@@ -10,6 +10,8 @@ import {
   type RemoteAccessStatus,
 } from '../api';
 import { getRemoteAccessClient } from '../api/browser/client';
+import { useRemoteClientState } from '../contributions/browser/connection-switcher';
+import { OtherComputersSection } from './other-computers-section';
 
 const STATUS_KEY = ['remoteAccessStatus'];
 const LINK_KEY = ['remoteAccessLink'];
@@ -45,6 +47,8 @@ export function RemoteAccessSettingsPage() {
     }
   };
 
+  const { data: clientState } = useRemoteClientState();
+  const driving = clientState?.servers.find((server) => server.id === clientState.activeServerId);
   const addresses = [
     ...(status?.addresses ?? []),
     { name: 'All addresses', address: ALL_ADDRESSES },
@@ -59,6 +63,12 @@ export function RemoteAccessSettingsPage() {
         title="Remote access"
         description="Use this Emdash from a browser on another computer: projects, conversations, terminals and code all stay on this machine. Listen on your ZeroTier (or other private network) address and open the link there."
       />
+      {driving ? (
+        <p className="rounded-md border border-border px-3 py-2 text-xs text-foreground-muted">
+          This window is using {driving.name}: the browser access settings below are that
+          computer’s.
+        </p>
+      ) : null}
       <Field.Group>
         <Field.Root>
           <div className="flex items-center gap-2">
@@ -139,6 +149,7 @@ export function RemoteAccessSettingsPage() {
           </Field.Root>
         ) : null}
       </Field.Group>
+      <OtherComputersSection />
     </div>
   );
 }

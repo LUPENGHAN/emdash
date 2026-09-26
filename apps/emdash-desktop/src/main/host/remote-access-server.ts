@@ -1,10 +1,12 @@
 import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { connect as connectTcp } from 'node:net';
 import { extname, join, normalize, sep } from 'node:path';
 import type { WireTransport } from '@emdash/wire/rpc';
 import { webSocketTransport, type WebSocketLike } from '@emdash/wire/rpc';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { createWebSocketStream, WebSocketServer, type WebSocket } from 'ws';
+import type { RemoteServerInfo } from '@core/features/remote-access/api';
 import type { RemoteAccessServer } from '@core/features/remote-access/node/remote-access-service';
 
 const COOKIE = 'emdash_remote';
@@ -12,6 +14,9 @@ const COOKIE = 'emdash_remote';
 const COOKIE_MAX_AGE_S = 365 * 24 * 60 * 60;
 const WIRE_PATH = '/wire';
 const CONNECT_PATH = '/connect';
+const INFO_PATH = '/info';
+/** Raw TCP to a host:port reachable from this computer, for a client's built-in browser. */
+const TUNNEL_PATH = '/tunnel';
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -35,19 +40,24 @@ export type RemoteAccessServerDeps = {
   rendererRoot: string;
   /** Serves the desktop controllers over a browser's transport; returns its disposer. */
   openSession: (transport: WireTransport) => () => void;
+  /** Name and build shown to connecting apps. */
+  info: () => RemoteServerInfo;
 };
 
 /**
  * HTTP + WebSocket server for browser access. A browser signs in once through the
  * `/connect?token=…` link, which trades the token for an HttpOnly, SameSite=Strict
  * cookie; every file and the `/wire` socket then require that cookie, and the socket
- * also requires a same-origin `Origin` so other sites cannot ride the cookie.
+ * also requires a same-origin `Origin` so other sites cannot ride the cookie. Another
+ * Emdash connects the same way (sending the cookie itself) and may open `/tunnel`
+ * sockets so its built-in browser sees what this computer sees.
  */
 export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAccessServer {
   const root = normalize(deps.rendererRoot);
   let server: Server | null = null;
   let sockets: WebSocketServer | null = null;
   const sessions = new Map<WebSocket, () => void>();
+  const tunnels = new Set<WebSocket>();
 
   const closeAll = (): void => {
     for (const [socket, dispose] of sessions) {
@@ -55,6 +65,8 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
       socket.terminate();
     }
     sessions.clear();
+    for (const socket of tunnels) socket.terminate();
+    tunnels.clear();
   };
 
   return {
@@ -73,7 +85,12 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
       });
 
       const http = createServer((request, response) => {
-        void handleRequest(request, response, { root, token, authorized }).catch(() => {
+        void handleRequest(request, response, {
+          root,
+          token,
+          authorized,
+          info: deps.info,
+        }).catch(() => {
           if (!response.headersSent) response.writeHead(500);
           response.end();
         });
@@ -81,11 +98,32 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
       http.on('upgrade', (request, socket, head) => {
         const url = new URL(request.url ?? '/', 'http://local');
         const sameOrigin = request.headers.origin === `http://${request.headers.host}`;
-        if (url.pathname !== WIRE_PATH || !authorized(request) || !sameOrigin) {
+        if (!authorized(request) || !sameOrigin) {
           socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
           return;
         }
-        wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+        if (url.pathname === WIRE_PATH) {
+          wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+          return;
+        }
+        const target = url.pathname === TUNNEL_PATH ? parseTarget(url.searchParams) : null;
+        if (!target) {
+          socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+          return;
+        }
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          tunnels.add(ws);
+          const stream = createWebSocketStream(ws);
+          const tcp = connectTcp(target.port, target.host);
+          const end = () => {
+            tunnels.delete(ws);
+            stream.destroy();
+            tcp.destroy();
+          };
+          stream.on('error', end).on('close', end);
+          tcp.on('error', end).on('close', end);
+          stream.pipe(tcp).pipe(stream);
+        });
       });
 
       await new Promise<void>((resolve, reject) => {
@@ -115,7 +153,12 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { root: string; token: string; authorized: (request: IncomingMessage) => boolean }
+  context: {
+    root: string;
+    token: string;
+    authorized: (request: IncomingMessage) => boolean;
+    info: () => RemoteServerInfo;
+  }
 ): Promise<void> {
   const url = new URL(request.url ?? '/', 'http://local');
   response.setHeader('X-Frame-Options', 'DENY');
@@ -140,6 +183,11 @@ async function handleRequest(
       'Open the link from Emdash → Settings → Remote access to use Emdash in this browser.'
     );
   }
+  if (url.pathname === INFO_PATH) {
+    response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    response.end(JSON.stringify(context.info()));
+    return;
+  }
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return sendText(response, 405, 'Method not allowed');
   }
@@ -162,6 +210,13 @@ async function handleRequest(
     'Cache-Control': type.startsWith('text/html') ? 'no-store' : 'private, max-age=3600',
   });
   response.end(request.method === 'HEAD' ? undefined : body);
+}
+
+function parseTarget(params: URLSearchParams): { host: string; port: number } | null {
+  const host = params.get('host');
+  const port = Number(params.get('port'));
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65_535) return null;
+  return { host, port };
 }
 
 function sendText(response: ServerResponse, status: number, text: string): void {
