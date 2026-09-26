@@ -1,4 +1,5 @@
 import { formatHostRef } from '@emdash/core/primitives/host/api';
+import type { AgentProviderId } from '@emdash/plugins/agents/types';
 import { Dialog, Field, Input, Select, Switch } from '@emdash/ui/react/primitives';
 import { useQuery } from '@tanstack/react-query';
 import { formatDistanceToNow } from 'date-fns';
@@ -36,16 +37,30 @@ import {
 // Select value for the "type any model id" row; not a real model id.
 const CUSTOM_MODEL_VALUE = '__emdash_custom_model__';
 
+/** Hand a conversation's work to a new one: the modal picks agent, model and source. */
+export type ConversationHandoff = {
+  fromConversationId: string;
+  providerId: AgentProviderId;
+  /** The source's UI, kept when the target supports it. */
+  type: ConversationType;
+  title: string;
+};
+
 export const CreateConversationModal = observer(function CreateConversationModal({
   projectId,
   taskId,
+  handoff,
 }: {
   projectId: string;
   taskId: string;
+  handoff?: ConversationHandoff;
 }) {
   const { complete } = useModalController('createConversationModal');
   const connectionId = getProjectSshConnectionId(projectId);
-  const { providerId, setProviderOverride, createDisabled } = useEffectiveProvider(connectionId);
+  const { providerId, setProviderOverride, createDisabled } = useEffectiveProvider(
+    connectionId,
+    handoff?.providerId
+  );
   const conversationMgr = conversationRegistry.get(taskId);
   const taskSettings = useTaskSettings();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -69,7 +84,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
   // Sessions started outside Emdash in this task's directory, resumable by id.
   const { data: importableSessions = [] } = useQuery({
     queryKey: ['importableSessions', projectId, taskId],
-    enabled: !liveActionDisabledReason,
+    enabled: !liveActionDisabledReason && !handoff,
     gcTime: 0,
     queryFn: async () => {
       try {
@@ -89,7 +104,14 @@ export const CreateConversationModal = observer(function CreateConversationModal
   const showAutoApproveToggle = agentSupportsAutoApprove(selectedAgent?.capabilities);
   // A resumed session can open in either UI: chat loads it with session/load.
   // Sessions tied to one UI's store (Cursor) must resume in that UI.
-  const lockedUi = resumeSession?.resumeIn;
+  // A handoff keeps the source's UI where the target has it.
+  const lockedUi =
+    resumeSession?.resumeIn ??
+    (handoff
+      ? handoff.type === 'acp' && agentSupportsAcp(selectedAgent?.capabilities)
+        ? 'acp'
+        : 'pty'
+      : undefined);
   const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities) && !lockedUi;
   const useAcp = lockedUi ? lockedUi === 'acp' : showAcpToggle && useChatUiPreference;
   const transport = useAcp ? 'acp' : 'pty';
@@ -117,23 +139,28 @@ export const CreateConversationModal = observer(function CreateConversationModal
   const setSelectedModel = useCallback(
     (model: string | null) => {
       if (!preferenceKey) return;
-      setModelOverrides((current) => ({ ...current, [preferenceKey]: model }));
+      setModelOverrides((current) => ({
+        ...current,
+        [preferenceKey]: model,
+      }));
     },
     [preferenceKey]
   );
   const skipPermissions =
     showAutoApproveToggle && (autoApproveOverride ?? taskSettings.autoApproveByDefault);
-  const title = resumeSession
-    ? resumeSession.title.slice(0, 80)
-    : providerId
-      ? nextDefaultConversationTitle(
-          providerId,
-          Array.from(
-            conversationMgr?.conversations.values() ?? [],
-            (conversation) => conversation.data
+  const title = handoff
+    ? handoff.title
+    : resumeSession
+      ? resumeSession.title.slice(0, 80)
+      : providerId
+        ? nextDefaultConversationTitle(
+            providerId,
+            Array.from(
+              conversationMgr?.conversations.values() ?? [],
+              (conversation) => conversation.data
+            )
           )
-        )
-      : 'Conversation';
+        : 'Conversation';
 
   const handleProviderChange = useCallback(
     (next: typeof providerId) => {
@@ -160,6 +187,14 @@ export const CreateConversationModal = observer(function CreateConversationModal
     setError(null);
     try {
       const conversationType: ConversationType = useAcp ? 'acp' : 'pty';
+      // Written only on confirm, so a cancelled handoff leaves no transcript behind.
+      const handoffPrompt = handoff
+        ? (
+            await (
+              await getConversationsClient()
+            ).prepareHandoff({ conversationId: handoff.fromConversationId })
+          ).prompt
+        : undefined;
       await conversationMgr.createConversation({
         projectId,
         taskId,
@@ -170,7 +205,9 @@ export const CreateConversationModal = observer(function CreateConversationModal
         // A resumed session keeps the model it was started with; a provider source brings
         // its own model choice.
         model: resumeSession || providerSource ? undefined : (selectedModel ?? undefined),
-        ...(source.modelSource !== undefined && { modelSource: source.modelSource }),
+        ...(source.modelSource !== undefined && {
+          modelSource: source.modelSource,
+        }),
         ...(source.sourceModel && { sourceModel: source.sourceModel }),
         modeId: conversationType === 'acp' ? savedPreference?.modeId : undefined,
         effort: conversationType === 'acp' ? savedPreference?.effort : undefined,
@@ -178,6 +215,10 @@ export const CreateConversationModal = observer(function CreateConversationModal
           conversationType === 'acp' ? savedPreference?.collaborationMode : undefined,
         type: conversationType,
         providerSessionId: resumeSession?.sessionId,
+        ...(handoffPrompt !== undefined &&
+          (conversationType === 'acp'
+            ? { initialQueue: [{ text: handoffPrompt }] }
+            : { initialPrompt: handoffPrompt })),
       });
       // A resumed session's choices are its own; don't remember them as defaults.
       if (!resumeSession) {
@@ -194,10 +235,11 @@ export const CreateConversationModal = observer(function CreateConversationModal
       setIsSubmitting(false);
       complete({ conversationId: id, type: conversationType });
     } catch {
-      setError('Failed to create conversation');
+      setError(handoff ? 'Failed to hand off the conversation' : 'Failed to create conversation');
       setIsSubmitting(false);
     }
   }, [
+    handoff,
     conversationMgr,
     liveActionDisabledReason,
     createDisabled,
@@ -223,7 +265,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
   return (
     <>
       <Dialog.Header>
-        <Dialog.Title>Create Conversation</Dialog.Title>
+        <Dialog.Title>{handoff ? 'Hand Off Conversation' : 'Create Conversation'}</Dialog.Title>
       </Dialog.Header>
       <Dialog.Body>
         <Field.Group>
@@ -236,7 +278,13 @@ export const CreateConversationModal = observer(function CreateConversationModal
               connectionId={connectionId}
             />
           </Field.Root>
-          {agentSessions.length > 0 ? (
+          {handoff ? (
+            <p className="text-xs text-foreground-muted">
+              The new conversation starts with the original ask, the last reply, the git state and
+              the path of the full transcript.
+            </p>
+          ) : null}
+          {!handoff && agentSessions.length > 0 ? (
             <Field.Root>
               <Field.Label>Session</Field.Label>
               <Select.Root
@@ -254,7 +302,9 @@ export const CreateConversationModal = observer(function CreateConversationModal
                     <Select.Item key={session.sessionId} value={session.sessionId}>
                       <span className="truncate">{session.title}</span>
                       <span className="ml-2 shrink-0 text-xs text-foreground-muted">
-                        {formatDistanceToNow(session.updatedAt, { addSuffix: true })}
+                        {formatDistanceToNow(session.updatedAt, {
+                          addSuffix: true,
+                        })}
                       </span>
                     </Select.Item>
                   ))}
@@ -361,12 +411,16 @@ export const CreateConversationModal = observer(function CreateConversationModal
           disabled={Boolean(liveActionDisabledReason) || createDisabled || isSubmitting}
         >
           {isSubmitting
-            ? resumeSession
-              ? 'Resuming...'
-              : 'Creating...'
-            : resumeSession
-              ? 'Resume'
-              : 'Create'}
+            ? handoff
+              ? 'Handing off...'
+              : resumeSession
+                ? 'Resuming...'
+                : 'Creating...'
+            : handoff
+              ? 'Hand Off'
+              : resumeSession
+                ? 'Resume'
+                : 'Create'}
         </ConfirmButton>
       </Dialog.Footer>
     </>

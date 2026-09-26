@@ -25,6 +25,10 @@ const mocks = vi.hoisted(() => ({
   select: vi.fn(({ children }: { children?: ReactNode; value: string }) => children),
   confirm: vi.fn((_props: { onClick(): void }) => null),
   input: vi.fn((_props: { value: string }) => null),
+  prepareHandoff: vi.fn(async () => ({
+    prompt: 'HANDOFF',
+    transcriptPath: '/t.md',
+  })),
 }));
 
 vi.mock('@core/features/agents/api/browser/use-agents', () => ({
@@ -40,20 +44,33 @@ vi.mock('@core/features/agents/api/browser/use-agents', () => ({
   }),
 }));
 // No external sessions to resume and no model providers: the plain model picker.
-vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data: undefined }) }));
+vi.mock('@tanstack/react-query', () => ({
+  useQuery: () => ({ data: undefined }),
+}));
 vi.mock('@core/features/model-providers/contributions/browser/model-source-select', () => ({
   ModelSourceSelect: () => null,
+}));
+vi.mock('@core/features/conversations/api/browser/client', () => ({
+  getConversationsClient: async () => ({
+    prepareHandoff: mocks.prepareHandoff,
+  }),
 }));
 vi.mock('@core/features/agents/contributions/browser/agent-selector', () => ({
   AgentSelector: () => null,
 }));
 vi.mock('@core/features/conversations/api/browser/stores/conversation-registry', () => ({
   conversationRegistry: {
-    get: () => ({ conversations: new Map(), createConversation: mocks.createConversation }),
+    get: () => ({
+      conversations: new Map(),
+      createConversation: mocks.createConversation,
+    }),
   },
 }));
 vi.mock('@core/features/conversations/api/browser/use-effective-provider', () => ({
-  useEffectiveProvider: () => ({ providerId: mocks.providerId, createDisabled: false }),
+  useEffectiveProvider: () => ({
+    providerId: mocks.providerId,
+    createDisabled: false,
+  }),
 }));
 vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
   getProjectSshConnectionId: () => null,
@@ -87,7 +104,12 @@ vi.mock('@core/primitives/keybindings/browser/confirm-button', () => ({
 vi.mock('@emdash/ui/react/primitives', () => {
   const container = ({ children }: { children?: ReactNode }) => children;
   return {
-    Dialog: { Header: container, Title: container, Body: container, Footer: container },
+    Dialog: {
+      Header: container,
+      Title: container,
+      Body: container,
+      Footer: container,
+    },
     Field: {
       Root: container,
       Label: container,
@@ -128,7 +150,10 @@ async function createConversation(
     });
   }
   renderToStaticMarkup(
-    createElement(CreateConversationModal, { projectId: 'project', taskId: 'task' })
+    createElement(CreateConversationModal, {
+      projectId: 'project',
+      taskId: 'task',
+    })
   );
   mocks.confirm.mock.lastCall![0].onClick();
   await vi.waitFor(() => expect(mocks.complete).toHaveBeenCalledOnce());
@@ -166,7 +191,11 @@ describe('new conversation model selection', () => {
         expect(mocks.select.mock.lastCall![0].value).toBe(model);
       }
       expect(mocks.createConversation).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: providerId, type: transport, model })
+        expect.objectContaining({
+          provider: providerId,
+          type: transport,
+          model,
+        })
       );
       expect(providerPreference(mocks.preferences, host, providerId, transport).model).toBe(model);
     }
@@ -177,6 +206,43 @@ describe('new conversation model selection', () => {
     expect(mocks.select.mock.lastCall![0].value).toBe('');
     expect(mocks.createConversation).toHaveBeenCalledWith(
       expect.objectContaining({ model: undefined })
+    );
+  });
+
+  it('hands off with the chosen model, the source UI and the handoff message', async () => {
+    mocks.providerId = 'codex';
+    mocks.preferences = patchProviderPreference(mocks.preferences, host, 'codex', 'acp', {
+      model: 'gpt-6-sol',
+    });
+    renderToStaticMarkup(
+      createElement(CreateConversationModal, {
+        projectId: 'project',
+        taskId: 'task',
+        handoff: {
+          fromConversationId: 'source',
+          providerId: 'codex' as never,
+          type: 'acp',
+          title: 'Fix the parser',
+        },
+      })
+    );
+    // Nothing is written until the handoff is confirmed.
+    expect(mocks.prepareHandoff).not.toHaveBeenCalled();
+
+    mocks.confirm.mock.lastCall![0].onClick();
+    await vi.waitFor(() => expect(mocks.complete).toHaveBeenCalledOnce());
+
+    expect(mocks.prepareHandoff).toHaveBeenCalledWith({
+      conversationId: 'source',
+    });
+    expect(mocks.createConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'codex',
+        type: 'acp',
+        model: 'gpt-6-sol',
+        title: 'Fix the parser',
+        initialQueue: [{ text: 'HANDOFF' }],
+      })
     );
   });
 });
