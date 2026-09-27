@@ -63,6 +63,7 @@ import {
 import { createSessionLifecycle } from '#services/session-lifecycle/node';
 import { TuiAgentStates } from './agent-state';
 import { spillLargePrompt, type PromptSpillResult } from './prompt-spill';
+import { hasSavedSession } from './saved-session';
 import type { TuiAgentsRuntimeDeps, TuiSessionConfig } from './types';
 
 const RESUME_FALLBACK_WINDOW_MS = 3_000;
@@ -462,6 +463,16 @@ export class TuiAgentsRuntime {
     this.configs.clear();
   }
 
+  private async resumable(config: TuiSessionConfig): Promise<boolean> {
+    const sessionId = config.input.sessionId ?? config.input.conversationId;
+    const check = this.deps.hasSavedSession ?? hasSavedSession;
+    try {
+      return await check(config.input.providerId, sessionId);
+    } catch {
+      return true;
+    }
+  }
+
   private async spawnInto(
     session: TuiAgentSession,
     config: TuiSessionConfig,
@@ -471,6 +482,17 @@ export class TuiAgentsRuntime {
     if (!providerResult.success) return err(providerResult.error);
 
     const provider = providerResult.data;
+    if (config.intent === 'resume' && !(await this.resumable(config))) {
+      // Nothing was saved under this id (e.g. a Claude session that never got a message):
+      // resuming would only fail, so start it fresh under the same id.
+      this.setResumeState(config.input.conversationId, {
+        requested: true,
+        outcome: 'fresh-fallback',
+        reason: 'no-saved-session',
+      });
+      config = { input: config.input, intent: 'fresh', resumeFallback: true };
+      this.configs.set(config.input.conversationId, config);
+    }
     const isResuming = config.intent === 'resume';
     const resumeState =
       isResuming ||

@@ -27,6 +27,8 @@ export interface TuiAgentsRuntimeDeps {
     sweepIntervalMs?: number;
   };
   spillPrompt?: (prompt: string) => Promise<PromptSpillResult>;
+  /** Whether a session can be resumed; defaults to checking the agent's session files. */
+  hasSavedSession?: (providerId: string, sessionId: string) => Promise<boolean>;
   logger: Logger;
 }
 

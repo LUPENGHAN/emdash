@@ -42,6 +42,7 @@ function createRuntime(
     commandEnv?: Record<string, string>;
     command?: string;
     args?: string[];
+    hasSavedSession?: (providerId: string, sessionId: string) => Promise<boolean>;
   } = {}
 ) {
   const spawner = new FakePtySpawner();
@@ -92,6 +93,7 @@ function createRuntime(
     platform: options.platform,
     lifecycle: options.lifecycle,
     spillPrompt: options.spillPrompt,
+    hasSavedSession: options.hasSavedSession ?? (async () => true),
     logger: noopLogger,
   });
   return { runtime, spawner, agentHost, exec };
@@ -162,6 +164,21 @@ describe('TuiAgentsRuntime', () => {
       }
     }
   );
+
+  it('starts fresh under the same id when nothing was saved to resume', async () => {
+    const hasSavedSession = vi.fn(async () => false);
+    const { runtime, agentHost } = createRuntime({ hasSavedSession });
+    try {
+      await runtime.resumeSession(startInput({ sessionId: 'never-used' }));
+      expect(hasSavedSession).toHaveBeenCalledWith('test', 'never-used');
+      expect(agentHost.buildPromptCommand).toHaveBeenLastCalledWith(
+        'test',
+        expect.objectContaining({ isResuming: false, sessionId: 'conversation-1' })
+      );
+    } finally {
+      await runtime.dispose();
+    }
+  });
 
   it('retains stopped output when replacement spawning fails', async () => {
     const { runtime, spawner } = createRuntime();
