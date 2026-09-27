@@ -1,5 +1,6 @@
 import type { AgentProviderId } from '@emdash/plugins/agents/types';
 import { toast } from '@emdash/ui/react/primitives';
+import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
 import { openModal } from '@core/manifests/browser/modal-api';
@@ -63,6 +64,63 @@ export async function handOffConversation(
     { conversationId: outcome.data.conversationId },
     { preview: false }
   );
+}
+
+/** Agents with a chat UI (ACP); the others run in a terminal. */
+export const CHAT_CAPABLE_AGENTS: ReadonlySet<string> = new Set([
+  'claude',
+  'codex',
+  'opencode',
+  'oh-my-pi',
+  'cursor',
+]);
+
+export function agentDisplayName(providerId: string): string {
+  return HANDOFF_TARGETS.find((target) => target.id === providerId)?.name ?? providerId;
+}
+
+/**
+ * Hands off without the dialog, for an agent that asked to (agent control): the target
+ * and model are already chosen and the user confirmed. Same message, UI type rule and
+ * retitling as the dialog path.
+ */
+export async function handOffConversationTo(
+  conversation: Conversation,
+  target: { providerId: string; model?: string; note?: string }
+): Promise<Conversation> {
+  const manager = conversationRegistry.get(conversation.taskId);
+  if (!manager) throw new Error('The task is not loaded');
+  const { prompt } = await (
+    await getConversationsClient()
+  ).prepareHandoff({ conversationId: conversation.id });
+  const text = target.note?.trim()
+    ? `${prompt}\n\nNote from the previous agent: ${target.note.trim()}`
+    : prompt;
+  const type =
+    (conversation.type ?? 'pty') === 'acp' && CHAT_CAPABLE_AGENTS.has(target.providerId)
+      ? 'acp'
+      : 'pty';
+  const created = await manager.createConversation({
+    id: crypto.randomUUID(),
+    projectId: conversation.projectId,
+    taskId: conversation.taskId,
+    provider: target.providerId as AgentProviderId,
+    title: conversation.title,
+    type,
+    ...(target.model && { model: target.model }),
+    ...(type === 'acp' ? { initialQueue: [{ text }] } : { initialPrompt: text }),
+  });
+  const marker = ` → ${agentDisplayName(target.providerId)}`;
+  if (!conversation.title.endsWith(marker)) {
+    const base = conversation.title.slice(0, MAX_CONVERSATION_TITLE_LENGTH - marker.length);
+    await manager.renameConversation(conversation.id, `${base}${marker}`);
+  }
+  getTaskComposition(conversation.projectId, conversation.taskId)?.paneLayout.open(
+    type === 'acp' ? 'acp-chat' : 'conversation',
+    { conversationId: created.id },
+    { preview: false }
+  );
+  return created;
 }
 
 /** Tab-menu command: "Hand off", whose dialog picks the agent, model and source. */

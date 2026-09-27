@@ -86,7 +86,17 @@ export class SessionMaterializer {
     }
 
     const connection = acquired.value;
-    const mcpServers = await this.resolveSessionMcpServers(input.providerId, connection);
+    const mcpServers = [
+      ...(await this.resolveSessionMcpServers(input.providerId, connection)),
+      ...(connection.mcpCapabilities.http
+        ? (input.extraMcpServers ?? []).map((server) => ({
+            type: 'http' as const,
+            name: server.name,
+            url: server.url,
+            headers: [],
+          }))
+        : []),
+    ];
     const mcpServerSummary = summarizeAcpMcpServers(mcpServers);
     const processOwner = routeOwnerId(connection.key, connection.generation);
     let record: SessionRecord | null = null;

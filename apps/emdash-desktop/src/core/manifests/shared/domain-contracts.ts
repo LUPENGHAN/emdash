@@ -1,4 +1,5 @@
 import { accountContract, accountDomain } from '@core/features/account/api';
+import { agentControlContract, agentControlDomain } from '@core/features/agent-control/api';
 import { agentsContract, agentsDomain } from '@core/features/agents/api';
 import { automationsContract, automationsDomain } from '@core/features/automations/api';
 import { browserContract, browserDomain } from '@core/features/browser/api';
@@ -66,6 +67,7 @@ export const desktopDomainContracts = {
   [machinesDomain]: machinesContract,
   [remoteAccessDomain]: remoteAccessContract,
   [remoteClientDomain]: remoteClientContract,
+  [agentControlDomain]: agentControlContract,
   [projectSettingsDomain]: projectSettingsContract,
   [projectWorkspacesDomain]: projectWorkspacesContract,
   [promptLibraryDomain]: promptLibraryContract,

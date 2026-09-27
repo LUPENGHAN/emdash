@@ -1,4 +1,5 @@
 import {
+  isLocalHostRef,
   LOCAL_HOST_REF,
   parseHostRef,
   type HostRef,
@@ -85,6 +86,8 @@ export type CreateConversationsWireControllerOptions = Readonly<{
     override?: ModelSourceOverride
   ) => Promise<Record<string, string> | undefined>;
   sessionLaunchContexts: Pick<TaskSessionLaunchContextResolver, 'resolve'>;
+  /** The URL of Emdash's own MCP server for a conversation's agent (local agents only). */
+  agentControlUrl?: (conversationId: string) => Promise<string | null>;
   logger: Logger;
   projects: Pick<ProjectAttachmentManager, 'requireAttached'>;
   telemetry: TelemetryService;
@@ -104,7 +107,8 @@ export function createConversationsWireController(
         options.workspaceIdentity,
         options.db,
         options.getProviderEnv,
-        options.sessionLaunchContexts
+        options.sessionLaunchContexts,
+        options.agentControlUrl
       ));
   const hooks = options.hooks ?? createDefaultRuntimeHooks(options);
   const conversationOperations = createConversationOperations({
@@ -397,7 +401,8 @@ async function resolveConversationRuntimeTarget(
         override?: ModelSourceOverride
       ) => Promise<Record<string, string> | undefined>)
     | undefined,
-  sessionLaunchContexts: Pick<TaskSessionLaunchContextResolver, 'resolve'>
+  sessionLaunchContexts: Pick<TaskSessionLaunchContextResolver, 'resolve'>,
+  agentControlUrl?: (conversationId: string) => Promise<string | null>
 ): Promise<ConversationRuntimeTarget> {
   const [row] = await db
     .select({
@@ -448,6 +453,11 @@ async function resolveConversationRuntimeTarget(
   if (launchContext && !launchContext.success) {
     throw new Error(`Could not resolve task session launch context: ${launchContext.error.type}`);
   }
+  // Emdash's own tools reach the agent over loopback, so only agents on this computer.
+  const agentControl =
+    row.type === 'acp' && (!identity?.host || isLocalHostRef(identity.host))
+      ? await agentControlUrl?.(conversationId).catch(() => null)
+      : null;
   const processEnv = {
     ...(providerEnv ?? {}),
     ...(launchContext?.success ? launchContext.data.env : {}),
@@ -465,6 +475,7 @@ async function resolveConversationRuntimeTarget(
           collaborationMode: acpConfig?.collaborationMode ?? null,
           ...(initialQueue && { initialQueue }),
           ...(Object.keys(processEnv).length > 0 ? { env: processEnv } : {}),
+          ...(agentControl ? { extraMcpServers: [{ name: 'emdash', url: agentControl }] } : {}),
         }
       : undefined;
 

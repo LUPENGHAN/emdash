@@ -8,6 +8,7 @@ import {
   pinTopMode,
 } from '@emdash/chat-ui';
 import ReactDOM from 'react-dom/client';
+import { installAgentControl } from '@core/features/agent-control/contributions/browser/install-agent-control';
 import { installChatUiRuntime } from '@core/features/conversations/api/browser/chat/chat-ui-runtime';
 import { configureDevPerfClient } from '@core/features/dev-perf/api/browser/client';
 import { installMonacoFacetBinder } from '@core/features/editor/browser/monaco/install-monaco-facet-binder';
@@ -23,13 +24,13 @@ import { viewCatalog } from '@core/manifests/browser/view-catalog';
 import { mementoCatalog } from '@core/manifests/shared/memento-catalog';
 import { log } from '@core/primitives/logging/browser/logger';
 import { getMementosWireClient } from '@core/primitives/mementos/api/client';
-import { configureMementos, initMementos } from '@core/primitives/mementos/browser';
 import '@fontsource-variable/inter/index.css';
 import '@emdash/ui/style.css';
 import '@emdash/chat-ui/style.css';
 import './index.css';
 import 'devicon/devicon.min.css';
 import 'katex/dist/katex.min.css';
+import { configureMementos, initMementos } from '@core/primitives/mementos/browser';
 import { MementoClientProvider, SubjectProvider } from '@core/primitives/mementos/react';
 import {
   workbenchHistoryMemento,
@@ -95,6 +96,7 @@ async function bootstrap() {
     pinTopMode,
   });
   wireExternalLinkRequests();
+  installAgentControl();
 
   // Builds and activates all app-scoped stores (projects, machines, sidebar,
   // updates) before React mounts.

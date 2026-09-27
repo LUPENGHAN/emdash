@@ -28,6 +28,10 @@ export type BrowserWebviewElement = HTMLElement & {
   stop(): void;
   loadURL(url: string): Promise<void> | void;
   setZoomFactor(factor: number): void;
+  executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
+  capturePage(): Promise<{ toDataURL(): string; getSize(): { width: number; height: number } }>;
+  sendInputEvent(event: BrowserInputEvent): void;
+  insertText(text: string): Promise<void>;
   addEventListener<K extends keyof BrowserWebviewEventMap>(
     type: K,
     listener: (event: BrowserWebviewEventMap[K]) => void
@@ -37,6 +41,17 @@ export type BrowserWebviewElement = HTMLElement & {
     listener: (event: BrowserWebviewEventMap[K]) => void
   ): void;
 };
+
+/** Electron input events for `<webview>.sendInputEvent`, in the page's CSS pixels. */
+export type BrowserInputEvent =
+  | {
+      type: 'mouseDown' | 'mouseUp' | 'mouseMove';
+      x: number;
+      y: number;
+      button?: 'left' | 'right' | 'middle';
+      clickCount?: number;
+    }
+  | { type: 'keyDown' | 'keyUp' | 'char'; keyCode: string };
 
 export type BrowserWebviewAdapter = {
   canGoBack(): boolean;
@@ -51,6 +66,11 @@ export type BrowserWebviewAdapter = {
   loadUrl(url: string): Promise<void>;
   setZoomFactor(factor: number): void;
   focus(): void;
+  /** Automation (agent control): script, capture and input for the guest page. */
+  executeJavaScript(code: string): Promise<unknown>;
+  capturePng(): Promise<{ dataUrl: string; width: number; height: number }>;
+  sendInputEvent(event: BrowserInputEvent): void;
+  insertText(text: string): Promise<void>;
 };
 
 export function createBrowserWebviewAdapter(webview: BrowserWebviewElement): BrowserWebviewAdapter {
@@ -69,5 +89,12 @@ export function createBrowserWebviewAdapter(webview: BrowserWebviewElement): Bro
     },
     setZoomFactor: (factor: number) => webview.setZoomFactor(factor),
     focus: () => webview.focus(),
+    executeJavaScript: (code: string) => webview.executeJavaScript(code, true),
+    capturePng: async () => {
+      const image = await webview.capturePage();
+      return { dataUrl: image.toDataURL(), ...image.getSize() };
+    },
+    sendInputEvent: (event) => webview.sendInputEvent(event),
+    insertText: (text: string) => webview.insertText(text),
   };
 }

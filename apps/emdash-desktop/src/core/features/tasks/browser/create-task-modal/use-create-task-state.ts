@@ -22,7 +22,8 @@ export function useCreateTaskState(
   repositoryWorkspaceId: string | null | undefined,
   initialPR?: PullRequest,
   initialLinkedType: LinkedType = null,
-  initialWorkspaceId?: string
+  initialWorkspaceId?: string,
+  initialName?: string
 ) {
   const { autoGenerateName, createBranchAndWorktree } = useTaskSettings();
 
@@ -106,6 +107,7 @@ export function useCreateTaskState(
     generatedName,
     isPending,
     resetKey: projectId,
+    initialName,
   });
 
   const workspaceConfig = useWorkspaceConfig({

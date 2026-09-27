@@ -11,6 +11,8 @@ import {
 } from '@emdash/wire/rpc';
 import type { EmdashAccountService } from '@core/features/account/node/services/emdash-account-service';
 import { createAccountWireController } from '@core/features/account/node/wire-controller';
+import type { AgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
+import { createAgentControlWireController } from '@core/features/agent-control/node/wire-controller';
 import { createAgentOperations } from '@core/features/agents/node/controller';
 import { createAgentsWireController } from '@core/features/agents/node/wire-controller';
 import type { AutomationsService } from '@core/features/automations/api/node/automations-service';
@@ -151,6 +153,8 @@ export type DesktopControllerContext = {
   readonly usageLimits: UsageLimitsService;
   readonly remoteAccess: RemoteAccessService;
   readonly remoteClient: RemoteClientService;
+  readonly agentControl: AgentControlDispatcher;
+  readonly agentControlUrl: (conversationId: string) => Promise<string | null>;
   readonly reconcileSweep: ReconcileSweepHandle;
   readonly hosts: Hosts;
   readonly runtimeClients: {
@@ -234,6 +238,9 @@ export const desktopNodeControllers = {
   },
   remoteClient: {
     create: ({ remoteClient }) => createRemoteClientWireController(remoteClient),
+  },
+  agentControl: {
+    create: ({ agentControl }) => createAgentControlWireController(agentControl),
   },
   projectSettings: {
     create: ({ runtimes, workspaceIdentity }) =>
@@ -410,6 +417,7 @@ export const desktopNodeControllers = {
       taskSessions,
       telemetry,
       workspaceIdentity,
+      agentControlUrl,
     }) =>
       createConversationsWireController({
         terminalFileSources,
@@ -425,6 +433,7 @@ export const desktopNodeControllers = {
         workspaceIdentity,
         withCompensation: compensation,
         hostIsReachable,
+        agentControlUrl,
       }),
   },
   previewServers: {

@@ -71,6 +71,7 @@ export type InitialConversationState = {
 
 interface InitialConversationStateOptions {
   resetPromptOnProjectChange?: boolean;
+  initialPrompt?: string;
 }
 
 export function useInitialConversationState(
@@ -79,11 +80,11 @@ export function useInitialConversationState(
   autoApproveByDefault = false,
   options: InitialConversationStateOptions = {}
 ): InitialConversationState {
-  const { resetPromptOnProjectChange = true } = options;
+  const { resetPromptOnProjectChange = true, initialPrompt } = options;
   const connectionId = projectId ? getProjectSshConnectionId(projectId) : undefined;
   const { providerId, setProviderOverride } = useEffectiveProvider(connectionId, initialProvider);
   const { data: agents } = useAgents(hostRefFromConnectionId(connectionId));
-  const [prompt, setPrompt] = useState('');
+  const [prompt, setPrompt] = useState(initialPrompt ?? '');
   const [issueContext, setIssueContext] = useState<string | null>(null);
   const [autoApprovePreference, setAutoApprovePreference] = useLocalStorage(
     'initial-conversation:auto-approve-enabled',

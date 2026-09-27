@@ -47,11 +47,16 @@ export const CreateTaskModal = observer(function CreateTaskModal({
   strategy: initialStrategy = 'from-branch',
   initialPR,
   initialWorkspaceId,
+  initialName,
+  initialPrompt,
 }: {
   projectId?: string;
   strategy?: 'from-branch' | 'from-issue' | 'from-pull-request';
   initialPR?: PullRequest;
   initialWorkspaceId?: string;
+  /** Prefills, e.g. for a task an agent suggested. */
+  initialName?: string;
+  initialPrompt?: string;
 }) {
   const { complete } = useModalController('taskModal');
   const selectedProjectId = useDefaultProjectId(projectId);
@@ -91,14 +96,16 @@ export const CreateTaskModal = observer(function CreateTaskModal({
     repositoryWorkspaceId,
     resolvedInitialPR,
     defaultLinkedType,
-    initialWorkspaceId
+    initialWorkspaceId,
+    initialName
   );
 
   const { autoApproveByDefault, includeIssueContextByDefault } = useTaskSettings();
   const initialConversation = useInitialConversationState(
     selectedProjectId,
     undefined,
-    autoApproveByDefault
+    autoApproveByDefault,
+    { initialPrompt }
   );
   const { navigate } = useNavigate();
 

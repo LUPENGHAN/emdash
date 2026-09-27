@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,6 +19,12 @@ import type { AccountKVSchema } from '@core/features/account/node/services/accou
 import { AccountCredentialStore } from '@core/features/account/node/services/credential-store';
 import { createEmdashAccountService } from '@core/features/account/node/services/emdash-account-service';
 import { ProviderTokenDispatcher } from '@core/features/account/node/services/provider-token-dispatcher';
+import type { AgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
+import { createAgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
+import { startAgentControlServer } from '@core/features/agent-control/node/agent-control-server';
+import { terminalLaunchForAgentControl } from '@core/features/agent-control/node/agent-launch';
+import { agentControlEvents } from '@core/features/agent-control/node/event-host';
+import { resolveAgentCaller } from '@core/features/agent-control/node/resolve-caller';
 import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registry';
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
@@ -202,6 +209,9 @@ export type ServicesBundle = {
   readonly effectiveAgentConfig: EffectiveAgentConfig;
   readonly modelProviderKeys: ModelProviderKeys;
   readonly usageLimits: UsageLimitsService;
+  readonly agentControl: AgentControlDispatcher;
+  /** Emdash's own MCP URL for a local conversation's agent; null if unavailable. */
+  readonly agentControlUrl: (conversationId: string) => Promise<string | null>;
   readonly remoteAccess: RemoteAccessService;
   readonly remoteClient: RemoteClientService;
   readonly pullRequestsRegistration: PullRequestsRegistration;
@@ -356,6 +366,41 @@ export async function bootServices(
     deactivateWorkspaceParticipants: (identity) =>
       deactivateWorkspaceParticipants(lifecycleParticipants, identity),
   });
+  // Agent control: Emdash's own MCP tools for every local agent (see agent-control).
+  const agentControl = createAgentControlDispatcher({
+    emit: (request) => agentControlEvents.emit(undefined, request),
+  });
+  appScope.add(() => agentControl.dispose());
+  const AGENT_CONTROL_SECRET_KEY = 'agent-control-secret';
+  const agentControlServer = (async () => {
+    let stored = (await encryptedAppSecretsStore.getSecret(AGENT_CONTROL_SECRET_KEY))?.expose();
+    if (!stored) {
+      stored = randomBytes(32).toString('base64url');
+      await encryptedAppSecretsStore.setSecret(
+        AGENT_CONTROL_SECRET_KEY,
+        secret(stored, AGENT_CONTROL_SECRET_KEY)
+      );
+    }
+    const server = await startAgentControlServer({
+      secret: Buffer.from(stored),
+      version: app.getVersion(),
+      resolveCaller: (conversationId) =>
+        resolveAgentCaller(
+          db,
+          async (workspaceId) => (await workspaceIdentity.resolve(workspaceId))?.path ?? null,
+          conversationId
+        ),
+      dispatch: (caller, action) => agentControl.dispatch(caller, action),
+      usageLimits: () => usageLimits.get(),
+    });
+    appScope.add(() => server.close());
+    return server;
+  })().catch((error: unknown) => {
+    log.warn('agent control: MCP server unavailable', { error: String(error) });
+    return null;
+  });
+  const agentControlUrl = async (conversationId: string) =>
+    (await agentControlServer)?.urlFor(conversationId) ?? null;
   const tuiConversationDependencies = {
     db,
     getProviderConfig: (providerId: string, override?: ModelSourceOverride) =>
@@ -366,6 +411,16 @@ export async function bootServices(
     // this phase; sessions only call this after boot completes.
     resolveSessionGitCredentials: (params: { projectId: string; host: HostRef }) =>
       gitCredentials.resolveSessionSpec(params),
+    agentControlLaunch: async (params: {
+      conversationId: string;
+      providerId: string;
+      host: HostRef;
+      env: Record<string, string>;
+    }) => {
+      if (!isLocalHostRef(params.host)) return null;
+      const url = await agentControlUrl(params.conversationId);
+      return url ? terminalLaunchForAgentControl(params.providerId, url, params.env) : null;
+    },
   };
   const projectAttachmentAdapter = createProjectAttachmentAdapter({
     db,
@@ -941,6 +996,8 @@ export async function bootServices(
     effectiveAgentConfig,
     modelProviderKeys,
     usageLimits,
+    agentControl,
+    agentControlUrl,
     remoteAccess,
     remoteClient,
     pullRequestsRegistration,

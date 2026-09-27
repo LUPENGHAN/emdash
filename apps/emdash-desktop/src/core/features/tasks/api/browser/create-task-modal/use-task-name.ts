@@ -19,8 +19,10 @@ export function useTaskName(opts?: {
   resetKey?: unknown;
   initialName?: string;
 }): TaskNameState {
-  const { generatedName, isPending = false, resetKey } = opts ?? {};
-  const [taskName, setTaskName] = useState('');
+  const { generatedName, isPending = false, resetKey, initialName } = opts ?? {};
+  const [taskName, setTaskName] = useState(() =>
+    initialName ? liveTransformTaskName(initialName) : ''
+  );
   const [showSlugHint, setShowSlugHint] = useState(false);
   const [prevResetKey, setPrevResetKey] = useState(resetKey);
 
