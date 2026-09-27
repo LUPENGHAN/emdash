@@ -1,3 +1,4 @@
+import { agentLibrarySettingsContribution } from '@core/features/agent-library/contributions/settings';
 import { defaultAgentSettingsContribution } from '@core/features/agents/contributions/settings';
 import {
   browserPreviewSettingsContribution,
@@ -38,6 +39,7 @@ export const appSettingsSchemaContributions = {
   defaultAgent: defaultAgentSettingsContribution,
   modelProviders: modelProvidersSettingsContribution,
   remoteAccess: remoteAccessSettingsContribution,
+  agentLibrary: agentLibrarySettingsContribution,
   keyboard: keyboardSettingsContribution,
   notifications: notificationSettingsContribution,
   theme: themeSettingsContribution,

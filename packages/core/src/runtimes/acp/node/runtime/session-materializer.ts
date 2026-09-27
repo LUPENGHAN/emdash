@@ -1,3 +1,4 @@
+import type { McpServer as AcpMcpServer } from '@agentclientprotocol/sdk';
 import type { LoadSessionRequest, NewSessionRequest } from '@agentclientprotocol/sdk';
 import type { Result } from '@emdash/shared';
 import { toSerializedError } from '@emdash/shared';
@@ -86,16 +87,12 @@ export class SessionMaterializer {
     }
 
     const connection = acquired.value;
+    const own = await this.resolveSessionMcpServers(input.providerId, connection);
+    const extra = sessionExtraMcpServers(input.extraMcpServers, connection.mcpCapabilities.http);
+    // A per-conversation server replaces the agent's own one of the same name.
     const mcpServers = [
-      ...(await this.resolveSessionMcpServers(input.providerId, connection)),
-      ...(connection.mcpCapabilities.http
-        ? (input.extraMcpServers ?? []).map((server) => ({
-            type: 'http' as const,
-            name: server.name,
-            url: server.url,
-            headers: [],
-          }))
-        : []),
+      ...own.filter((server) => !extra.some((added) => added.name === server.name)),
+      ...extra,
     ];
     const mcpServerSummary = summarizeAcpMcpServers(mcpServers);
     const processOwner = routeOwnerId(connection.key, connection.generation);
@@ -511,4 +508,38 @@ function isSessionNotFound(
     error = 'cause' in error ? error.cause : undefined;
   }
   return false;
+}
+
+type ExtraMcpServer = NonNullable<AcpStartInput['extraMcpServers']>[number];
+
+/** Per-conversation MCP servers in ACP form; HTTP ones only where the agent speaks HTTP. */
+function sessionExtraMcpServers(
+  servers: ExtraMcpServer[] | undefined,
+  http: boolean | undefined
+): AcpMcpServer[] {
+  const pairs = (record: Record<string, string> | undefined) =>
+    Object.entries(record ?? {}).map(([name, value]) => ({ name, value }));
+  return (servers ?? []).flatMap((server): AcpMcpServer[] => {
+    if (server.url) {
+      return http
+        ? [
+            {
+              type: 'http' as const,
+              name: server.name,
+              url: server.url,
+              headers: pairs(server.headers),
+            },
+          ]
+        : [];
+    }
+    if (!server.command) return [];
+    return [
+      {
+        name: server.name,
+        command: server.command,
+        args: server.args ?? [],
+        env: pairs(server.env),
+      },
+    ];
+  });
 }

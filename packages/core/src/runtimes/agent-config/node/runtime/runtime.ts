@@ -1,4 +1,4 @@
-import type { Result } from '@emdash/shared';
+import { ok, type Result } from '@emdash/shared';
 import type { LiveLogSource } from '@emdash/wire/live';
 import type { McpServer } from '#primitives/mcp/api';
 import type { CatalogSkill } from '#primitives/skills/api';
@@ -138,6 +138,10 @@ export class AgentConfigRuntime {
     };
   }): Promise<Result<CatalogSkill[], AgentConfigSkillsError>> {
     return this.skills.installSkill(input.skill);
+  }
+
+  async refreshSkills(): Promise<Result<CatalogSkill[], AgentConfigSkillsError>> {
+    return ok(await this.skills.refresh());
   }
 
   removeSkill(name: string): Promise<Result<CatalogSkill[], AgentConfigSkillsError>> {

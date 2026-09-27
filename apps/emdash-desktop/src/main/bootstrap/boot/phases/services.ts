@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { hostname } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import {
   hostRef,
@@ -22,9 +22,15 @@ import { ProviderTokenDispatcher } from '@core/features/account/node/services/pr
 import type { AgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
 import { createAgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
 import { startAgentControlServer } from '@core/features/agent-control/node/agent-control-server';
-import { terminalLaunchForAgentControl } from '@core/features/agent-control/node/agent-launch';
 import { agentControlEvents } from '@core/features/agent-control/node/event-host';
 import { resolveAgentCaller } from '@core/features/agent-control/node/resolve-caller';
+import type { LaunchMcpServer } from '@core/features/agent-library/api';
+import {
+  createAgentLibraryService,
+  listLocalWorkspaces,
+  type AgentLibraryService,
+} from '@core/features/agent-library/node/agent-library-service';
+import { acpMcpServers, terminalLaunchForMcp } from '@core/features/agent-library/node/mcp-launch';
 import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registry';
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
@@ -211,7 +217,13 @@ export type ServicesBundle = {
   readonly usageLimits: UsageLimitsService;
   readonly agentControl: AgentControlDispatcher;
   /** Emdash's own MCP URL for a local conversation's agent; null if unavailable. */
-  readonly agentControlUrl: (conversationId: string) => Promise<string | null>;
+  readonly agentLibrary: AgentLibraryService;
+  /** Readies a local chat agent's workspace and returns the MCP servers Emdash adds. */
+  readonly prepareAgentLaunch: (input: {
+    conversationId: string;
+    projectId: string;
+    workspacePath: string;
+  }) => Promise<ReturnType<typeof acpMcpServers>>;
   readonly remoteAccess: RemoteAccessService;
   readonly remoteClient: RemoteClientService;
   readonly pullRequestsRegistration: PullRequestsRegistration;
@@ -401,6 +413,49 @@ export async function bootServices(
   });
   const agentControlUrl = async (conversationId: string) =>
     (await agentControlServer)?.urlFor(conversationId) ?? null;
+  // Emdash's skill and MCP library, handed to every agent it starts (see agent-library).
+  const agentLibrary = createAgentLibraryService({
+    home: homedir(),
+    getSettings: () => appSettingsService.get('agentLibrary'),
+    onSettingsChanged: (listener) => {
+      const handler = (key: AppSettingsKey) => {
+        if (key === 'agentLibrary') listener();
+      };
+      appSettingsService.on('app-settings:changed', handler);
+      return () => appSettingsService.off('app-settings:changed', handler);
+    },
+    listLocalWorkspaces: () => listLocalWorkspaces(db),
+    refreshSkillCatalog: async () => {
+      const local = await runtimes.client(LOCAL_HOST_REF);
+      if (local.success) await local.data.agentConfig.refreshSkills({});
+    },
+    warn: (message, details) => log.warn(message, details),
+  });
+  appScope.add(() => agentLibrary.dispose());
+  void agentLibrary.resyncAll();
+  /** Emdash's own tools first, then the library servers for the project. */
+  const launchMcpServers = async (
+    conversationId: string,
+    projectId: string
+  ): Promise<LaunchMcpServer[]> => {
+    const url = await agentControlUrl(conversationId);
+    const library = await agentLibrary.launchMcpServers(projectId);
+    return [
+      ...(url ? [{ name: 'emdash', transport: 'http' as const, url }] : []),
+      ...library.filter((server) => server.name !== 'emdash'),
+    ];
+  };
+  const prepareAgentLaunch = async (input: {
+    conversationId: string;
+    projectId: string;
+    workspacePath: string;
+  }) => {
+    await agentLibrary.prepareWorkspace({
+      projectId: input.projectId,
+      path: input.workspacePath,
+    });
+    return acpMcpServers(await launchMcpServers(input.conversationId, input.projectId));
+  };
   const tuiConversationDependencies = {
     db,
     getProviderConfig: (providerId: string, override?: ModelSourceOverride) =>
@@ -411,15 +466,25 @@ export async function bootServices(
     // this phase; sessions only call this after boot completes.
     resolveSessionGitCredentials: (params: { projectId: string; host: HostRef }) =>
       gitCredentials.resolveSessionSpec(params),
-    agentControlLaunch: async (params: {
+    prepareAgentLaunch: async (params: {
       conversationId: string;
       providerId: string;
+      projectId: string;
+      workspacePath: string;
       host: HostRef;
       env: Record<string, string>;
     }) => {
+      // Skills and MCP servers live on this computer; remote agents keep their own.
       if (!isLocalHostRef(params.host)) return null;
-      const url = await agentControlUrl(params.conversationId);
-      return url ? terminalLaunchForAgentControl(params.providerId, url, params.env) : null;
+      await agentLibrary.prepareWorkspace({
+        projectId: params.projectId,
+        path: params.workspacePath,
+      });
+      return terminalLaunchForMcp(
+        params.providerId,
+        await launchMcpServers(params.conversationId, params.projectId),
+        params.env
+      );
     },
   };
   const projectAttachmentAdapter = createProjectAttachmentAdapter({
@@ -997,7 +1062,8 @@ export async function bootServices(
     modelProviderKeys,
     usageLimits,
     agentControl,
-    agentControlUrl,
+    agentLibrary,
+    prepareAgentLaunch,
     remoteAccess,
     remoteClient,
     pullRequestsRegistration,

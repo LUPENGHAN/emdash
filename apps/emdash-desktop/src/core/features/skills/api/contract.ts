@@ -35,6 +35,11 @@ export const skillsContract = defineContract({
     data: z.object({ skills: installedSkillsSchema }),
     error: skillsErrorSchema,
   }),
+  refresh: fallible({
+    input: hostInputSchema,
+    data: z.object({ skills: installedSkillsSchema }),
+    error: skillsErrorSchema,
+  }),
 });
 
 export type SkillsContract = typeof skillsContract;

@@ -8,9 +8,15 @@ import { useOpenModal } from '@core/manifests/browser/modal-api';
 type SkillsListProps = {
   skills: UseSkillsResult;
   onOpenTerminal?: (skillPath: string) => void;
+  /** Extra controls under an installed skill (e.g. where it applies). */
+  renderInstalledFooter?: (skill: UseSkillsResult['installedSkills'][number]) => React.ReactNode;
 };
 
-export const SkillsList: React.FC<SkillsListProps> = ({ skills, onOpenTerminal }) => {
+export const SkillsList: React.FC<SkillsListProps> = ({
+  skills,
+  onOpenTerminal,
+  renderInstalledFooter,
+}) => {
   const openConfirm = useOpenModal('confirmActionModal');
   const openSkillDetail = useOpenModal('skillDetailModal');
 
@@ -62,6 +68,7 @@ export const SkillsList: React.FC<SkillsListProps> = ({ skills, onOpenTerminal }
                 onInstall={skills.install}
                 onUninstall={handleUninstallRequest}
                 onClick={() => handleOpenDetail(skill)}
+                footer={renderInstalledFooter?.(skill)}
               />
             ))}
           </CardGridSection>

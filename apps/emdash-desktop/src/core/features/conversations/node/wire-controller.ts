@@ -86,8 +86,15 @@ export type CreateConversationsWireControllerOptions = Readonly<{
     override?: ModelSourceOverride
   ) => Promise<Record<string, string> | undefined>;
   sessionLaunchContexts: Pick<TaskSessionLaunchContextResolver, 'resolve'>;
-  /** The URL of Emdash's own MCP server for a conversation's agent (local agents only). */
-  agentControlUrl?: (conversationId: string) => Promise<string | null>;
+  /**
+   * Readies a local workspace for a chat agent (Emdash's skills) and returns the MCP
+   * servers Emdash adds to its session (its own tools and library).
+   */
+  prepareAgentLaunch?: (input: {
+    conversationId: string;
+    projectId: string;
+    workspacePath: string;
+  }) => Promise<NonNullable<ConversationsAcpStartInput['extraMcpServers']>>;
   logger: Logger;
   projects: Pick<ProjectAttachmentManager, 'requireAttached'>;
   telemetry: TelemetryService;
@@ -108,7 +115,7 @@ export function createConversationsWireController(
         options.db,
         options.getProviderEnv,
         options.sessionLaunchContexts,
-        options.agentControlUrl
+        options.prepareAgentLaunch
       ));
   const hooks = options.hooks ?? createDefaultRuntimeHooks(options);
   const conversationOperations = createConversationOperations({
@@ -402,7 +409,7 @@ async function resolveConversationRuntimeTarget(
       ) => Promise<Record<string, string> | undefined>)
     | undefined,
   sessionLaunchContexts: Pick<TaskSessionLaunchContextResolver, 'resolve'>,
-  agentControlUrl?: (conversationId: string) => Promise<string | null>
+  prepareAgentLaunch?: CreateConversationsWireControllerOptions['prepareAgentLaunch']
 ): Promise<ConversationRuntimeTarget> {
   const [row] = await db
     .select({
@@ -453,11 +460,15 @@ async function resolveConversationRuntimeTarget(
   if (launchContext && !launchContext.success) {
     throw new Error(`Could not resolve task session launch context: ${launchContext.error.type}`);
   }
-  // Emdash's own tools reach the agent over loopback, so only agents on this computer.
-  const agentControl =
-    row.type === 'acp' && (!identity?.host || isLocalHostRef(identity.host))
-      ? await agentControlUrl?.(conversationId).catch(() => null)
-      : null;
+  // Emdash's skills and MCP servers reach agents on this computer only.
+  const extraMcpServers =
+    row.type === 'acp' && workspacePath && (!identity?.host || isLocalHostRef(identity.host))
+      ? await prepareAgentLaunch?.({
+          conversationId,
+          projectId: row.projectId,
+          workspacePath,
+        }).catch(() => undefined)
+      : undefined;
   const processEnv = {
     ...(providerEnv ?? {}),
     ...(launchContext?.success ? launchContext.data.env : {}),
@@ -475,7 +486,7 @@ async function resolveConversationRuntimeTarget(
           collaborationMode: acpConfig?.collaborationMode ?? null,
           ...(initialQueue && { initialQueue }),
           ...(Object.keys(processEnv).length > 0 ? { env: processEnv } : {}),
-          ...(agentControl ? { extraMcpServers: [{ name: 'emdash', url: agentControl }] } : {}),
+          ...(extraMcpServers?.length ? { extraMcpServers } : {}),
         }
       : undefined;
 

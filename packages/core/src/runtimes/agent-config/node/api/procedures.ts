@@ -78,6 +78,10 @@ export function createAgentConfigProcedures(runtime: AgentConfigRuntime) {
       const installed = await runtime.installSkill(input);
       return installed.success ? ok({ skills: installed.data }) : installed;
     },
+    async refreshSkills(): Promise<Result<{ skills: CatalogSkill[] }, AgentConfigSkillsError>> {
+      const refreshed = await runtime.refreshSkills();
+      return refreshed.success ? ok({ skills: refreshed.data }) : refreshed;
+    },
     async removeSkill(input: {
       name: string;
     }): Promise<Result<{ skills: CatalogSkill[] }, AgentConfigSkillsError>> {

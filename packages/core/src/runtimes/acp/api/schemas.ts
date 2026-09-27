@@ -15,8 +15,22 @@ export const acpStartInputSchema = z.object({
   collaborationMode: z.string().nullable().optional(),
   initialQueue: z.array(promptInputSchema).optional(),
   env: z.record(z.string(), z.string()).optional(),
-  /** HTTP MCP servers for this conversation only (e.g. the app's own tools). */
-  extraMcpServers: z.array(z.object({ name: z.string(), url: z.string() })).optional(),
+  /**
+   * MCP servers for this conversation only (the app's own tools and its MCP library):
+   * `url` for HTTP servers, `command` for stdio ones.
+   */
+  extraMcpServers: z
+    .array(
+      z.object({
+        name: z.string(),
+        url: z.string().optional(),
+        headers: z.record(z.string(), z.string()).optional(),
+        command: z.string().optional(),
+        args: z.array(z.string()).optional(),
+        env: z.record(z.string(), z.string()).optional(),
+      })
+    )
+    .optional(),
 });
 export type AcpStartInputWire = z.infer<typeof acpStartInputSchema>;
 

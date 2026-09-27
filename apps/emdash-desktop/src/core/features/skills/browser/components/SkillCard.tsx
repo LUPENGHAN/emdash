@@ -11,6 +11,7 @@ interface SkillCardProps {
   onInstall: (skillId: string) => void;
   onUninstall: (skillId: string) => void;
   onClick: () => void;
+  footer?: React.ReactNode;
 }
 
 export const SkillCard: React.FC<SkillCardProps> = ({
@@ -19,6 +20,7 @@ export const SkillCard: React.FC<SkillCardProps> = ({
   onInstall,
   onUninstall,
   onClick,
+  footer,
 }) => {
   return (
     <CardGridItem role="button" tabIndex={0} onClick={onClick} className="group relative">
@@ -26,6 +28,7 @@ export const SkillCard: React.FC<SkillCardProps> = ({
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <h3 className="text-md truncate">{skill.displayName}</h3>
         <p className="mt-0.5 line-clamp-1 text-xs text-foreground-muted">{skill.description}</p>
+        {footer ? <div className="mt-1 flex">{footer}</div> : null}
       </div>
       <div className="absolute top-1/2 right-2 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100">
         <Tooltip.Root>

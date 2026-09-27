@@ -118,6 +118,12 @@ export const agentConfigContract = defineContract({
     data: z.object({ skills: installedSkillsSchema }),
     error: agentConfigSkillsErrorSchema,
   }),
+  /** Re-reads the skill library after files changed outside the runtime (imports). */
+  refreshSkills: fallible({
+    input: z.object({}),
+    data: z.object({ skills: installedSkillsSchema }),
+    error: agentConfigSkillsErrorSchema,
+  }),
 });
 
 export type AgentConfigContract = typeof agentConfigContract;

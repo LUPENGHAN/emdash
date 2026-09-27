@@ -58,12 +58,15 @@ export type TuiConversationProviderDependencies = {
     host: HostRef;
   }): Promise<GitCredentialsSessionSpec | undefined>;
   /**
-   * Extra CLI args and env that give the agent Emdash's own MCP tools (agent control);
-   * null when the agent or host cannot use them. `env` is the launch env so far.
+   * Readies the workspace for an agent (Emdash's skills) and returns extra CLI args and
+   * env for its MCP servers (Emdash's own tools and library); null when there are none.
+   * `env` is the launch env so far.
    */
-  agentControlLaunch?(params: {
+  prepareAgentLaunch?(params: {
     conversationId: string;
     providerId: string;
+    projectId: string;
+    workspacePath: string;
     host: HostRef;
     env: Record<string, string>;
   }): Promise<{ args: string[]; env: Record<string, string> } | null>;
@@ -172,9 +175,11 @@ export class TuiConversationProvider implements ConversationProvider {
     };
     const sessionId = makePtySessionId(this.projectId, this.taskId, conversation.id);
     const agentControl =
-      (await this.dependencies.agentControlLaunch?.({
+      (await this.dependencies.prepareAgentLaunch?.({
         conversationId: conversation.id,
         providerId: conversation.providerId,
+        projectId: this.projectId,
+        workspacePath: this.taskPath,
         host: this.host,
         env: providerVars,
       })) ?? null;

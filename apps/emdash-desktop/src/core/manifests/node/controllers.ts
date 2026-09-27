@@ -13,6 +13,8 @@ import type { EmdashAccountService } from '@core/features/account/node/services/
 import { createAccountWireController } from '@core/features/account/node/wire-controller';
 import type { AgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
 import { createAgentControlWireController } from '@core/features/agent-control/node/wire-controller';
+import type { AgentLibraryService } from '@core/features/agent-library/node/agent-library-service';
+import { createAgentLibraryWireController } from '@core/features/agent-library/node/wire-controller';
 import { createAgentOperations } from '@core/features/agents/node/controller';
 import { createAgentsWireController } from '@core/features/agents/node/wire-controller';
 import type { AutomationsService } from '@core/features/automations/api/node/automations-service';
@@ -23,7 +25,10 @@ import {
 } from '@core/features/browser/node/wire-controller';
 import { createCatalogWireController } from '@core/features/catalog/node/wire-controller';
 import type { CompensationRunner } from '@core/features/conversations/node/createConversation';
-import { createConversationsWireController } from '@core/features/conversations/node/wire-controller';
+import {
+  createConversationsWireController,
+  type CreateConversationsWireControllerOptions,
+} from '@core/features/conversations/node/wire-controller';
 import {
   createDevPerfWireController,
   type DevPerfOperations,
@@ -154,7 +159,8 @@ export type DesktopControllerContext = {
   readonly remoteAccess: RemoteAccessService;
   readonly remoteClient: RemoteClientService;
   readonly agentControl: AgentControlDispatcher;
-  readonly agentControlUrl: (conversationId: string) => Promise<string | null>;
+  readonly prepareAgentLaunch: CreateConversationsWireControllerOptions['prepareAgentLaunch'];
+  readonly agentLibrary: AgentLibraryService;
   readonly reconcileSweep: ReconcileSweepHandle;
   readonly hosts: Hosts;
   readonly runtimeClients: {
@@ -241,6 +247,9 @@ export const desktopNodeControllers = {
   },
   agentControl: {
     create: ({ agentControl }) => createAgentControlWireController(agentControl),
+  },
+  agentLibrary: {
+    create: ({ agentLibrary }) => createAgentLibraryWireController(agentLibrary),
   },
   projectSettings: {
     create: ({ runtimes, workspaceIdentity }) =>
@@ -417,7 +426,7 @@ export const desktopNodeControllers = {
       taskSessions,
       telemetry,
       workspaceIdentity,
-      agentControlUrl,
+      prepareAgentLaunch,
     }) =>
       createConversationsWireController({
         terminalFileSources,
@@ -433,7 +442,7 @@ export const desktopNodeControllers = {
         workspaceIdentity,
         withCompensation: compensation,
         hostIsReachable,
-        agentControlUrl,
+        prepareAgentLaunch,
       }),
   },
   previewServers: {

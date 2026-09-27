@@ -30,6 +30,10 @@ export function createSkillsWireController(options: CreateSkillsWireControllerOp
       withAgentConfigResult(options.runtimes, input.host, (client) =>
         client.createSkill(withoutHost(input), callOptions(meta))
       ),
+    refresh: (input, meta) =>
+      withAgentConfigResult(options.runtimes, input.host, (client) =>
+        client.refreshSkills({}, callOptions(meta))
+      ),
   });
 }
 

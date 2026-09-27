@@ -8,6 +8,7 @@ import {
   ListTodo,
   Paperclip,
   ShieldCheck,
+  Sparkles,
   X,
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
@@ -234,6 +235,8 @@ export interface ChatComposerProps {
   selectedCollaborationMode?: string;
   onCollaborationModeChange?: (modeId: string) => void;
   mcpServers?: ComposerMcpServer[];
+  /** Skills the agent has in this session (listed next to the MCP servers). */
+  skills?: { name: string; description?: string }[];
 
   onSubmit: (text: string) => void;
   /** Called whenever the editor serialized plain text changes. */
@@ -691,6 +694,7 @@ export function ChatComposer({
   selectedCollaborationMode,
   onCollaborationModeChange,
   mcpServers = [],
+  skills = [],
   onSubmit,
   onInputChange,
   onMentionInsert,
@@ -1197,6 +1201,35 @@ export function ChatComposer({
                             {server.transport}
                           </span>
                         )}
+                      </div>
+                    ))}
+                  </div>
+                </Popover.Content>
+              </Popover.Root>
+            )}
+            {skills.length > 0 && (
+              <Popover.Root>
+                <Popover.Trigger
+                  className={styles.mcpTrigger}
+                  openOnHover
+                  aria-label={`${skills.length} session ${skills.length === 1 ? 'skill' : 'skills'}`}
+                >
+                  <Sparkles style={{ width: '0.75rem', height: '0.75rem', flexShrink: 0 }} />
+                  {skills.length}
+                </Popover.Trigger>
+                <Popover.Content
+                  align="start"
+                  className={cx(styles.mcpPopoverContent, composerThemeScope)}
+                  aria-label="Session skills"
+                  initialFocus={false}
+                >
+                  <div className={styles.mcpList}>
+                    {skills.map((skill) => (
+                      <div key={skill.name} className={styles.mcpRow} title={skill.description}>
+                        <div className={styles.mcpNameGroup}>
+                          <span className={styles.mcpName}>{skill.name}</span>
+                        </div>
+                        <span className={styles.mcpBadge}>skill</span>
                       </div>
                     ))}
                   </div>

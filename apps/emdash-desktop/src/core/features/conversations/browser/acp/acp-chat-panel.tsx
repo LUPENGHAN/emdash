@@ -14,6 +14,7 @@ import { ArrowDown } from 'lucide-react';
 import { observer, useObserver } from 'mobx-react-lite';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useSessionSkills } from '@core/features/agent-library/contributions/browser/use-session-skills';
 import { hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgentMetadata } from '@core/features/agents/api/browser/use-agent-metadata';
 import { useAgents } from '@core/features/agents/api/browser/use-agents';
@@ -209,6 +210,7 @@ const ComposerForStore = observer(function ComposerForStore({
   const attachments = store.draftAttachments.map(toComposerAttachment);
   const { value: promptLibrary } = usePromptLibrary();
   const disabledReason = projectAvailabilityUi.getLiveActionDisabledReason(store.projectId);
+  const sessionSkills = useSessionSkills(store.projectId);
 
   // Autofocus when the slot becomes available.
   useEffect(() => {
@@ -629,6 +631,7 @@ const ComposerForStore = observer(function ComposerForStore({
             store.liveActionsEnabled ? handleCollaborationModeChange : undefined
           }
           mcpServers={store.mcpServers}
+          skills={sessionSkills}
           agentOptions={agentOptions}
           selectedAgent={providerId ?? undefined}
           agentLocked

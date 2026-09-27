@@ -1,6 +1,10 @@
-import { sshConnectionIdOf, type HostRef } from '@emdash/core/primitives/host/api';
+import { isLocalHostRef, sshConnectionIdOf, type HostRef } from '@emdash/core/primitives/host/api';
 import { PageLayout } from '@emdash/ui/react/patterns';
 import { useCallback, useState } from 'react';
+import {
+  AgentSkillsBanner,
+  SkillScope,
+} from '@core/features/agent-library/contributions/browser/skill-library-controls';
 import { SkillsList } from '@core/features/skills/browser/components/SkillsList';
 import { SkillsToolbar } from '@core/features/skills/browser/components/SkillsToolbar';
 import { useSkills } from '@core/features/skills/browser/components/useSkills';
@@ -54,7 +58,17 @@ export function SkillsPanel({ host, header }: SkillsPanelProps) {
       ) : (
         toolbar
       )}
-      <SkillsList skills={skills} onOpenTerminal={handleOpenTerminal} />
+      {/* The library reaches agents on this computer only. */}
+      {isLocalHostRef(host) ? <AgentSkillsBanner /> : null}
+      <SkillsList
+        skills={skills}
+        onOpenTerminal={handleOpenTerminal}
+        renderInstalledFooter={
+          isLocalHostRef(host)
+            ? (skill) => <SkillScope name={skill.installId ?? skill.id} />
+            : undefined
+        }
+      />
     </div>
   );
 }
