@@ -205,7 +205,14 @@ export const desktopNodeControllers = {
       createAccountWireController(accountService, { logger, telemetry }),
   },
   agents: {
-    create: ({ agentDependencies, providerSettings, runtimes, modelProviderKeys, usageLimits }) =>
+    create: ({
+      agentDependencies,
+      providerSettings,
+      runtimes,
+      modelProviderKeys,
+      usageLimits,
+      effectiveAgentConfig,
+    }) =>
       createAgentsWireController({
         operations: createAgentOperations({
           ...agentDependencies,
@@ -214,6 +221,7 @@ export const desktopNodeControllers = {
         runtimes,
         modelProviderKeys,
         usageLimits,
+        effectiveAgentConfig,
       }),
   },
   appSettings: {

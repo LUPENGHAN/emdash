@@ -13,7 +13,11 @@ import { nextDefaultConversationTitle } from '@core/features/conversations/api/b
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import { useEffectiveProvider } from '@core/features/conversations/api/browser/use-effective-provider';
 import { providerPreferencesMemento } from '@core/features/conversations/contributions/mementos';
-import { usesProviderSource, type ModelSourceValue } from '@core/features/model-providers/api';
+import {
+  modelSourceUnavailableMessage,
+  usesProviderSource,
+  type ModelSourceValue,
+} from '@core/features/model-providers/api';
 import { ModelSourceSelect } from '@core/features/model-providers/contributions/browser/model-source-select';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 // TODO(conversations-extraction): Pass task settings into the modal instead of importing task hooks.
@@ -234,8 +238,11 @@ export const CreateConversationModal = observer(function CreateConversationModal
       }
       setIsSubmitting(false);
       complete({ conversationId: id, type: conversationType });
-    } catch {
-      setError(handoff ? 'Failed to hand off the conversation' : 'Failed to create conversation');
+    } catch (createError) {
+      setError(
+        modelSourceUnavailableMessage(createError) ??
+          (handoff ? 'Failed to hand off the conversation' : 'Failed to create conversation')
+      );
       setIsSubmitting(false);
     }
   }, [

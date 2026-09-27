@@ -1,6 +1,8 @@
+import { toast } from '@emdash/ui/react/primitives';
 import { reaction } from 'mobx';
 import type { ConversationStore } from '@core/features/conversations/api/browser/conversation-manager';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
+import { modelSourceUnavailableMessage } from '@core/features/model-providers/api';
 import { log } from '@core/primitives/logging/browser/logger';
 import { ConversationHydrationReconciler } from './conversation-hydration-reconciler';
 
@@ -28,6 +30,11 @@ export class ConversationSessionManager {
       taskId,
       getConversations: () => conversationRegistry.get(taskId),
       log,
+      // A provider that cannot be used is the user's to fix; say so instead of a blank tab.
+      onHydrateError: (_conversationId, error) => {
+        const message = modelSourceUnavailableMessage(error);
+        if (message) toast.error(message, { id: `model-source:${message}` });
+      },
     });
     this._disposeHostReaction = reaction(
       () => conversationRegistry.get(taskId)?.hostAccess?.state.kind,

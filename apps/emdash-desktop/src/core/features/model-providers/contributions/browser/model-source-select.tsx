@@ -32,8 +32,8 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
       <Field.Root>
         <Field.Label>Source</Field.Label>
         <Field.Description>
-          {defaultSourceLabel(agentId)}. Add a provider (DeepSeek, Kimi, new-api, …) under Settings
-          → Providers to run this agent on it.
+          The agent’s default source (Settings → Providers → Agent defaults). Add a provider there
+          to run this agent on another API.
         </Field.Description>
       </Field.Root>
     );
@@ -75,6 +75,9 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
           <Select.Content align="start" width="trigger">
             <Select.Item value={AGENT_DEFAULT}>Agent default</Select.Item>
             <Select.Item value={OWN_LOGIN}>{defaultSourceLabel(agentId)}</Select.Item>
+            {typeof value.modelSource === 'string' && !provider ? (
+              <Select.Item value={value.modelSource}>Missing provider</Select.Item>
+            ) : null}
             {providers.map((candidate) => {
               const support = providerSupportsAgent(candidate, agentId);
               return (
@@ -105,6 +108,9 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
             </Select.Trigger>
             <Select.Content align="start" width="trigger">
               <Select.Item value="">First model ({provider.models[0]})</Select.Item>
+              {value.sourceModel && !provider.models.includes(value.sourceModel) ? (
+                <Select.Item value={value.sourceModel}>{value.sourceModel}</Select.Item>
+              ) : null}
               {provider.models.map((id) => (
                 <Select.Item key={id} value={id}>
                   {id}

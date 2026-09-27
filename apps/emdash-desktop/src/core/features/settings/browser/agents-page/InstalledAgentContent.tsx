@@ -283,6 +283,9 @@ const ModelSourceFields = observer(function ModelSourceFields({
           </Select.Trigger>
           <Select.Content align="start" width="trigger">
             <Select.Item value="">{defaultSourceLabel(agentId)}</Select.Item>
+            {sourceId && !provider ? (
+              <Select.Item value={sourceId}>Missing provider</Select.Item>
+            ) : null}
             {providers.map((candidate) => {
               const support = providerSupportsAgent(candidate, agentId);
               return (
@@ -321,6 +324,9 @@ const ModelSourceFields = observer(function ModelSourceFields({
               <Select.Item value="">
                 {provider.models[0] ? `First model (${provider.models[0]})` : 'Agent default'}
               </Select.Item>
+              {model && !provider.models.includes(model) ? (
+                <Select.Item value={model}>{model}</Select.Item>
+              ) : null}
               {provider.models.map((id) => (
                 <Select.Item key={id} value={id}>
                   {id}

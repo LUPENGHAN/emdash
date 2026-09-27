@@ -15,7 +15,7 @@ import {
   type ModelProvider,
 } from '../api';
 import { agentProviderFilePath, ensureAgentProviderFile } from './agent-provider-files';
-import { createEffectiveAgentConfig } from './effective-agent-config';
+import { createEffectiveAgentConfig, ModelSourceUnavailableError } from './effective-agent-config';
 import { createModelProviderKeys } from './provider-keys';
 import { buildSourceLaunch, PROVIDER_KEY_ENV } from './source-launch';
 
@@ -222,16 +222,17 @@ describe('createEffectiveAgentConfig', () => {
     expect(config?.env?.[PROVIDER_KEY_ENV]).toBe('sk-1');
   });
 
-  it("falls back to the agent's own config without a provider or key", async () => {
-    const warn = vi.fn();
-    expect(await resolver({ getApiKey: async () => null, warn })('claude')).toEqual({
-      extraArgs: '--verbose',
-      modelSource: 'NewAPI',
-    });
-    expect(warn).toHaveBeenCalled();
-    expect(await resolver({ getProviders: async () => [] })('claude')).toMatchObject({
-      extraArgs: '--verbose',
-    });
+  it('refuses to start rather than fall back to the own login', async () => {
+    await expect(resolver({ getApiKey: async () => null })('claude')).rejects.toThrow(
+      ModelSourceUnavailableError
+    );
+    await expect(resolver({ getProviders: async () => [] })('claude')).rejects.toThrow(
+      /was deleted/
+    );
+    const chatOnly: ModelProvider = { ...provider, protocol: 'openai-chat' };
+    await expect(resolver({ getProviders: async () => [chatOnly] })('codex')).rejects.toThrow(
+      /protocol this agent cannot use/
+    );
   });
 
   it('never routes official-only agents through a provider', async () => {

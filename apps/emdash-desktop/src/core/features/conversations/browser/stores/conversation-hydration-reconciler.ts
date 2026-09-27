@@ -14,6 +14,8 @@ type ConversationHydrationReconcilerOptions = {
   taskId: string;
   getConversations: () => ConversationSessionAdapter | undefined;
   log: Logger;
+  /** Called when a conversation fails to start, after it is logged. */
+  onHydrateError?: (conversationId: string, error: unknown) => void;
   clock?: Clock;
 };
 
@@ -31,12 +33,20 @@ export class ConversationHydrationReconciler implements Disposable {
   private readonly taskId: string;
   private readonly getConversations: () => ConversationSessionAdapter | undefined;
   private readonly log: Logger;
+  private readonly onHydrateError?: (conversationId: string, error: unknown) => void;
   private readonly clock: Clock;
   private readonly entries = new Map<string, Entry>();
   private disposed = false;
 
-  constructor({ taskId, getConversations, log, clock }: ConversationHydrationReconcilerOptions) {
+  constructor({
+    taskId,
+    getConversations,
+    log,
+    onHydrateError,
+    clock,
+  }: ConversationHydrationReconcilerOptions) {
     this.taskId = taskId;
+    this.onHydrateError = onHydrateError;
     this.getConversations = getConversations;
     this.log = log;
     this.clock = clock ?? systemClock;
@@ -109,6 +119,7 @@ export class ConversationHydrationReconciler implements Disposable {
         conversationId: id,
         error,
       });
+      this.onHydrateError?.(id, error);
       this.cleanupIfIdle(id, entry);
       return;
     }

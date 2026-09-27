@@ -192,6 +192,18 @@ export const agentsContract = defineContract({
     data: z.array(z.string()),
     error: z.object({ message: z.string() }),
   }),
+  /**
+   * Why an agent could not start on a source (a conversation's own, or the agent default
+   * when `modelSource` is absent), or null when it can. Starts nothing.
+   */
+  checkModelSource: procedure({
+    input: z.object({
+      agentId: z.string(),
+      modelSource: z.string().nullable().optional(),
+      sourceModel: z.string().optional(),
+    }),
+    output: z.object({ error: z.string().nullable() }),
+  }),
   /** Subscription limit usage (5h / weekly) for agents that expose it. */
   getUsageLimits: procedure({
     input: z.object({ refresh: z.boolean().optional() }),

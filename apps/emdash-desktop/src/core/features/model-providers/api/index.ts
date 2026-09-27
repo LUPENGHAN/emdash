@@ -184,6 +184,17 @@ export type ModelProviderKeys = {
   }): Promise<string[]>;
 };
 
+/** Ends every "the chosen provider cannot be used" launch error; also how the UI spots one. */
+export const MODEL_SOURCE_UNAVAILABLE_HINT =
+  'Pick another source with “Restart with another provider…” in the conversation’s tab menu, or under Settings → Providers.';
+
+/** The message of a launch refused because its provider cannot be used, if that is the error. */
+export function modelSourceUnavailableMessage(error: unknown): string | null {
+  const message =
+    error && typeof error === 'object' && 'message' in error ? String(error.message) : '';
+  return message.includes(MODEL_SOURCE_UNAVAILABLE_HINT) ? message : null;
+}
+
 /** A per-conversation source; `null` means the agent's own login/config. */
 export type ModelSourceOverride = { modelSource: string | null; sourceModel?: string };
 

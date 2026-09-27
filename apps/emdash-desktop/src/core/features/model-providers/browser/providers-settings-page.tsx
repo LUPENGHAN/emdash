@@ -71,7 +71,7 @@ export function ProvidersSettingsPage() {
                     const confirmed = await openModal('confirmActionModal', {
                       title: `Delete ${provider.name}?`,
                       description:
-                        'Its key is removed from the keychain. Agents and conversations set to it go back to their own login.',
+                        'Its key is removed from the keychain. Agents and conversations set to it will not start (they never fall back to your own login) until you pick another source: under Agent defaults below, or with “Restart with another provider…” on the conversation.',
                       confirmLabel: 'Delete',
                     });
                     if (!confirmed.success) return;
@@ -451,6 +451,10 @@ const AgentDefaultRow = observer(function AgentDefaultRow({
         </Select.Trigger>
         <Select.Content align="start" width="trigger">
           <Select.Item value="">{defaultSourceLabel(agentId)}</Select.Item>
+          {/* Kept selectable so the select does not reset (and clear) a deleted provider. */}
+          {sourceId && !provider ? (
+            <Select.Item value={sourceId}>Missing provider</Select.Item>
+          ) : null}
           {providers.map((candidate) => {
             const support = providerSupportsAgent(candidate, agentId);
             return (
@@ -476,6 +480,9 @@ const AgentDefaultRow = observer(function AgentDefaultRow({
         </Select.Trigger>
         <Select.Content align="start" width="trigger">
           <Select.Item value="">{provider ? firstModelLabel(provider) : '—'}</Select.Item>
+          {model && !provider?.models.includes(model) ? (
+            <Select.Item value={model}>{model}</Select.Item>
+          ) : null}
           {(provider?.models ?? []).map((id) => (
             <Select.Item key={id} value={id}>
               {id}

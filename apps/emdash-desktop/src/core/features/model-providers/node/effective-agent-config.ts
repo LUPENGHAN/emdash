@@ -1,5 +1,10 @@
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
-import { isProviderCapableAgent, type ModelProvider, type ModelSourceOverride } from '../api';
+import {
+  isProviderCapableAgent,
+  MODEL_SOURCE_UNAVAILABLE_HINT,
+  type ModelProvider,
+  type ModelSourceOverride,
+} from '../api';
 import { buildSourceLaunch, type AgentProviderFile } from './source-launch';
 
 export type EffectiveAgentConfigDeps = {
@@ -24,15 +29,19 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
     const sourceId = override ? override.modelSource : config?.modelSource;
     if (!sourceId || !isProviderCapableAgent(agentId)) return config;
 
+    // A chosen provider that cannot be used stops the launch: falling back to the
+    // agent's own login would silently spend the user's subscription instead.
     const provider = (await deps.getProviders()).find((candidate) => candidate.id === sourceId);
-    const apiKey = provider ? await deps.getApiKey(provider.id) : null;
-    if (!provider || !apiKey) {
-      deps.warn?.('model source unavailable; launching with the agent’s own config', {
-        agentId,
-        sourceId,
-        reason: provider ? 'missing-api-key' : 'unknown-provider',
-      });
-      return config;
+    if (!provider) {
+      throw new ModelSourceUnavailableError(
+        'The provider this agent is set to run on was deleted.'
+      );
+    }
+    const apiKey = await deps.getApiKey(provider.id);
+    if (!apiKey) {
+      throw new ModelSourceUnavailableError(
+        `The provider “${provider.name}” has no API key saved.`
+      );
     }
 
     // No model picked: the provider's first model, not the agent's own default (a Claude
@@ -40,11 +49,9 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
     const model = (override ? override.sourceModel : config?.sourceModel) || provider.models[0];
     const launch = buildSourceLaunch(agentId, provider, apiKey, model || undefined);
     if (!launch) {
-      deps.warn?.('model source has no API this agent can use; launching with its own config', {
-        agentId,
-        sourceId,
-      });
-      return config;
+      throw new ModelSourceUnavailableError(
+        `The provider “${provider.name}” speaks a protocol this agent cannot use.`
+      );
     }
     if (launch.file) await deps.ensureProviderFile(launch.file);
     return {
@@ -53,6 +60,14 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
       extraArgs: [config?.extraArgs?.trim(), ...launch.args].filter(Boolean).join(' '),
     };
   };
+}
+
+/** Why an agent set to run on a provider cannot start; it never falls back to its own login. */
+export class ModelSourceUnavailableError extends Error {
+  constructor(reason: string) {
+    super(`${reason} ${MODEL_SOURCE_UNAVAILABLE_HINT}`);
+    this.name = 'ModelSourceUnavailableError';
+  }
 }
 
 export type EffectiveAgentConfig = ReturnType<typeof createEffectiveAgentConfig>;

@@ -4,7 +4,11 @@ import { err, ok, type Result } from '@emdash/shared';
 import type { LiveModelProvider, LiveSource } from '@emdash/wire/rpc';
 import { createController, type CallMeta, type Controller } from '@emdash/wire/rpc';
 import type { AgentOperations } from '@core/features/agents/node/controller';
-import type { ModelProviderKeys, UsageLimitsService } from '@core/features/model-providers/api';
+import type {
+  ModelProviderKeys,
+  ModelSourceOverride,
+  UsageLimitsService,
+} from '@core/features/model-providers/api';
 import { forwardLiveModel } from '@core/services/runtime-clients/node/forward-live-model';
 import { agentsContract } from '../api';
 import {
@@ -20,6 +24,8 @@ export type CreateAgentsWireControllerOptions = Readonly<{
   runtimes: AgentsRuntimeBroker;
   modelProviderKeys?: ModelProviderKeys;
   usageLimits?: UsageLimitsService;
+  /** Resolves an agent's launch config the way a launch would; throws when it cannot start. */
+  effectiveAgentConfig?: (agentId: string, override?: ModelSourceOverride) => Promise<unknown>;
 }>;
 
 export function createAgentsWireController(options: CreateAgentsWireControllerOptions): Controller {
@@ -140,6 +146,17 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
     },
     clearModelProviderKey: async ({ providerId }) => {
       await options.modelProviderKeys?.clear(providerId);
+    },
+    checkModelSource: async ({ agentId, modelSource, sourceModel }) => {
+      try {
+        await options.effectiveAgentConfig?.(
+          agentId,
+          modelSource === undefined ? undefined : { modelSource, sourceModel }
+        );
+        return { error: null };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
     },
     listModelProviderModels: async (input) => {
       if (!options.modelProviderKeys) return err({ message: 'Provider keys are unavailable' });

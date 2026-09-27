@@ -2,7 +2,7 @@ import { Dialog, Field, Input, Select, toast } from '@emdash/ui/react/primitives
 import { useQuery } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
-import { hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
+import { getAgentsClient, hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgents } from '@core/features/agents/api/browser/use-agents';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
@@ -50,6 +50,20 @@ async function latestConversation(conversation: Conversation): Promise<Conversat
 
 export type RestartChoice = ModelSourceValue & { model?: string };
 
+/** Why the agent could not start on this choice, or null; asked before anything stops. */
+async function sourceProblem(providerId: string, choice: ModelSourceValue): Promise<string | null> {
+  const { error } = await (
+    await getAgentsClient()
+  ).checkModelSource({
+    agentId: providerId,
+    ...(choice.modelSource !== undefined && {
+      modelSource: choice.modelSource,
+      sourceModel: choice.sourceModel,
+    }),
+  });
+  return error;
+}
+
 /**
  * Restarts a conversation's agent on another source (provider and model): the current
  * conversation is removed first (killing its agent, so two processes never write one
@@ -63,6 +77,9 @@ export async function restartConversation(
   const conversation = await latestConversation(current);
   const manager = conversationRegistry.get(conversation.taskId);
   if (!manager) throw new Error('The task is not loaded');
+  // The old conversation goes first, so a source that cannot start must stop us here.
+  const problem = await sourceProblem(conversation.providerId, choice);
+  if (problem) throw new Error(problem);
   const sessionId = resumableSessionId(conversation);
   await manager.deleteConversation(conversation.id);
   return manager.createConversation({
@@ -108,6 +125,11 @@ const RestartConversationModal = observer(function RestartConversationModal({
     queryFn: () => latestConversation(conversation),
   });
   const resumes = resumableSessionId(latest ?? conversation) !== null;
+  const { data: problem } = useQuery({
+    queryKey: ['restartConversation', 'source', conversation.providerId, source],
+    gcTime: 0,
+    queryFn: () => sourceProblem(conversation.providerId, source),
+  });
   const isTerminal = (conversation.type ?? 'pty') === 'pty';
 
   const restart = async () => {
@@ -120,7 +142,7 @@ const RestartConversationModal = observer(function RestartConversationModal({
       complete({ conversationId: created.id });
     } catch (error) {
       log.error('restart conversation failed', error);
-      toast.error(`Could not restart: ${String(error)}`);
+      toast.error(`Could not restart: ${error instanceof Error ? error.message : String(error)}`);
       setBusy(false);
     }
   };
@@ -176,10 +198,15 @@ const RestartConversationModal = observer(function RestartConversationModal({
               )}
             </Field.Root>
           ) : null}
+          {problem ? <p className="text-destructive text-xs">{problem}</p> : null}
         </Field.Group>
       </Dialog.Body>
       <Dialog.Footer>
-        <ConfirmButton variant="primary" disabled={busy} onClick={() => void restart()}>
+        <ConfirmButton
+          variant="primary"
+          disabled={busy || problem === undefined || problem !== null}
+          onClick={() => void restart()}
+        >
           {busy ? 'Restarting…' : 'Restart'}
         </ConfirmButton>
       </Dialog.Footer>
