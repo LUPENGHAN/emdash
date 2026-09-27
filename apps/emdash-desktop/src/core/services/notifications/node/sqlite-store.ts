@@ -119,6 +119,8 @@ export class SqliteNotificationStore implements NotificationStore {
         .select({ id: notifications.id })
         .from(notifications)
         .orderBy(desc(notifications.createdAt))
+        // SQLite only accepts OFFSET after a LIMIT, and Drizzle drops negative (unbounded) ones.
+        .limit(Number.MAX_SAFE_INTEGER)
         .offset(options.maxRows);
       await this.remove(overflow.map((row) => row.id));
       return ok<void>();
