@@ -181,11 +181,12 @@ export const agentsContract = defineContract({
     input: z.object({ providerId: z.string() }),
     output: z.void(),
   }),
-  /** The provider's model ids (GET /v1/models); doubles as a connection test. */
+  /** The provider's upstream model ids (GET its models URL); doubles as a connection test. */
   listModelProviderModels: fallible({
     input: z.object({
       providerId: z.string(),
-      baseUrl: z.string(),
+      url: z.string(),
+      auth: z.enum(['bearer', 'anthropic-bearer', 'anthropic-api-key']),
       apiKey: z.string().optional(),
     }),
     data: z.array(z.string()),

@@ -1,6 +1,6 @@
 import { secret } from '@emdash/shared';
 import type { SecretStore } from '@core/primitives/secrets/api/secret-store';
-import { modelProviderSecretKey, openAiBaseUrl, type ModelProviderKeys } from '../api';
+import { modelProviderSecretKey, type ModelProviderKeys } from '../api';
 
 /**
  * Provider API keys, kept in the encrypted (OS keychain backed) secrets store. The
@@ -31,17 +31,24 @@ export function createModelProviderKeys(
       await store.deleteSecret(modelProviderSecretKey(providerId));
     },
     /**
-     * Lists the gateway's models (`GET /v1/models`), which also checks the URL and key.
-     * Uses `apiKey` when given (a key being entered), else the stored one.
+     * Lists the provider's upstream models (`GET <url>`), which also checks the URL and
+     * key. Uses `apiKey` when given (a key being entered), else the stored one.
      */
     async listModels(input: {
       providerId: string;
-      baseUrl: string;
+      url: string;
+      auth: 'bearer' | 'anthropic-bearer' | 'anthropic-api-key';
       apiKey?: string;
     }): Promise<string[]> {
       const apiKey = input.apiKey?.trim() || (await read(input.providerId));
-      const response = await fetchImpl(`${openAiBaseUrl(input.baseUrl)}/models`, {
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      const headers: Record<string, string> =
+        input.auth === 'bearer' ? {} : { 'anthropic-version': '2023-06-01' };
+      if (apiKey) {
+        if (input.auth === 'anthropic-api-key') headers['x-api-key'] = apiKey;
+        else headers.Authorization = `Bearer ${apiKey}`;
+      }
+      const response = await fetchImpl(input.url, {
+        headers,
         signal: AbortSignal.timeout(15_000),
       });
       if (!response.ok) {

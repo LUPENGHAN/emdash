@@ -3,6 +3,7 @@ import { observer } from 'mobx-react-lite';
 import {
   defaultSourceLabel,
   isProviderCapableAgent,
+  providerSupportsAgent,
   type ModelSourceValue,
 } from '@core/features/model-providers/api';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
@@ -31,8 +32,8 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
       <Field.Root>
         <Field.Label>Source</Field.Label>
         <Field.Description>
-          {defaultSourceLabel(agentId)}. Add a gateway such as new-api under Settings → Providers to
-          run this agent on it.
+          {defaultSourceLabel(agentId)}. Add a provider (DeepSeek, Kimi, new-api, …) under Settings
+          → Providers to run this agent on it.
         </Field.Description>
       </Field.Root>
     );
@@ -74,11 +75,17 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
           <Select.Content align="start" width="trigger">
             <Select.Item value={AGENT_DEFAULT}>Agent default</Select.Item>
             <Select.Item value={OWN_LOGIN}>{defaultSourceLabel(agentId)}</Select.Item>
-            {providers.map((candidate) => (
-              <Select.Item key={candidate.id} value={candidate.id}>
-                {candidate.name}
-              </Select.Item>
-            ))}
+            {providers.map((candidate) => {
+              const support = providerSupportsAgent(candidate, agentId);
+              return (
+                <Select.Item key={candidate.id} value={candidate.id} disabled={!support.ok}>
+                  {candidate.name}
+                  {support.ok ? null : (
+                    <span className="ml-2 text-xs text-foreground-muted">({support.reason})</span>
+                  )}
+                </Select.Item>
+              );
+            })}
           </Select.Content>
         </Select.Root>
       </Field.Root>
@@ -93,11 +100,11 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
           >
             <Select.Trigger appearance="input" className="w-full">
               <Select.Value placeholder="Agent default">
-                {value.sourceModel || 'Agent default'}
+                {value.sourceModel || `First model (${provider.models[0]})`}
               </Select.Value>
             </Select.Trigger>
             <Select.Content align="start" width="trigger">
-              <Select.Item value="">Agent default</Select.Item>
+              <Select.Item value="">First model ({provider.models[0]})</Select.Item>
               {provider.models.map((id) => (
                 <Select.Item key={id} value={id}>
                   {id}

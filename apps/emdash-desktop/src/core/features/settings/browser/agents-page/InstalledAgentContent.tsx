@@ -11,7 +11,11 @@ import { useForm } from '@tanstack/react-form';
 import { ChevronRight, Info, RotateCcw } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useState } from 'react';
-import { defaultSourceLabel, isProviderCapableAgent } from '@core/features/model-providers/api';
+import {
+  defaultSourceLabel,
+  isProviderCapableAgent,
+  providerSupportsAgent,
+} from '@core/features/model-providers/api';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import {
@@ -279,16 +283,22 @@ const ModelSourceFields = observer(function ModelSourceFields({
           </Select.Trigger>
           <Select.Content align="start" width="trigger">
             <Select.Item value="">{defaultSourceLabel(agentId)}</Select.Item>
-            {providers.map((candidate) => (
-              <Select.Item key={candidate.id} value={candidate.id}>
-                {candidate.name}
-              </Select.Item>
-            ))}
+            {providers.map((candidate) => {
+              const support = providerSupportsAgent(candidate, agentId);
+              return (
+                <Select.Item key={candidate.id} value={candidate.id} disabled={!support.ok}>
+                  {candidate.name}
+                  {support.ok ? null : (
+                    <span className="ml-2 text-xs text-foreground-muted">({support.reason})</span>
+                  )}
+                </Select.Item>
+              );
+            })}
           </Select.Content>
         </Select.Root>
         {providers.length === 0 ? (
           <Field.Description>
-            Add a gateway under Settings → Providers to use it here.
+            Add a provider under Settings → Providers to use it here.
           </Field.Description>
         ) : null}
       </Field.Root>
@@ -302,10 +312,15 @@ const ModelSourceFields = observer(function ModelSourceFields({
             }
           >
             <Select.Trigger appearance="input" className="w-full">
-              <Select.Value placeholder="Agent default">{model || 'Agent default'}</Select.Value>
+              <Select.Value placeholder="First model">
+                {model ||
+                  (provider.models[0] ? `First model (${provider.models[0]})` : 'Agent default')}
+              </Select.Value>
             </Select.Trigger>
             <Select.Content align="start" width="trigger">
-              <Select.Item value="">Agent default</Select.Item>
+              <Select.Item value="">
+                {provider.models[0] ? `First model (${provider.models[0]})` : 'Agent default'}
+              </Select.Item>
               {provider.models.map((id) => (
                 <Select.Item key={id} value={id}>
                   {id}

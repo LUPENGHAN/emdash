@@ -13,6 +13,7 @@ import {
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
 import type { ConversationTabResource } from './conversation-tab-resource';
 import { handoffCommands } from './handoff';
+import { restartConversationCommands } from './restart-conversation';
 import { switchConversationUiCommands } from './switch-conversation-ui';
 
 export const ConversationTabBarItem = observer(function ConversationTabBarItem({
@@ -46,6 +47,7 @@ export const ConversationTabBarItem = observer(function ConversationTabBarItem({
         },
         ...switchConversationUiCommands(store.data),
         ...handoffCommands(store.data),
+        ...restartConversationCommands(store.data),
       ]}
       renameValue={rawTitle}
       renameMaxLength={MAX_CONVERSATION_TITLE_LENGTH}

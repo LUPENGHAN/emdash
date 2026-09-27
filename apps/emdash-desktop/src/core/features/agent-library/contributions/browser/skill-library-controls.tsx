@@ -105,7 +105,7 @@ export function AgentSkillsBanner() {
                 void run(async () => {
                   const confirmed = await openModal('confirmActionModal', {
                     title: 'Take over your agents’ skills?',
-                    description: `${importedOnly.length} skill folder${importedOnly.length === 1 ? '' : 's'} (${importedOnly.map((s) => s.name).join(', ')}) will move out of ${agents.map((agent) => AGENT_LABELS[agent] ?? agent).join(', ')} into a backup under ~/.agentskills/.emdash/takeover-backup. Agents started in Emdash keep them from the library; Claude, Codex and the others run outside Emdash (including the Claude app) will no longer see them.`,
+                    description: `The agents’ own copies of ${importedOnly.length} skill${importedOnly.length === 1 ? '' : 's'} (${importedOnly.map((s) => s.name).join(', ')}) will move out of ${agents.map((agent) => AGENT_LABELS[agent] ?? agent).join(', ')} into a backup under ~/.agentskills/.emdash/takeover-backup. Agents started in Emdash keep them from the library; Claude, Codex and the others run outside Emdash (including the Claude app) will no longer see them.`,
                     confirmLabel: 'Take over',
                   });
                   if (!confirmed.success) return;

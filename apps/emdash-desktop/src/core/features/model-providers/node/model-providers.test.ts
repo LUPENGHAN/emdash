@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   anthropicBaseUrl,
   openAiBaseUrl,
+  providerEndpoints,
+  providerModelsAuth,
+  providerModelsUrl,
+  providerSupportsAgent,
   sourceOverrideOf,
   usesProviderSource,
   type ModelProvider,
@@ -37,13 +41,87 @@ describe('buildSourceLaunch', () => {
         ANTHROPIC_BASE_URL: 'http://127.0.0.1:3000',
         ANTHROPIC_AUTH_TOKEN: 'sk-1',
         ANTHROPIC_MODEL: 'z-ai/glm-5.3-flash',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'z-ai/glm-5.3-flash',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'z-ai/glm-5.3-flash',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'z-ai/glm-5.3-flash',
+        ANTHROPIC_SMALL_FAST_MODEL: 'z-ai/glm-5.3-flash',
       },
       args: [],
     });
+    // Claude models keep Claude Code's own aliases.
+    expect(buildSourceLaunch('claude', provider, 'sk-1', 'claude-opus-5-5')?.env).toEqual({
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:3000',
+      ANTHROPIC_AUTH_TOKEN: 'sk-1',
+      ANTHROPIC_MODEL: 'claude-opus-5-5',
+    });
+  });
+
+  it('uses x-api-key for Anthropic’s own API and keeps agents to suitable protocols', () => {
+    const anthropicApi: ModelProvider = {
+      id: 'a',
+      name: 'Anthropic API',
+      protocol: 'anthropic',
+      baseUrl: 'https://api.anthropic.com/',
+      models: [],
+    };
+    expect(buildSourceLaunch('claude', anthropicApi, 'sk-ant')?.env).toEqual({
+      ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
+      ANTHROPIC_API_KEY: 'sk-ant',
+    });
+    expect(buildSourceLaunch('codex', anthropicApi, 'sk-ant')).toBeNull();
+    const opencode = JSON.parse(
+      buildSourceLaunch('opencode', anthropicApi, 'sk-ant')!.env.OPENCODE_CONFIG_CONTENT!
+    );
+    expect(opencode.provider['emdash-a']).toMatchObject({
+      npm: '@ai-sdk/anthropic',
+      options: { baseURL: 'https://api.anthropic.com/v1' },
+    });
+    expect(buildSourceLaunch('pi', anthropicApi, 'sk-ant')?.file?.entry).toMatchObject({
+      baseUrl: 'https://api.anthropic.com',
+      api: 'anthropic-messages',
+    });
+    expect(providerModelsUrl(anthropicApi)).toBe('https://api.anthropic.com/v1/models');
+    expect(providerModelsAuth(anthropicApi)).toBe('anthropic-api-key');
+  });
+
+  it('keeps an OpenAI base path as typed and picks the chat or Responses API', () => {
+    const glm: ModelProvider = {
+      id: 'glm',
+      name: 'GLM',
+      protocol: 'openai-chat',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4/',
+      models: ['glm-4.6'],
+    };
+    expect(providerEndpoints(glm)).toEqual({
+      openai: { url: 'https://open.bigmodel.cn/api/paas/v4', api: 'chat' },
+    });
+    expect(providerEndpoints({ protocol: 'openai-chat', baseUrl: 'https://h.example' })).toEqual({
+      openai: { url: 'https://h.example/v1', api: 'chat' },
+    });
+    expect(buildSourceLaunch('claude', glm, 'k')).toBeNull();
+    expect(buildSourceLaunch('codex', glm, 'k')).toBeNull();
+    expect(providerSupportsAgent(glm, 'codex')).toEqual({
+      ok: false,
+      reason: 'needs OpenAI Responses',
+    });
+    expect(buildSourceLaunch('pi', glm, 'k')?.file?.entry).toMatchObject({
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+      api: 'openai-completions',
+    });
+    expect(providerModelsUrl(glm)).toBe('https://open.bigmodel.cn/api/paas/v4/models');
+    expect(providerModelsUrl({ ...glm, modelsUrl: 'https://x/models' })).toBe('https://x/models');
+
+    const responses: ModelProvider = { ...glm, protocol: 'openai-responses' };
+    expect(providerSupportsAgent(responses, 'codex')).toEqual({ ok: true });
+    expect(buildSourceLaunch('pi', responses, 'k')?.file?.entry.api).toBe('openai-responses');
+    expect(
+      JSON.parse(buildSourceLaunch('opencode', responses, 'k')!.env.OPENCODE_CONFIG_CONTENT!)
+        .provider['emdash-glm'].npm
+    ).toBe('@ai-sdk/openai');
   });
 
   it('gives Codex both terminal -c overrides and the chat adapter config', () => {
-    const launch = buildSourceLaunch('codex', provider, 'sk-1', 'moonshotai/kimi-k3');
+    const launch = buildSourceLaunch('codex', provider, 'sk-1', 'moonshotai/kimi-k3')!;
     expect(launch.args).toContain('model_provider="emdash-newapi"');
     expect(launch.args).toContain(
       'model_providers.emdash-newapi.base_url="http://127.0.0.1:3000/v1"'
@@ -61,7 +139,7 @@ describe('buildSourceLaunch', () => {
   });
 
   it('adds an OpenCode provider inline, with the key referenced from env', () => {
-    const launch = buildSourceLaunch('opencode', provider, 'sk-1');
+    const launch = buildSourceLaunch('opencode', provider, 'sk-1')!;
     const config = JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT!);
     expect(config.provider['emdash-newapi'].options).toEqual({
       baseURL: 'http://127.0.0.1:3000/v1',
@@ -73,7 +151,7 @@ describe('buildSourceLaunch', () => {
   });
 
   it('selects the provider for Pi / Oh My Pi and describes their file entry', () => {
-    const launch = buildSourceLaunch('pi', provider, 'sk-1', 'moonshotai/kimi-k3');
+    const launch = buildSourceLaunch('pi', provider, 'sk-1', 'moonshotai/kimi-k3')!;
     expect(launch.args).toEqual(['--model', 'emdash-newapi/moonshotai/kimi-k3']);
     expect(launch.file?.entry).toEqual({
       baseUrl: 'http://127.0.0.1:3000/v1',
@@ -81,7 +159,7 @@ describe('buildSourceLaunch', () => {
       apiKey: `$${PROVIDER_KEY_ENV}`,
       models: [{ id: 'moonshotai/kimi-k3' }, { id: 'z-ai/glm-5.3-flash' }],
     });
-    expect(buildSourceLaunch('oh-my-pi', provider, 'sk-1').args).toEqual([
+    expect(buildSourceLaunch('oh-my-pi', provider, 'sk-1')?.args).toEqual([
       '--provider',
       'emdash-newapi',
     ]);
@@ -102,7 +180,7 @@ describe('ensureAgentProviderFile', () => {
     const file = agentProviderFilePath('pi', env());
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, JSON.stringify({ providers: { ollama: { baseUrl: 'x' } } }));
-    const launch = buildSourceLaunch('pi', provider, 'sk-1');
+    const launch = buildSourceLaunch('pi', provider, 'sk-1')!;
 
     await ensureAgentProviderFile(launch.file!, env());
     await ensureAgentProviderFile(launch.file!, env());
@@ -117,7 +195,7 @@ describe('ensureAgentProviderFile', () => {
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, '# my providers\nproviders:\n  zenmux:\n    baseUrl: https://z\n');
 
-    await ensureAgentProviderFile(buildSourceLaunch('oh-my-pi', provider, 'sk-1').file!, env());
+    await ensureAgentProviderFile(buildSourceLaunch('oh-my-pi', provider, 'sk-1')!.file!, env());
 
     const written = await readFile(file, 'utf8');
     expect(written).toContain('# my providers');
@@ -166,6 +244,10 @@ describe('createEffectiveAgentConfig', () => {
     expect(
       (await resolve('claude', { modelSource: 'NewAPI', sourceModel: 'm' }))?.env?.ANTHROPIC_MODEL
     ).toBe('m');
+    // No model picked: the provider's first one, never the agent's own default.
+    expect((await resolve('claude', { modelSource: 'NewAPI' }))?.env?.ANTHROPIC_MODEL).toBe(
+      'moonshotai/kimi-k3'
+    );
   });
 });
 
@@ -199,14 +281,25 @@ describe('createModelProviderKeys', () => {
     const keys = createModelProviderKeys(memoryStore(), fetchImpl as never);
     await keys.set('p', 'sk-1');
 
-    expect(await keys.listModels({ providerId: 'p', baseUrl: 'http://h:3000' })).toEqual([
-      'a-model',
-      'b-model',
-    ]);
+    expect(
+      await keys.listModels({ providerId: 'p', url: providerModelsUrl(provider), auth: 'bearer' })
+    ).toEqual(['a-model', 'b-model']);
     expect(fetchImpl).toHaveBeenCalledWith(
-      'http://h:3000/v1/models',
+      'http://127.0.0.1:3000/v1/models',
       expect.objectContaining({
         headers: { Authorization: 'Bearer sk-1' },
+      })
+    );
+
+    await keys.listModels({
+      providerId: 'p',
+      url: 'https://api.anthropic.com/v1/models',
+      auth: 'anthropic-api-key',
+    });
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      'https://api.anthropic.com/v1/models',
+      expect.objectContaining({
+        headers: { 'anthropic-version': '2023-06-01', 'x-api-key': 'sk-1' },
       })
     );
   });

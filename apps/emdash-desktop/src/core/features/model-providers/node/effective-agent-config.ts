@@ -35,8 +35,17 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
       return config;
     }
 
-    const model = override ? override.sourceModel : config?.sourceModel;
+    // No model picked: the provider's first model, not the agent's own default (a Claude
+    // or GPT id the provider may not serve).
+    const model = (override ? override.sourceModel : config?.sourceModel) || provider.models[0];
     const launch = buildSourceLaunch(agentId, provider, apiKey, model || undefined);
+    if (!launch) {
+      deps.warn?.('model source has no API this agent can use; launching with its own config', {
+        agentId,
+        sourceId,
+      });
+      return config;
+    }
     if (launch.file) await deps.ensureProviderFile(launch.file);
     return {
       ...config,

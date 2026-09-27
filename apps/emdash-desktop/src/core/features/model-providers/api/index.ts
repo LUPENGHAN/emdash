@@ -1,16 +1,31 @@
 import { z } from 'zod';
 
+/** The wire protocols a provider can speak; each provider speaks one. */
+export const PROVIDER_PROTOCOLS = ['anthropic', 'openai-chat', 'openai-responses'] as const;
+export type ProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number];
+
+export const PROVIDER_PROTOCOL_LABELS: Record<ProviderProtocol, string> = {
+  anthropic: 'Anthropic Messages',
+  'openai-chat': 'OpenAI Chat Completions',
+  'openai-responses': 'OpenAI Responses',
+};
+
 /**
- * A model provider the user configured once and can route agents through: an
- * OpenAI/Anthropic-compatible gateway such as new-api. Its API key is never part of this
- * record; it lives in the encrypted secrets store under {@link modelProviderSecretKey}.
+ * A model provider the user configured once and can route agents through: any API that
+ * speaks one of {@link PROVIDER_PROTOCOLS} (a vendor, a gateway such as new-api, …). Its
+ * API key is never part of this record; it lives in the encrypted secrets store under
+ * {@link modelProviderSecretKey}.
  */
 export const modelProviderSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  /** Gateway root, e.g. `http://127.0.0.1:3000` (a trailing `/v1` is tolerated). */
+  /** Absent on providers saved before protocols: a new-api style gateway serving all three. */
+  protocol: z.enum(PROVIDER_PROTOCOLS).optional(),
+  /** Anthropic: the root (clients add `/v1/messages`). OpenAI: the base, e.g. `…/v1`. */
   baseUrl: z.string().min(1),
-  /** Model ids the gateway serves, as fetched from its `/v1/models`. */
+  /** Where to list the upstream models, when not the protocol's usual models endpoint. */
+  modelsUrl: z.string().optional(),
+  /** The models agents may use: the ones picked from the upstream list or typed in. */
   models: z.array(z.string()).default([]),
 });
 export type ModelProvider = z.infer<typeof modelProviderSchema>;
@@ -65,6 +80,90 @@ export function anthropicBaseUrl(baseUrl: string): string {
   return trimSlashes(baseUrl).replace(/\/v1$/, '');
 }
 
+/** An OpenAI base as typed: bare hosts get `/v1`, any other path is kept (GLM's `/api/paas/v4`). */
+function openAiBaseAsTyped(baseUrl: string): string {
+  const trimmed = trimSlashes(baseUrl);
+  try {
+    return new URL(trimmed).pathname.replace(/\/+$/, '') === '' ? `${trimmed}/v1` : trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+export type ProviderEndpoints = {
+  anthropic?: { url: string; auth: 'bearer' | 'api-key' };
+  openai?: { url: string; api: 'chat' | 'responses' | 'both' };
+};
+
+/** The APIs a provider speaks, with normalized URLs. */
+export function providerEndpoints(
+  provider: Pick<ModelProvider, 'protocol' | 'baseUrl'>
+): ProviderEndpoints {
+  const base = provider.baseUrl;
+  switch (provider.protocol) {
+    case undefined:
+      return {
+        anthropic: { url: anthropicBaseUrl(base), auth: 'bearer' },
+        openai: { url: openAiBaseUrl(base), api: 'both' },
+      };
+    case 'anthropic': {
+      const url = anthropicBaseUrl(base);
+      // Anthropic's own API takes x-api-key; compatible vendors take a bearer token.
+      const official = /^https?:\/\/api\.anthropic\.com(\/|$)/.test(url);
+      return { anthropic: { url, auth: official ? 'api-key' : 'bearer' } };
+    }
+    case 'openai-chat':
+      return { openai: { url: openAiBaseAsTyped(base), api: 'chat' } };
+    case 'openai-responses':
+      return { openai: { url: openAiBaseAsTyped(base), api: 'responses' } };
+  }
+}
+
+/** The upstream models list: the provider's own URL, else the protocol's usual one. */
+export function providerModelsUrl(
+  provider: Pick<ModelProvider, 'protocol' | 'baseUrl' | 'modelsUrl'>
+): string {
+  if (provider.modelsUrl?.trim()) return provider.modelsUrl.trim();
+  const { openai, anthropic } = providerEndpoints(provider);
+  return openai ? `${openai.url}/models` : `${anthropic!.url}/v1/models`;
+}
+
+/** How the models request sends the key. */
+export function providerModelsAuth(
+  provider: Pick<ModelProvider, 'protocol' | 'baseUrl'>
+): 'bearer' | 'anthropic-bearer' | 'anthropic-api-key' {
+  if (provider.protocol !== 'anthropic') return 'bearer';
+  return providerEndpoints(provider).anthropic?.auth === 'api-key'
+    ? 'anthropic-api-key'
+    : 'anthropic-bearer';
+}
+
+/** Whether an agent can run on a provider, and if not, why (for the pickers). */
+export function providerSupportsAgent(
+  provider: ModelProvider,
+  agentId: string
+): { ok: true } | { ok: false; reason: string } {
+  const endpoints = providerEndpoints(provider);
+  switch (agentId) {
+    case 'claude':
+      return endpoints.anthropic ? { ok: true } : { ok: false, reason: 'needs Anthropic Messages' };
+    case 'codex':
+      return endpoints.openai && endpoints.openai.api !== 'chat'
+        ? { ok: true }
+        : { ok: false, reason: 'needs OpenAI Responses' };
+    default:
+      return { ok: true };
+  }
+}
+
+/** One line describing a provider's protocol and URL, for lists. */
+export function describeProvider(provider: ModelProvider): string {
+  const protocol = provider.protocol
+    ? PROVIDER_PROTOCOL_LABELS[provider.protocol]
+    : 'Gateway (all protocols)';
+  return `${protocol} · ${provider.baseUrl}`;
+}
+
 /** A config-safe id (no spaces, lowercase) for the provider inside agent configs. */
 export function providerConfigId(provider: Pick<ModelProvider, 'id'>): string {
   return `emdash-${provider.id.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
@@ -76,7 +175,13 @@ export type ModelProviderKeys = {
   hasKey(providerId: string): Promise<boolean>;
   set(providerId: string, apiKey: string): Promise<void>;
   clear(providerId: string): Promise<void>;
-  listModels(input: { providerId: string; baseUrl: string; apiKey?: string }): Promise<string[]>;
+  listModels(input: {
+    providerId: string;
+    url: string;
+    /** How to send the key: Anthropic-style headers or an OpenAI bearer token. */
+    auth: 'bearer' | 'anthropic-bearer' | 'anthropic-api-key';
+    apiKey?: string;
+  }): Promise<string[]>;
 };
 
 /** A per-conversation source; `null` means the agent's own login/config. */
