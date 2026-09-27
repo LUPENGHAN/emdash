@@ -19,6 +19,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
+import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import type {
   ConversationManagerStore,
   ConversationStore,
@@ -39,7 +40,11 @@ import {
 import { useTabSelection } from '@core/features/workbench/api/browser/task-tab-registry';
 import { useOpenModal } from '@core/manifests/browser/modal-api';
 import { projectAvailabilityUi } from '@core/manifests/browser/project-availability-ui';
-import { MAX_CONVERSATION_TITLE_LENGTH } from '@core/primitives/conversations/api';
+import {
+  MAX_CONVERSATION_TITLE_LENGTH,
+  type Conversation,
+  type ImportableSession,
+} from '@core/primitives/conversations/api';
 import { cn } from '@core/primitives/styling/browser/cn';
 
 const ROW_HEIGHT = 32;
@@ -473,8 +478,10 @@ const SidebarConversationsListContent = observer(function SidebarConversationsLi
           : `${targets.length} conversations will be permanently deleted. This action cannot be undone.${activeDescription}`,
         confirmLabel: 'Delete',
         variant: 'destructive',
+        checkbox: { label: 'Also delete it from the agent’s own history (files to the Trash)' },
       });
       if (!outcome.success) return;
+      const purgeAgentHistory = outcome.data?.checked === true;
 
       setDeleting(true);
       try {
@@ -485,6 +492,19 @@ const SidebarConversationsListContent = observer(function SidebarConversationsLi
         for (const conversationId of result.succeededIds) {
           closeConversationTabs(conversationId);
           if (selection.isSelected(conversationId)) selection.toggle(conversationId);
+        }
+        if (purgeAgentHistory) {
+          // After the conversation (and its agent) is gone, so nothing writes the session again.
+          const failed = await purgeAgentSessions(
+            targets
+              .filter((conversation) => result.succeededIds.includes(conversation.data.id))
+              .map((conversation) => conversation.data)
+          );
+          if (failed.length > 0) {
+            toast.error(`Could not delete ${failed.length} agent session(s)`, {
+              description: failed[0],
+            });
+          }
         }
 
         if (result.failures.length > 0) {
@@ -558,3 +578,24 @@ export const SidebarConversationsList = observer(function SidebarConversationsLi
     </view.Root>
   );
 });
+
+/** Removes the agents' own records of deleted conversations; returns the failures. */
+async function purgeAgentSessions(deleted: Conversation[]): Promise<string[]> {
+  const client = await getConversationsClient();
+  const failures: string[] = [];
+  for (const conversation of deleted) {
+    if (!conversation.sessionId || !isImportableProvider(conversation.providerId)) continue;
+    const result = await client.deleteAgentSession({
+      providerId: conversation.providerId,
+      sessionId: conversation.sessionId,
+    });
+    if (!result.success) failures.push(result.error.message);
+  }
+  return failures;
+}
+
+const IMPORTABLE_PROVIDERS = new Set(['claude', 'codex', 'opencode', 'pi', 'oh-my-pi', 'cursor']);
+
+function isImportableProvider(providerId: string): providerId is ImportableSession['providerId'] {
+  return IMPORTABLE_PROVIDERS.has(providerId);
+}

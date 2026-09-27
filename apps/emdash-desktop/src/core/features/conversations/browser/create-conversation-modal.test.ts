@@ -138,10 +138,7 @@ describe('conversation creation settings', () => {
     mocks.preferences!.acp.options = { model: 'chat-only' };
     await createConversation();
     // Fork: terminal sessions can pick a model (passed to --model); default leaves it to the CLI.
-    expect(mocks.select).toHaveBeenCalledWith(
-      expect.objectContaining({ value: '' }),
-      undefined
-    );
+    expect(mocks.select).toHaveBeenCalledWith(expect.objectContaining({ value: '' }), undefined);
     const input = mocks.createConversation.mock.calls[0]?.[0] as { options?: unknown };
     expect(input).toMatchObject({ type: 'pty' });
     expect(input).not.toHaveProperty('model');

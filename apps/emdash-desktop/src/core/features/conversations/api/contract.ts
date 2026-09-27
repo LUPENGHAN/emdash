@@ -258,6 +258,18 @@ export const conversationsContract = defineContract({
     input: z.object({ projectId: z.string() }),
     output: z.custom<ImportableSession[]>(),
   }),
+  /**
+   * Removes a session from the agent's own history (files to the system trash; OpenCode
+   * deletes it from its database). `removed` is 0 when nothing was saved under the id.
+   */
+  deleteAgentSession: fallible({
+    input: z.object({
+      providerId: z.enum(['claude', 'codex', 'opencode', 'pi', 'oh-my-pi', 'cursor']),
+      sessionId: z.string().min(1),
+    }),
+    data: z.object({ removed: z.number() }),
+    error: z.object({ message: z.string() }),
+  }),
   markConversationSeen: procedure({
     input: z.object({ conversationId: z.string() }),
     output: z.void(),

@@ -1,3 +1,4 @@
+import { shell } from 'electron';
 import { providerTokenRegistry } from '@core/features/account/api/node/provider-token-registry';
 import type { EmdashAccountService } from '@core/features/account/node/services/emdash-account-service';
 import { GitHubAuthServerAdapter } from '@core/features/github/node/accounts/github-auth-server-adapter';
@@ -129,6 +130,7 @@ export function createDesktopWireOptions(
     agentControl: services.agentControl,
     agentLibrary: services.agentLibrary,
     prepareAgentLaunch: services.prepareAgentLaunch,
+    trashItem: (target: string) => shell.trashItem(target),
     remoteClient: services.remoteClient,
     reconcileSweep: services.reconcileSweep,
     search: services.search,

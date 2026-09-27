@@ -160,6 +160,7 @@ export type DesktopControllerContext = {
   readonly remoteClient: RemoteClientService;
   readonly agentControl: AgentControlDispatcher;
   readonly prepareAgentLaunch: CreateConversationsWireControllerOptions['prepareAgentLaunch'];
+  readonly trashItem: (target: string) => Promise<void>;
   readonly agentLibrary: AgentLibraryService;
   readonly reconcileSweep: ReconcileSweepHandle;
   readonly hosts: Hosts;
@@ -435,6 +436,7 @@ export const desktopNodeControllers = {
       telemetry,
       workspaceIdentity,
       prepareAgentLaunch,
+      trashItem,
     }) =>
       createConversationsWireController({
         terminalFileSources,
@@ -451,6 +453,7 @@ export const desktopNodeControllers = {
         withCompensation: compensation,
         hostIsReachable,
         prepareAgentLaunch,
+        trashItem,
       }),
   },
   previewServers: {

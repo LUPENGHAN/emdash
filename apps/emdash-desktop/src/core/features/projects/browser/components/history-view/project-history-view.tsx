@@ -1,7 +1,7 @@
 import { Button, toast } from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatDistanceToNow } from 'date-fns';
-import { History } from 'lucide-react';
+import { History, Trash2 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
 import { AgentIcon } from '@core/features/agents/contributions/browser/agent-icon';
@@ -12,6 +12,7 @@ import {
 } from '@core/features/projects/api/browser/stores/project-selectors';
 import { getTaskManagerStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
+import { openModal } from '@core/manifests/browser/modal-api';
 import type { ImportableSession } from '@core/primitives/conversations/api';
 import { log } from '@core/primitives/logging/browser/logger';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
@@ -103,6 +104,29 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
     }
   };
 
+  // Out of the agent's own history too: `--resume` pickers and this list stop showing it.
+  const remove = async (session: ImportableSession) => {
+    const agent = AGENT_NAMES[session.providerId];
+    const confirmed = await openModal('confirmActionModal', {
+      title: 'Delete this session?',
+      description:
+        session.providerId === 'opencode'
+          ? `“${session.title}” is deleted from OpenCode’s history. This cannot be undone.`
+          : `“${session.title}” is removed from ${agent}’s history: its session files move to the Trash, so ${agent} and Emdash no longer list or resume it.`,
+      confirmLabel: 'Delete',
+    });
+    if (!confirmed.success) return;
+    const result = await (
+      await getConversationsClient()
+    ).deleteAgentSession({ providerId: session.providerId, sessionId: session.sessionId });
+    if (result.success) {
+      toast.success(`Deleted “${session.title}”`);
+    } else {
+      toast.error(`Could not delete the session: ${result.error.message}`);
+    }
+    await queryClient.invalidateQueries({ queryKey });
+  };
+
   if (isLoading) {
     return <p className="p-4 text-sm text-foreground-muted">Looking for sessions…</p>;
   }
@@ -170,6 +194,17 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
               onClick={() => void resume(session, session.resumeIn ?? 'acp')}
             >
               {resumingId === session.sessionId ? 'Resuming…' : 'Resume'}
+            </Button>
+            <Button
+              size="sm"
+              icon
+              variant="ghost"
+              title="Delete from the agent’s history"
+              aria-label="Delete session"
+              disabled={resumingId !== null}
+              onClick={() => void remove(session)}
+            >
+              <Trash2 className="size-4" />
             </Button>
           </li>
         ))}

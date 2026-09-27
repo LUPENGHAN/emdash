@@ -16,6 +16,7 @@ import { and, eq } from 'drizzle-orm';
 import { conversationRegistryTable as conversations } from '@core/features/conversations/api/node/registry';
 import { createConversationOperations } from '@core/features/conversations/node/controller';
 import type { CompensationRunner } from '@core/features/conversations/node/createConversation';
+import { deleteAgentSession } from '@core/features/conversations/node/delete-agent-session';
 import { sourceOverrideOf, type ModelSourceOverride } from '@core/features/model-providers/api';
 import type { ProjectAttachmentError } from '@core/features/projects/api';
 import {
@@ -66,6 +67,8 @@ type ConversationRuntimeHooks = Readonly<{
 
 export type CreateConversationsWireControllerOptions = Readonly<{
   db: AppDb;
+  /** Moves a file or folder to the system trash (agent session files). */
+  trashItem?: (target: string) => Promise<void>;
   terminalFileSources: TerminalFileSources;
   runtimes: ConversationsRuntimeBroker;
   workspaceIdentity: WorkspaceIdentityResolver;
@@ -216,6 +219,16 @@ export function createConversationsWireController(
       conversationOperations.listProjectImportableSessions(projectId),
     getConversationsForProject: ({ projectId }) =>
       conversationOperations.getConversationsForProject(projectId),
+    deleteAgentSession: async ({ providerId, sessionId }) => {
+      if (!options.trashItem) return err({ message: 'Deleting agent sessions is unavailable' });
+      try {
+        return ok({
+          removed: await deleteAgentSession(providerId, sessionId, { trash: options.trashItem }),
+        });
+      } catch (error) {
+        return err({ message: error instanceof Error ? error.message : String(error) });
+      }
+    },
     markConversationSeen: ({ conversationId }) =>
       conversationOperations.markConversationSeen(conversationId),
     listHostConversations: (scope) => conversationOperations.listHostConversations(scope),
