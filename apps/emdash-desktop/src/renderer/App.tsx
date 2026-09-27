@@ -6,6 +6,7 @@ import { useGitHubAuthEvents } from '@core/features/github/api/browser/use-githu
 import { useIntegrationAccountEvents } from '@core/features/integrations/api/browser/use-integration-account-events';
 import { IntegrationsProvider } from '@core/features/integrations/contributions/browser/integrations-provider';
 import { useLegacyPortStatus } from '@core/features/legacy-port/api/browser/useLegacyPort';
+import { UiLanguage } from '@core/features/localization/contributions/browser/ui-language';
 import { TerminalPoolProvider } from '@core/features/terminals/browser/pty/pty-pool-provider';
 import { confirmOpenExternalLink } from '@core/features/workbench/api/browser/open-external-link';
 import { Onboarding } from '@core/features/workbench/browser/onboarding/onboarding';
@@ -117,6 +118,7 @@ function AppContent() {
                   <ModalRenderer />
                   <AppShutdownLifecycle />
                   <HostRecoveryWakeups />
+                  <UiLanguage />
                   {renderContent()}
                 </ThemeProvider>
               </ExternalLinkProvider>

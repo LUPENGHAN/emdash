@@ -1,4 +1,5 @@
 import { PageLayout, SettingsSection } from '@emdash/ui/react/patterns';
+import { LanguageCard } from '@core/features/localization/contributions/browser/language-card';
 import FilesSettingsCard from '../components/FilesSettingsCard';
 import HiddenToolsSettingsCard from '../components/HiddenToolsSettingsCard';
 import InterfaceSettingsCard from '../components/InterfaceSettingsCard';
@@ -16,6 +17,9 @@ export function InterfaceSettingsPage() {
         title="Interface"
         description="Customize the appearance and behavior of the app."
       />
+      <SettingsSection title="Language" bare>
+        <LanguageCard />
+      </SettingsSection>
       <SettingsSection title="Color mode" bare>
         <ThemeCard />
       </SettingsSection>

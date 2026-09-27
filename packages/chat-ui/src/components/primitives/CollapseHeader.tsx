@@ -48,6 +48,7 @@ export type CollapseHeaderProps = {
 export function CollapseHeader(props: CollapseHeaderProps) {
   return (
     <div
+      translate="yes"
       class={collapseHeader}
       style={{ height: `${props.height}px` }}
       role="button"

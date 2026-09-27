@@ -5,6 +5,7 @@ import {
   browserSettingsContribution,
 } from '@core/features/browser/contributions/settings';
 import { filesSettingsContribution } from '@core/features/editor/contributions/settings';
+import { languageSettingsContribution } from '@core/features/localization/contributions/settings';
 import { modelProvidersSettingsContribution } from '@core/features/model-providers/contributions/settings';
 import {
   localProjectSettingsSchemaContribution,
@@ -43,6 +44,7 @@ export const appSettingsSchemaContributions = {
   keyboard: keyboardSettingsContribution,
   notifications: notificationSettingsContribution,
   theme: themeSettingsContribution,
+  language: languageSettingsContribution,
   openIn: openInSettingsContribution,
   interface: interfaceSettingsContribution,
   terminal: terminalSettingsContribution,

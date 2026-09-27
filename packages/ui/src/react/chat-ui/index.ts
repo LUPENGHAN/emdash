@@ -113,6 +113,8 @@ export function ChatTranscript(props: ChatTranscriptProps): React.ReactElement {
     ref,
     style: { height: '100%', ...props.style },
     className: props.className,
+    // Conversation content stays as written; card headers opt back in to UI translation.
+    translate: 'no',
   });
 }
 

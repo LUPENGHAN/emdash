@@ -46,6 +46,7 @@ export type CardHeaderProps = {
 export function CardHeader(props: CardHeaderProps) {
   return (
     <button
+      translate="yes"
       type="button"
       class={cardHeader}
       style={{ height: `${props.height}px` }}
