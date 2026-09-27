@@ -44,6 +44,7 @@ type Pattern = { regex: RegExp; translation: string };
 function compilePatterns(patterns: Record<string, string>): Pattern[] {
   return (
     Object.entries(patterns)
+      .filter(([english]) => !tooLoose(english))
       // Longer (more specific) patterns first: "Delete {0} files" before "Delete {0}".
       .sort(([a], [b]) => b.replace(/\{\d+\}/g, '').length - a.replace(/\{\d+\}/g, '').length)
       .map(([english, translation]) => ({
@@ -59,6 +60,21 @@ function compilePatterns(patterns: Record<string, string>): Pattern[] {
         translation,
       }))
   );
+}
+
+/**
+ * A pattern open at both ends around a word or two ("{0} session {1}") matches ordinary
+ * sentences, including what people typed; those are left out.
+ */
+function tooLoose(english: string): boolean {
+  const openStart = /^\{\d+\}/.test(english);
+  const openEnd = /\{\d+\}$/.test(english);
+  const words = english
+    .replace(/\{\d+\}/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return openStart && openEnd && words.length <= 2;
 }
 
 export function createUiTranslator(

@@ -87,6 +87,15 @@ describe('createUiTranslator', () => {
     expect(mixed.textContent).toBe('删除 now');
   });
 
+  it('ignores patterns loose enough to match ordinary sentences', () => {
+    document.body.innerHTML = `<p>my session notes</p>`;
+    createUiTranslator({
+      strings: {},
+      patterns: { '{0} session {1}': '{0} 会话 {1}' },
+    }).start();
+    expect(document.querySelector('p')!.textContent).toBe('my session notes');
+  });
+
   it('reports untranslated text', () => {
     document.body.innerHTML = `<p>Brand new label</p><p>123</p>`;
     const translator = createUiTranslator(dictionary);

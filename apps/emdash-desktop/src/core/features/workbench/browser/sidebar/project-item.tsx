@@ -172,12 +172,16 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
             >
               {isSshProject ? (
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className="truncate">{project.name}</span>
+                  <span translate="no" className="truncate">
+                    {project.name}
+                  </span>
                   <ConnectionStatusDot state={displayedSshConnectionState} />
                 </span>
               ) : (
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate">{project.name}</span>
+                  <span translate="no" className="truncate">
+                    {project.name}
+                  </span>
                   {projectViewKind(project) === 'context_error' && (
                     <Tooltip.Root>
                       <Tooltip.Trigger>

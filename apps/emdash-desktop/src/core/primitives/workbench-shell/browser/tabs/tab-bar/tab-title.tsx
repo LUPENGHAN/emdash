@@ -21,6 +21,8 @@ export const TabTitle = observer(function TabTitle({
 
   return (
     <span
+      // Tab titles are names (files, conversations, pages), not interface text.
+      translate="no"
       className={cn(
         'truncate p-1 text-sm opacity-85 group-hover:opacity-100 transition-opacity',
         maxWidth,

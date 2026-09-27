@@ -121,6 +121,7 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
           className="gap-1 overflow-hidden"
         >
           <span
+            translate="no"
             className={cn(
               'min-w-0 truncate text-left transition-colors',
               task.isBootstrapping && 'text-foreground/40'
