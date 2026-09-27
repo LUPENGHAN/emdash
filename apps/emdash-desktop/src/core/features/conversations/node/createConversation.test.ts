@@ -158,10 +158,12 @@ describe('createConversation', () => {
     await createConversation(
       {
         ...baseParams,
-        model: 'sonnet',
-        modeId: 'agent-full-access',
-        effort: 'high',
-        collaborationMode: 'plan',
+        options: {
+          model: 'sonnet',
+          mode: 'agent-full-access',
+          reasoning_effort: 'high',
+          collaboration_mode: 'plan',
+        },
       },
       dependencies()
     );
@@ -169,10 +171,12 @@ describe('createConversation', () => {
     expect(hostConversations.create).toHaveBeenCalledWith(
       expect.objectContaining({
         config: expect.objectContaining({
-          model: 'sonnet',
-          modeId: 'agent-full-access',
-          effort: 'high',
-          collaborationMode: 'plan',
+          options: {
+            model: 'sonnet',
+            mode: 'agent-full-access',
+            reasoning_effort: 'high',
+            collaboration_mode: 'plan',
+          },
         }),
       })
     );

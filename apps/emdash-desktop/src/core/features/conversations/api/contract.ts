@@ -6,7 +6,9 @@ import {
 import {
   acpApiContract,
   acpSessionStartModeSchema,
+  acpSetOptionErrorSchema,
   sessionSummarySchema,
+  setOptionResultSchema,
 } from '@emdash/core/runtimes/acp/api/client';
 import { tuiAgentsContract, tuiSessionListSchema } from '@emdash/core/runtimes/tui-agents/api';
 import { attachmentErrorSchema } from '@emdash/core/services/attachments/api';
@@ -40,6 +42,7 @@ import {
   localTerminalFilesSchema,
   preparedTerminalFileSchema,
 } from '@core/services/attachments/api/terminal-files';
+import { providerSettingsContract } from './provider-settings';
 
 const conversationKey = z.object({ conversationId: z.string() });
 const conversationLocation = z.object({
@@ -129,10 +132,11 @@ const conversationsAcpContract = defineContract({
     acpApiContract.cancelTurn.input,
     acpApiContract.cancelTurn.output
   ),
-  setOption: runtimeFallibleProcedure(
-    acpApiContract.setOption.input,
-    acpApiContract.setOption.output
-  ),
+  setOption: fallible({
+    input: acpApiContract.setOption.input,
+    data: setOptionResultSchema.extend({ preferenceSaveError: z.string().optional() }),
+    error: projectAttachmentErrorUnion(acpSetOptionErrorSchema),
+  }),
   resolvePermission: runtimeFallibleProcedure(
     acpApiContract.resolvePermission.input,
     acpApiContract.resolvePermission.output
@@ -177,6 +181,7 @@ const conversationsTuiContract = defineContract({
 export const conversationsDomain = 'conversations' as const;
 
 export const conversationsContract = defineContract({
+  providerSettings: providerSettingsContract,
   attachments: defineContract({
     prepareLocalFiles: fallible({
       input: z.object({ conversationId: z.string(), sources: localTerminalFilesSchema }),

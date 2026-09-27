@@ -10,9 +10,11 @@ import { useAgents } from '@core/features/agents/api/browser/use-agents';
 import { AgentSelector } from '@core/features/agents/contributions/browser/agent-selector';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { nextDefaultConversationTitle } from '@core/features/conversations/api/browser/conversation-title-utils';
+import { readProviderSettings } from '@core/features/conversations/api/browser/provider-preferences';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
+import { useConversationLaunchSettings } from '@core/features/conversations/api/browser/use-conversation-launch-settings';
 import { useEffectiveProvider } from '@core/features/conversations/api/browser/use-effective-provider';
-import { providerPreferencesMemento } from '@core/features/conversations/contributions/mementos';
+import { ConversationTransportToggle } from '@core/features/conversations/contributions/browser/conversation-transport-toggle';
 import {
   modelSourceUnavailableMessage,
   usesProviderSource,
@@ -20,23 +22,13 @@ import {
 } from '@core/features/model-providers/api';
 import { ModelSourceSelect } from '@core/features/model-providers/contributions/browser/model-source-select';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
-// TODO(conversations-extraction): Pass task settings into the modal instead of importing task hooks.
-import { useTaskSettings } from '@core/features/tasks/api/browser/hooks/useTaskSettings';
 import { useModalController } from '@core/manifests/browser/modal-api';
 import { projectAvailabilityUi } from '@core/manifests/browser/project-availability-ui';
 import { agentSupportsAcp, agentSupportsAutoApprove } from '@core/primitives/agents/api';
 import type { ConversationType } from '@core/primitives/conversations/api';
 import { ConfirmButton } from '@core/primitives/keybindings/browser/confirm-button';
-import { getMementoClient } from '@core/primitives/mementos/browser';
-import { useMemento } from '@core/primitives/mementos/react';
 import { defineModal } from '@core/primitives/modals/react';
 import { useCloseGuard } from '@core/primitives/modals/react/use-close-guard';
-import { useLocalStorage } from '@core/primitives/react-hooks/browser/useLocalStorage';
-import {
-  patchProviderPreference,
-  providerPreference,
-  providerPreferenceKey,
-} from './provider-preferences';
 
 // Select value for the "type any model id" row; not a real model id.
 const CUSTOM_MODEL_VALUE = '__emdash_custom_model__';
@@ -66,21 +58,19 @@ export const CreateConversationModal = observer(function CreateConversationModal
     handoff?.providerId
   );
   const conversationMgr = conversationRegistry.get(taskId);
-  const taskSettings = useTaskSettings();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [autoApproveOverride, setAutoApproveOverride] = useState<boolean | null>(null);
-  const [useChatUiPreference, setUseChatUiPreference] = useLocalStorage(
-    'initial-conversation:chat-ui-enabled',
-    false
-  );
-  const [providerPreferences, setProviderPreferences] = useMemento(providerPreferencesMemento);
-  const [modelOverrides, setModelOverrides] = useState<Record<string, string | null>>({});
   const liveActionDisabledReason = projectAvailabilityUi.getLiveActionDisabledReason(projectId);
   useCloseGuard(isSubmitting);
 
   const { data: agents } = useAgents(hostRefFromConnectionId(connectionId));
   const selectedAgent = agents?.find((a) => a.id === providerId);
+  const host = formatHostRef(hostRefFromConnectionId(connectionId));
+  const launchSettings = useConversationLaunchSettings(
+    host,
+    providerId,
+    selectedAgent?.capabilities
+  );
   const modelsCapability = selectedAgent?.capabilities.models;
   const modelOptions =
     modelsCapability?.kind === 'selectable' ? modelsCapability.modelOptions : null;
@@ -105,7 +95,6 @@ export const CreateConversationModal = observer(function CreateConversationModal
   const resumeSession =
     agentSessions.find((session) => session.sessionId === resumeSessionId) ?? null;
 
-  const showAutoApproveToggle = agentSupportsAutoApprove(selectedAgent?.capabilities);
   // A resumed session can open in either UI: chat loads it with session/load.
   // Sessions tied to one UI's store (Cursor) must resume in that UI.
   // A handoff keeps the source's UI where the target has it.
@@ -117,41 +106,20 @@ export const CreateConversationModal = observer(function CreateConversationModal
         : 'pty'
       : undefined);
   const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities) && !lockedUi;
-  const useAcp = lockedUi ? lockedUi === 'acp' : showAcpToggle && useChatUiPreference;
+  const useAcp = lockedUi ? lockedUi === 'acp' : showAcpToggle && launchSettings.useChatUi;
   const transport = useAcp ? 'acp' : 'pty';
-  // Terminal sessions pass the id to the CLI's --model flag verbatim, so any
-  // model the CLI knows works, including ones newer than the catalog above.
-  const allowCustomModel = !useAcp;
-  const host = formatHostRef(hostRefFromConnectionId(connectionId));
-  const preferenceKey = providerId ? providerPreferenceKey(host, providerId, transport) : null;
-  const savedPreference = providerId
-    ? providerPreference(providerPreferences, host, providerId, transport)
-    : undefined;
-  const hasModelOverride =
-    preferenceKey !== null && Object.prototype.hasOwnProperty.call(modelOverrides, preferenceKey);
-  const selectedModel =
-    preferenceKey !== null && hasModelOverride
-      ? (modelOverrides[preferenceKey] ?? null)
-      : (savedPreference?.model ?? null);
+  const showAutoApproveToggle = agentSupportsAutoApprove(selectedAgent?.capabilities, transport);
+  const skipPermissions = showAutoApproveToggle && launchSettings.autoApprove;
+
+  // Terminal sessions pass the id to the CLI's --model flag verbatim, so any model the
+  // CLI knows works; chat sessions pick theirs in the composer.
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [customModelDraft, setCustomModelDraft] = useState<string | null>(null);
+  const showModelSelect = !useAcp && !resumeSession && !providerSource && modelOptions !== null;
   const isCustomModel =
-    allowCustomModel &&
-    (customModelDraft !== null ||
-      (selectedModel !== null &&
-        modelOptions !== null &&
-        modelOptions[selectedModel] === undefined));
-  const setSelectedModel = useCallback(
-    (model: string | null) => {
-      if (!preferenceKey) return;
-      setModelOverrides((current) => ({
-        ...current,
-        [preferenceKey]: model,
-      }));
-    },
-    [preferenceKey]
-  );
-  const skipPermissions =
-    showAutoApproveToggle && (autoApproveOverride ?? taskSettings.autoApproveByDefault);
+    customModelDraft !== null ||
+    (selectedModel !== null && modelOptions !== null && modelOptions[selectedModel] === undefined);
+
   const title = handoff
     ? handoff.title
     : resumeSession
@@ -169,6 +137,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
   const handleProviderChange = useCallback(
     (next: typeof providerId) => {
       setProviderOverride(next);
+      setSelectedModel(null);
       setCustomModelDraft(null);
       setResumeSessionId(null);
       setSource({});
@@ -180,6 +149,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
     if (
       liveActionDisabledReason ||
       createDisabled ||
+      !launchSettings.ready ||
       isSubmitting ||
       !conversationMgr ||
       !providerId
@@ -190,6 +160,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
     setIsSubmitting(true);
     setError(null);
     try {
+      const settings = await readProviderSettings({ host, providerId });
       const conversationType: ConversationType = useAcp ? 'acp' : 'pty';
       // Written only on confirm, so a cancelled handoff leaves no transcript behind.
       const handoffPrompt = handoff
@@ -203,39 +174,20 @@ export const CreateConversationModal = observer(function CreateConversationModal
         projectId,
         taskId,
         id,
-        autoApprove: skipPermissions,
+        autoApprove: showAutoApproveToggle && settings.pty.autoApprove,
         provider: providerId,
         title,
-        // A resumed session keeps the model it was started with; a provider source brings
-        // its own model choice.
-        model: resumeSession || providerSource ? undefined : (selectedModel ?? undefined),
-        ...(source.modelSource !== undefined && {
-          modelSource: source.modelSource,
-        }),
-        ...(source.sourceModel && { sourceModel: source.sourceModel }),
-        modeId: conversationType === 'acp' ? savedPreference?.modeId : undefined,
-        effort: conversationType === 'acp' ? savedPreference?.effort : undefined,
-        collaborationMode:
-          conversationType === 'acp' ? savedPreference?.collaborationMode : undefined,
+        options: conversationType === 'acp' ? settings.acp.options : undefined,
         type: conversationType,
+        ...(showModelSelect && selectedModel && { model: selectedModel }),
+        ...(source.modelSource !== undefined && { modelSource: source.modelSource }),
+        ...(source.sourceModel && { sourceModel: source.sourceModel }),
         providerSessionId: resumeSession?.sessionId,
         ...(handoffPrompt !== undefined &&
           (conversationType === 'acp'
             ? { initialQueue: [{ text: handoffPrompt }] }
             : { initialPrompt: handoffPrompt })),
       });
-      // A resumed session's choices are its own; don't remember them as defaults.
-      if (!resumeSession) {
-        try {
-          setProviderPreferences((current) =>
-            patchProviderPreference(current, host, providerId, conversationType, {
-              model: selectedModel,
-            })
-          );
-        } catch (preferenceError) {
-          getMementoClient().reportError(preferenceError);
-        }
-      }
       setIsSubmitting(false);
       complete({ conversationId: id, type: conversationType });
     } catch (createError) {
@@ -250,23 +202,20 @@ export const CreateConversationModal = observer(function CreateConversationModal
     conversationMgr,
     liveActionDisabledReason,
     createDisabled,
+    launchSettings.ready,
     isSubmitting,
     providerId,
     title,
     complete,
     projectId,
     taskId,
-    skipPermissions,
+    showAutoApproveToggle,
+    showModelSelect,
     selectedModel,
-    resumeSession,
     source,
-    providerSource,
+    resumeSession,
     useAcp,
     host,
-    savedPreference?.effort,
-    savedPreference?.modeId,
-    savedPreference?.collaborationMode,
-    setProviderPreferences,
   ]);
 
   return (
@@ -277,12 +226,20 @@ export const CreateConversationModal = observer(function CreateConversationModal
       <Dialog.Body>
         <Field.Group>
           <Field.Root>
-            <Field.Label>Agent</Field.Label>
             <AgentSelector
               autoFocus
               value={providerId}
               onChange={handleProviderChange}
               connectionId={connectionId}
+              trailingControl={
+                showAcpToggle ? (
+                  <ConversationTransportToggle
+                    value={transport}
+                    disabled={!launchSettings.ready || isSubmitting}
+                    onValueChange={(value) => launchSettings.setUseChatUi(value === 'acp')}
+                  />
+                ) : null
+              }
             />
           </Field.Root>
           {handoff ? (
@@ -309,9 +266,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
                     <Select.Item key={session.sessionId} value={session.sessionId}>
                       <span className="truncate">{session.title}</span>
                       <span className="ml-2 shrink-0 text-xs text-foreground-muted">
-                        {formatDistanceToNow(session.updatedAt, {
-                          addSuffix: true,
-                        })}
+                        {formatDistanceToNow(session.updatedAt, { addSuffix: true })}
                       </span>
                     </Select.Item>
                   ))}
@@ -323,10 +278,7 @@ export const CreateConversationModal = observer(function CreateConversationModal
             </Field.Root>
           ) : null}
           <ModelSourceSelect agentId={providerId} value={source} onChange={setSource} />
-          {!resumeSession &&
-          !providerSource &&
-          modelOptions &&
-          (allowCustomModel || Object.keys(modelOptions).length > 0) ? (
+          {showModelSelect && modelOptions ? (
             <Field.Root>
               <Field.Label>Model</Field.Label>
               <Select.Root
@@ -351,17 +303,12 @@ export const CreateConversationModal = observer(function CreateConversationModal
                 </Select.Trigger>
                 <Select.Content align="start" width="trigger">
                   <Select.Item value="">Default model</Select.Item>
-                  {!isCustomModel && selectedModel && !modelOptions[selectedModel] ? (
-                    <Select.Item value={selectedModel}>{selectedModel}</Select.Item>
-                  ) : null}
                   {Object.entries(modelOptions).map(([id, option]) => (
                     <Select.Item key={id} value={id}>
                       {option.name}
                     </Select.Item>
                   ))}
-                  {allowCustomModel ? (
-                    <Select.Item value={CUSTOM_MODEL_VALUE}>Custom model…</Select.Item>
-                  ) : null}
+                  <Select.Item value={CUSTOM_MODEL_VALUE}>Custom model…</Select.Item>
                 </Select.Content>
               </Select.Root>
               {isCustomModel ? (
@@ -388,18 +335,10 @@ export const CreateConversationModal = observer(function CreateConversationModal
               <div className="flex items-center gap-2">
                 <Switch
                   checked={skipPermissions}
-                  disabled={!providerId || taskSettings.loading || taskSettings.saving}
-                  onCheckedChange={setAutoApproveOverride}
+                  disabled={!providerId || !launchSettings.ready || isSubmitting}
+                  onCheckedChange={launchSettings.setAutoApprove}
                 />
                 <Field.Label>Auto-approve permissions</Field.Label>
-              </div>
-            </Field.Root>
-          ) : null}
-          {showAcpToggle ? (
-            <Field.Root>
-              <div className="flex items-center gap-2">
-                <Switch checked={useAcp} onCheckedChange={setUseChatUiPreference} />
-                <Field.Label>Use chat UI</Field.Label>
               </div>
             </Field.Root>
           ) : null}
@@ -415,7 +354,12 @@ export const CreateConversationModal = observer(function CreateConversationModal
         <ConfirmButton
           variant="primary"
           onClick={() => void handleCreateConversation()}
-          disabled={Boolean(liveActionDisabledReason) || createDisabled || isSubmitting}
+          disabled={
+            Boolean(liveActionDisabledReason) ||
+            createDisabled ||
+            !launchSettings.ready ||
+            isSubmitting
+          }
         >
           {isSubmitting
             ? handoff

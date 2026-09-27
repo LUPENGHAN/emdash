@@ -20,6 +20,7 @@ const v1Schema = z.object({
       autoApprove: z.boolean().optional(),
       initialPrompt: z.string().optional(),
       initialQueue: z.array(initialQueuePromptSchema).optional(),
+      options: z.record(z.string(), z.union([z.string(), z.boolean()])).optional(),
       model: z.string().optional(),
       /** Model provider source: id, null = the agent's own login, absent = agent default. */
       modelSource: z.string().nullable().optional(),

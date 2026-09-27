@@ -34,6 +34,7 @@ import { acpMcpServers, terminalLaunchForMcp } from '@core/features/agent-librar
 import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registry';
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
+import { getProviderSettingsService } from '@core/features/conversations/node/provider-settings-service';
 import { createConversationDeletionSweepKind } from '@core/features/conversations/node/sweep/conversation-deletion-sweep';
 import { ConversationBackfillService } from '@core/features/conversations/node/sync/conversation-backfill';
 import { ConversationSyncService } from '@core/features/conversations/node/sync/conversation-sync-service';
@@ -923,6 +924,8 @@ export async function bootServices(
     runtimes,
     onError: (context, error) => log.warn(context, { error }),
   });
+  const conversationPreferences = getProviderSettingsService(db);
+  appScope.add(() => conversationPreferences.dispose());
   const conversationSync = new ConversationSyncService({
     db,
     runtimes,

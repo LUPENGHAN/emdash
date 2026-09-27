@@ -107,7 +107,9 @@ export async function handOffConversationTo(
     provider: target.providerId as AgentProviderId,
     title: conversation.title,
     type,
-    ...(target.model && { model: target.model }),
+    // Terminals take --model; chat agents take it as their "model" config option.
+    ...(target.model &&
+      (type === 'acp' ? { options: { model: target.model } } : { model: target.model })),
     ...(type === 'acp' ? { initialQueue: [{ text }] } : { initialPrompt: text }),
   });
   const marker = ` → ${agentDisplayName(target.providerId)}`;

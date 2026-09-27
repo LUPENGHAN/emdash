@@ -49,8 +49,12 @@ export function buildInitialConversation(
         ? { initialPrompt: buildFinalPrompt(state.issueContext, state.prompt) }
         : {}),
     autoApprove: state.autoApprove,
-    // A provider source brings its own model choice; the agent catalog model does not apply.
-    model: usesProviderSource(state.source) ? undefined : (state.model ?? undefined),
+    ...(type === 'acp'
+      ? { options: state.options }
+      : {
+          // A provider source brings its own model choice; the agent catalog model does not apply.
+          model: usesProviderSource(state.source) ? undefined : (state.model ?? undefined),
+        }),
     ...(state.source.modelSource !== undefined && { modelSource: state.source.modelSource }),
     ...(state.source.sourceModel && { sourceModel: state.source.sourceModel }),
     type,

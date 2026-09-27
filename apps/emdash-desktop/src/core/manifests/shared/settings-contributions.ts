@@ -4,6 +4,7 @@ import {
   browserPreviewSettingsContribution,
   browserSettingsContribution,
 } from '@core/features/browser/contributions/settings';
+import { preferredConversationTypeSettingsContribution } from '@core/features/conversations/contributions/settings';
 import { filesSettingsContribution } from '@core/features/editor/contributions/settings';
 import { languageSettingsContribution } from '@core/features/localization/contributions/settings';
 import { modelProvidersSettingsContribution } from '@core/features/model-providers/contributions/settings';
@@ -41,6 +42,7 @@ export const appSettingsSchemaContributions = {
   modelProviders: modelProvidersSettingsContribution,
   remoteAccess: remoteAccessSettingsContribution,
   agentLibrary: agentLibrarySettingsContribution,
+  preferredConversationType: preferredConversationTypeSettingsContribution,
   keyboard: keyboardSettingsContribution,
   notifications: notificationSettingsContribution,
   theme: themeSettingsContribution,

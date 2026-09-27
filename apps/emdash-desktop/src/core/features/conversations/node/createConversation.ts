@@ -99,11 +99,7 @@ export async function createConversation(
       ? {
           version: '1',
           type: 'acp',
-          ...(params.autoApprove !== undefined && { autoApprove: params.autoApprove }),
-          ...(params.model && { model: params.model }),
-          ...(params.modeId && { modeId: params.modeId }),
-          ...(params.effort && { effort: params.effort }),
-          ...(params.collaborationMode && { collaborationMode: params.collaborationMode }),
+          ...(params.options && { options: params.options }),
           ...(params.modelSource !== undefined && { modelSource: params.modelSource }),
           ...(params.sourceModel && { sourceModel: params.sourceModel }),
           ...(initialQueue?.length && { initialQueue }),
