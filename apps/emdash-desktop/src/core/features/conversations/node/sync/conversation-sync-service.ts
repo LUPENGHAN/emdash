@@ -7,6 +7,7 @@ import type { RuntimeBroker } from '@emdash/core/services/runtime-broker/api';
 import { createScope, type Scope } from '@emdash/shared/concurrency';
 import { observe, remote, whenReady } from '@emdash/wire/state';
 import type { AppDb } from '@core/services/app-db/node/db';
+import { conversationWireEvents } from '../event-host';
 import {
   applyConversationSnapshot,
   type ConversationHostIdentity,
@@ -60,11 +61,20 @@ export class ConversationSyncService {
         const parsed = conversationRecordsSchema.parse(snapshot.value ?? {});
         chain = chain
           .then(async () => {
-            await applyConversationSnapshot({
+            const result = await applyConversationSnapshot({
               db: this.options.db,
               host: hostIdentity,
               records: parsed,
             });
+            for (const change of result.sessionIdChanges) {
+              conversationWireEvents.emit(undefined, {
+                type: 'changed',
+                conversationId: change.conversationId,
+                taskId: change.taskId,
+                projectId: change.projectId,
+                changes: { sessionId: change.sessionId },
+              });
+            }
           })
           .catch((error) => {
             this.options.onError?.('conversation snapshot sync', error);

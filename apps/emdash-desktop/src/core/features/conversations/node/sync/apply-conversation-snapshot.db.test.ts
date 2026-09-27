@@ -70,6 +70,7 @@ describe('applyConversationSnapshot', () => {
       markedMissing: 0,
       untracked: 0,
       purgedTombstones: 0,
+      sessionIdChanges: [],
     });
 
     const registry = createConversationRegistry(fixture.db);
@@ -106,6 +107,8 @@ describe('applyConversationSnapshot', () => {
       markedMissing: 0,
       untracked: 0,
       purgedTombstones: 0,
+      // Unchanged handles (and unlinked rows) are not reported.
+      sessionIdChanges: [],
     });
   });
 
@@ -178,6 +181,15 @@ describe('applyConversationSnapshot', () => {
       markedMissing: 0,
       untracked: 0,
       purgedTombstones: 0,
+      // The window holding conv-1 learns its new resume handle from this.
+      sessionIdChanges: [
+        {
+          conversationId: 'conv-1',
+          taskId: 'task-1',
+          projectId: 'project-1',
+          sessionId: 'rebound-session',
+        },
+      ],
     });
     expect(registry.getLive('conv-1')).toMatchObject({
       // Host wins wholesale — the cache is not the authority.
@@ -223,6 +235,7 @@ describe('applyConversationSnapshot', () => {
       markedMissing: 1,
       untracked: 1,
       purgedTombstones: 0,
+      sessionIdChanges: [],
     });
     expect(registry.getLive('linked-gone')).toMatchObject({
       observedStatus: 'missing',
@@ -262,6 +275,7 @@ describe('applyConversationSnapshot', () => {
       markedMissing: 0,
       untracked: 0,
       purgedTombstones: 1,
+      sessionIdChanges: [],
     });
     expect(registry.getLive('tombstoned-linked')).toBeUndefined();
   });
@@ -322,6 +336,7 @@ describe('applyConversationSnapshot', () => {
       markedMissing: 0,
       untracked: 0,
       purgedTombstones: 0,
+      sessionIdChanges: [],
     });
     expect(registry.getLive('remote-conv')).toMatchObject({ observedStatus: 'present' });
   });

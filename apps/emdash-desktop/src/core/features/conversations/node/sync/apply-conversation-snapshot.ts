@@ -35,6 +35,16 @@ export interface ApplyConversationSnapshotResult {
   untracked: number;
   /** Tombstoned rows whose host record this delivery confirmed gone (ADR 0006). */
   purgedTombstones: number;
+  /**
+   * Task conversations whose resume handle this delivery set or changed. The runtime
+   * records it after launch, so windows holding the conversation learn it from here.
+   */
+  sessionIdChanges: {
+    conversationId: string;
+    taskId: string;
+    projectId: string;
+    sessionId: string;
+  }[];
 }
 
 /**
@@ -71,6 +81,7 @@ function applyConversationSnapshotTx(
     markedMissing: 0,
     untracked: 0,
     purgedTombstones: 0,
+    sessionIdChanges: [],
   };
 
   const seen = new Set<string>();
@@ -94,6 +105,19 @@ function applyConversationSnapshotTx(
     }
     registry.refresh(record.conversationId, observationFor(record, input.host, observedAt), tx);
     counts.refreshed += 1;
+    if (
+      record.providerSessionId !== null &&
+      record.providerSessionId !== existing.providerSessionId &&
+      existing.taskId !== null &&
+      existing.projectId !== null
+    ) {
+      counts.sessionIdChanges.push({
+        conversationId: record.conversationId,
+        taskId: existing.taskId,
+        projectId: existing.projectId,
+        sessionId: record.providerSessionId,
+      });
+    }
   }
 
   for (const row of hostRows) {
