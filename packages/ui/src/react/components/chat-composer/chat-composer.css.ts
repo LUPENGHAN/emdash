@@ -192,6 +192,7 @@ export const toolbar = style({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
+  gap: '0.25rem',
   paddingLeft: '0.5rem',
   paddingRight: '0.5rem',
   paddingTop: '0.25rem',
@@ -203,6 +204,9 @@ export const toolbarLeft = style({
   alignItems: 'center',
   gap: '0.375rem',
   minHeight: '2rem',
+  // Narrow (phone) widths wrap the controls instead of pushing send out of view.
+  flexWrap: 'wrap',
+  minWidth: 0,
 });
 
 export const mcpNameGroup = style({
@@ -221,7 +225,12 @@ export const mcpErrorText = style({
   overflowWrap: 'anywhere',
   whiteSpace: 'pre-wrap',
 });
-export const toolbarRight = style({ display: 'flex', alignItems: 'center', gap: '0.25rem' });
+export const toolbarRight = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.25rem',
+  flexShrink: 0,
+});
 
 export const permissionModeTrigger = style({
   paddingLeft: '0.1875rem',

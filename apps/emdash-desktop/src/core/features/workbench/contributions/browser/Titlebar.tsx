@@ -6,7 +6,10 @@ import { detectPlatformContext } from '@core/primitives/keybindings/api';
 import { cn } from '@core/primitives/styling/browser/cn';
 
 const platform = detectPlatformContext().os;
-const isMac = platform === 'mac';
+// Only the desktop window has traffic lights; the same UI in a browser (remote access,
+// where an iPad also reports itself as a Mac) has none to clear room for.
+const hasTrafficLights =
+  platform === 'mac' && typeof navigator !== 'undefined' && /Electron\//.test(navigator.userAgent);
 const isLinux = platform === 'linux';
 
 export function Titlebar({ leftSlot, rightSlot }: { leftSlot?: ReactNode; rightSlot?: ReactNode }) {
@@ -16,7 +19,7 @@ export function Titlebar({ leftSlot, rightSlot }: { leftSlot?: ReactNode; rightS
       className={cn(
         'flex h-10 shrink-0 items-center bg-background-secondary border-b border-border [-webkit-app-region:drag]',
         // macOS traffic lights sit at the top-left, so clear room only there.
-        !isLeftOpen && isMac && 'pl-18',
+        !isLeftOpen && hasTrafficLights && 'pl-18',
         // Linux draws its own controls flush to the right corner (no native
         // frame); everywhere else keep the normal right padding.
         isLinux ? 'pr-0' : 'pr-2'
@@ -24,11 +27,11 @@ export function Titlebar({ leftSlot, rightSlot }: { leftSlot?: ReactNode; rightS
     >
       <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1">
         <div className="flex w-full items-center justify-between">
-          <div className="flex items-center justify-start [-webkit-app-region:no-drag]">
+          <div className="flex min-w-0 items-center justify-start [-webkit-app-region:no-drag]">
             {!isLeftOpen && <SidebarRecoveryControls onShowSidebar={toggleLeftSidebar} />}
             {leftSlot}
           </div>
-          <div className="flex items-center justify-end gap-1 [-webkit-app-region:no-drag]">
+          <div className="flex shrink-0 items-center justify-end gap-1 [-webkit-app-region:no-drag]">
             {rightSlot}
           </div>
         </div>

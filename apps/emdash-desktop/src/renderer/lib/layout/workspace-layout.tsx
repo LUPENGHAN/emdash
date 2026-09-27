@@ -1,6 +1,8 @@
 import { Resizable, useCollapsiblePanelBinding } from '@emdash/ui/react/primitives';
-import { type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useWorkspaceLayoutContext } from '@core/features/workbench/contributions/browser/layout-provider';
+import { getNavigation } from '@core/primitives/navigation/browser/navigation-selectors';
+import { useCompactLayout } from '@core/primitives/react-hooks/browser/use-compact-layout';
 
 const LEFT_PANEL_DEFAULT_SIZE = '20%';
 // Resize floor (the released builds' value): dragging shrinks the sidebar only
@@ -24,7 +26,34 @@ interface WorkspaceLayoutProps {
   mainContent: ReactNode;
 }
 
-export function WorkspaceLayout({ leftSidebar, mainContent }: WorkspaceLayoutProps) {
+export function WorkspaceLayout(props: WorkspaceLayoutProps) {
+  const compact = useCompactLayout();
+  return compact ? <CompactWorkspaceLayout {...props} /> : <ColumnsWorkspaceLayout {...props} />;
+}
+
+/**
+ * Phone layout: one full-screen view at a time. The project/task list (the left sidebar)
+ * covers the main view while open, and closes once something in it is opened.
+ */
+function CompactWorkspaceLayout({ leftSidebar, mainContent }: WorkspaceLayoutProps) {
+  const { isLeftOpen, toggleLeftSidebar } = useWorkspaceLayoutContext();
+  useEffect(() => {
+    if (!isLeftOpen) return;
+    // Any direct navigation (even to the view already shown) means something was opened.
+    return getNavigation().onDidNavigate.subscribe((event) => {
+      if (event.source === 'direct') toggleLeftSidebar();
+    });
+  }, [isLeftOpen, toggleLeftSidebar]);
+
+  return (
+    <div className="relative h-full w-full overflow-hidden">
+      {mainContent}
+      {isLeftOpen && <div className="absolute inset-0 z-40 bg-background">{leftSidebar}</div>}
+    </div>
+  );
+}
+
+function ColumnsWorkspaceLayout({ leftSidebar, mainContent }: WorkspaceLayoutProps) {
   const { isLeftOpen, toggleLeftSidebar, layoutStorage } = useWorkspaceLayoutContext();
   const binding = useCollapsiblePanelBinding({
     storageKey: 'workspace-outer',

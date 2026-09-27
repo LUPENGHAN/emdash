@@ -1,5 +1,6 @@
 import { Button, Resizable, toast, useCollapsiblePanelBinding } from '@emdash/ui/react/primitives';
 import { Loader2 } from 'lucide-react';
+import { reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -17,6 +18,7 @@ import { useWorkspaceLayoutContext } from '@core/features/workbench/contribution
 import { getWorkspacesWireClient } from '@core/features/workspaces/api/browser/client';
 import { projectAvailabilityUi } from '@core/manifests/browser/project-availability-ui';
 import { createLayoutStorage } from '@core/primitives/mementos/browser';
+import { useCompactLayout } from '@core/primitives/react-hooks/browser/use-compact-layout';
 import { TaskMainColumn } from './view/task-main-column';
 import { TaskSidebar } from './view/task-sidebar';
 
@@ -350,6 +352,16 @@ const ReadyTaskMainPanel = observer(function ReadyTaskMainPanel() {
   // as a derived condition — no task-chrome mutation, no task-side restore.
   const { isZenActive } = useWorkspaceLayoutContext();
   const isSidebarOpen = !taskView.isSidebarCollapsed && !isZenActive;
+  const compact = useCompactLayout();
+  // On a phone the side panel covers the task, so opening something from it (a diff, a
+  // file, a conversation) closes the panel to show what was opened.
+  useEffect(() => {
+    if (!compact || !isSidebarOpen) return;
+    return reaction(
+      () => JSON.stringify(taskView.paneLayout.snapshot),
+      () => taskView.chrome.commands.collapseSidebar()
+    );
+  }, [compact, isSidebarOpen, taskView]);
 
   // One storage facade per composition. ReadyTaskMainPanel renders below the
   // task view's space.isHydrated gate, so synchronous reads are safe by
@@ -367,6 +379,22 @@ const ReadyTaskMainPanel = observer(function ReadyTaskMainPanel() {
     onCloseRequest: () => taskView.chrome.commands.collapseSidebar(),
     closeThreshold: SIDEBAR_CLOSE_THRESHOLD,
   });
+
+  if (compact) {
+    // Phone layout: the side panel (changes, files, conversations) covers the task.
+    return (
+      <taskTabView.TabLayoutProvider layout={taskView.paneLayout}>
+        <div className="relative h-full w-full overflow-hidden">
+          <TaskMainColumn />
+          {isSidebarOpen && (
+            <div className="absolute inset-0 z-30 bg-background">
+              <TaskSidebar />
+            </div>
+          )}
+        </div>
+      </taskTabView.TabLayoutProvider>
+    );
+  }
 
   return (
     <taskTabView.TabLayoutProvider layout={taskView.paneLayout}>

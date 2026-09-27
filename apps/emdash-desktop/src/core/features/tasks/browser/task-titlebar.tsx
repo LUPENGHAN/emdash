@@ -50,6 +50,7 @@ import { formatDiffLineCount } from '@core/primitives/formatting/browser/format-
 import { BoundShortcut } from '@core/primitives/keybindings/browser/shortcut';
 import { linkedIssueDisplayIdentifier, type LinkedIssue } from '@core/primitives/linked-issues/api';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
+import { useCompactLayout } from '@core/primitives/react-hooks/browser/use-compact-layout';
 import { cn } from '@core/primitives/styling/browser/cn';
 import { ActivityBadge } from './components/activity-badge';
 import { AutomationRunPill } from './components/automation-run-pill';
@@ -112,6 +113,7 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
   const taskPayload = getRegisteredTaskData(projectId, taskId);
   const workspace = useWorkspace();
   const taskView = useTaskComposition();
+  const compact = useCompactLayout();
   const gitCheckout = workspace.get(gitCheckoutStoreToken);
 
   const {
@@ -143,20 +145,25 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
   return (
     <Titlebar
       leftSlot={
-        <div className="flex items-center gap-1 px-2">
-          <button
-            type="button"
-            className="text-sm text-foreground-passive hover:text-foreground"
-            onClick={() => navigate(projectViewDef({ projectId }))}
-          >
-            {projectName}
-          </button>
-          <span className="text-sm text-foreground-passive">/</span>
+        <div className="flex min-w-0 items-center gap-1 px-2">
+          {/* Phones show just the task; the project list is one tap away. */}
+          {compact ? null : (
+            <>
+              <button
+                type="button"
+                className="text-sm text-foreground-passive hover:text-foreground"
+                onClick={() => navigate(projectViewDef({ projectId }))}
+              >
+                {projectName}
+              </button>
+              <span className="text-sm text-foreground-passive">/</span>
+            </>
+          )}
           <Popover.Root>
             <Tooltip.Root>
               <Tooltip.Trigger
                 render={
-                  <Popover.Trigger className="flex items-center gap-1 text-sm text-foreground-muted hover:text-foreground">
+                  <Popover.Trigger className="flex min-w-0 items-center gap-1 text-sm text-foreground-muted hover:text-foreground">
                     <span className="flex min-w-0 items-center gap-1.5">
                       <span className="max-w-56 truncate">{taskDisplayName(taskStore)}</span>
                       <ConnectionStatusDot state={workspace.connectionState} />
@@ -313,16 +320,21 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
       }
       rightSlot={
         <div className="flex items-center gap-2">
-          <ActivityBadge projectId={projectId} taskId={taskId} />
-          <PreviewServerPills />
-          <OpenInMenu
-            path={workspace.path}
-            className="h-7 bg-transparent"
-            borderless
-            isRemote={isRemoteProject}
-            sshConnectionId={workspace.sshConnectionId}
-          />
-          <Separator orientation="vertical" className="h-5 self-center!" />
+          {/* On a phone, "open in" would open apps on the computer running Emdash. */}
+          {compact ? null : (
+            <>
+              <ActivityBadge projectId={projectId} taskId={taskId} />
+              <PreviewServerPills />
+              <OpenInMenu
+                path={workspace.path}
+                className="h-7 bg-transparent"
+                borderless
+                isRemote={isRemoteProject}
+                sshConnectionId={workspace.sshConnectionId}
+              />
+              <Separator orientation="vertical" className="h-5 self-center!" />
+            </>
+          )}
           <Tooltip.Root>
             <Tooltip.Trigger>
               <Toggle

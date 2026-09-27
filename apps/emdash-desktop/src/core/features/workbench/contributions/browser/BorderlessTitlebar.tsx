@@ -5,7 +5,10 @@ import { detectPlatformContext } from '@core/primitives/keybindings/api';
 import { cn } from '@core/primitives/styling/browser/cn';
 
 const platform = detectPlatformContext().os;
-const isMac = platform === 'mac';
+// Only the desktop window has traffic lights; the same UI in a browser (remote access,
+// where an iPad also reports itself as a Mac) has none to clear room for.
+const hasTrafficLights =
+  platform === 'mac' && typeof navigator !== 'undefined' && /Electron\//.test(navigator.userAgent);
 const isLinux = platform === 'linux';
 
 export function BorderlessTitlebar() {
@@ -16,7 +19,7 @@ export function BorderlessTitlebar() {
       data-borderless-titlebar
       className={cn(
         'absolute inset-x-0 top-0 z-20 flex h-10 items-center bg-background [-webkit-app-region:drag]',
-        !isLeftOpen && isMac && 'pl-18',
+        !isLeftOpen && hasTrafficLights && 'pl-18',
         isLinux ? 'pr-0' : 'pr-2'
       )}
     >
