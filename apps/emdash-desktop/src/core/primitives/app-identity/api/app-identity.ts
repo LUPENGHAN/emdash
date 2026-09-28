@@ -1,4 +1,6 @@
-type ImportMetaWithEnv = ImportMeta & { env?: { DEV?: boolean; VITE_BUILD?: string } };
+type ImportMetaWithEnv = ImportMeta & {
+  env?: { DEV?: boolean; VITE_BUILD?: string; VITE_FORK_VERSION?: string };
+};
 
 const env = (import.meta as ImportMetaWithEnv).env;
 const isDev = env?.DEV === true;
@@ -28,3 +30,14 @@ export const R2_BASE_URL = 'https://releases.emdash.sh';
 export const IS_CANARY = isCanary;
 /** Fork builds never auto-update: official releases would replace the fork's changes. */
 export const IS_FORK = isFork;
+
+/**
+ * The fork's own build number, stamped by its install script: `fork.<commits on top of
+ * the official release> (<commit>)`. Absent from official builds.
+ */
+export const FORK_VERSION = isFork ? env?.VITE_FORK_VERSION || undefined : undefined;
+
+/** The version as shown to people: the official one, plus the fork's build when a fork. */
+export function displayVersion(version: string): string {
+  return FORK_VERSION ? `${version} · ${FORK_VERSION}` : version;
+}

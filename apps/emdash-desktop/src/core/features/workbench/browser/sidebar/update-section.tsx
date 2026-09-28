@@ -2,6 +2,7 @@ import { Button, MicroLabel } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
 import { settingsViewDef } from '@core/features/settings/contributions/views';
 import { getUpdateStore } from '@core/features/updates/contributions/app-stores';
+import { displayVersion } from '@core/primitives/app-identity/api/app-identity';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 
 export const UpdateSection = observer(function UpdateSection() {
@@ -27,7 +28,7 @@ export const UpdateSection = observer(function UpdateSection() {
 
   return (
     <MicroLabel className="inline-flex h-6 items-center text-foreground-passive lowercase">
-      v{update.currentVersion}
+      v{displayVersion(update.currentVersion)}
     </MicroLabel>
   );
 });

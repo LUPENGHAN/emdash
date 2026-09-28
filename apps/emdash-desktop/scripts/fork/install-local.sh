@@ -13,7 +13,13 @@ pnpm run build >/dev/null # workspace packages (desktop output is rebuilt below)
 
 cd "$app_dir"
 # Built directly, not via nx, so the cached stable build is never reused.
-VITE_BUILD=fork pnpm exec electron-vite build >/dev/null
+# The fork's build number, shown next to the official version: commits on top of the
+# official release, the commit itself, and "+dirty" for uncommitted changes.
+upstream_ref="$(git rev-parse --verify --quiet upstream/main || true)"
+fork_commits="$(git rev-list --count "${upstream_ref:+$upstream_ref..}HEAD")"
+fork_version="fork.${fork_commits} ($(git rev-parse --short=7 HEAD)$(test -z "$(git status --porcelain)" || echo '+dirty'))"
+echo "Building Emdash Fork $(node -p 'require("./package.json").version') · $fork_version"
+VITE_BUILD=fork VITE_FORK_VERSION="$fork_version" pnpm exec electron-vite build >/dev/null
 rm -rf release/mac-arm64
 CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac dir --arm64 \
   --publish never --config electron-builder.fork.config.ts

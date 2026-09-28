@@ -2,7 +2,7 @@ import { UpdateCard as UpdateCardUi, type UpdateStatus } from '@emdash/ui/react/
 import { observer } from 'mobx-react-lite';
 import type React from 'react';
 import { getUpdateStore } from '@core/features/updates/contributions/app-stores';
-import { PRODUCT_NAME } from '@core/primitives/app-identity/api/app-identity';
+import { displayVersion, PRODUCT_NAME } from '@core/primitives/app-identity/api/app-identity';
 
 export const UpdateCard = observer(function UpdateCard(): React.JSX.Element {
   const update = getUpdateStore();
@@ -46,7 +46,7 @@ export const UpdateCard = observer(function UpdateCard(): React.JSX.Element {
 
   return (
     <UpdateCardUi
-      currentVersion={update.currentVersion}
+      currentVersion={displayVersion(update.currentVersion)}
       appName={PRODUCT_NAME}
       status={status}
       error={
