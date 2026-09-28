@@ -41,6 +41,7 @@ import {
 import {
   decodeLegacyTmuxSessionName,
   killTmuxSession,
+  listTmuxPanePids,
   listTmuxSessionActivity,
   logLocalPtySpawnWarnings,
   makeLegacyTmuxSessionName,
@@ -48,6 +49,7 @@ import {
   PtyRegistry,
   resolveLocalPtySpawn,
   resolveTmuxSession,
+  waitForLocalProcessesToExit,
   tmuxIdentityActivityKey,
   type PtyExitInfo,
   type PtySession,
@@ -70,6 +72,8 @@ const RESUME_FALLBACK_WINDOW_MS = 3_000;
 const RESPAWN_DELAY_MS = 500;
 const MAX_UNEXPECTED_RESPAWNS = 1;
 const BUSY_OUTPUT_WINDOW_MS = 60_000;
+/** How long deleting a tmux-backed session waits for its agent to exit after the kill. */
+const TMUX_EXIT_WAIT_MS = 3_000;
 
 type TuiAgentSession = {
   conversationId: string;
@@ -201,8 +205,11 @@ export class TuiAgentsRuntime {
         { name: 'tmux-session', run: (key) => this.killTmuxForConfig(this.configs.get(key)) },
         {
           name: 'pty-registry',
-          run: (key) => {
-            this.registry.dispose(key);
+          // Waits for the agent to exit: a replacement conversation (restart on another
+          // provider, switch to chat UI) resumes the same session right after, and an
+          // agent still shutting down holds it (Codex: "open in another app").
+          run: async (key) => {
+            await this.registry.disposeAndWait(key);
           },
         },
         {
@@ -1054,12 +1061,16 @@ export class TuiAgentsRuntime {
       sessionName = resolved.exists ? resolved.name : undefined;
     }
     if (!sessionName) return;
+    // The agent runs under the tmux server, not our PTY: note it before the kill so we
+    // can wait for it to exit (and release its session) like an untmuxed agent.
+    const panePids = await listTmuxPanePids(this.deps.exec, sessionName);
     await killTmuxSession(this.deps.exec, sessionName, (error) => {
       this.deps.logger.debug('TuiAgentsRuntime: tmux session not found or already stopped', {
         sessionName,
         error: String(error),
       });
     });
+    await waitForLocalProcessesToExit(panePids, TMUX_EXIT_WAIT_MS);
   }
 
   private normalizePlatformInput(input: TuiAgentStartInput): TuiAgentStartInput {

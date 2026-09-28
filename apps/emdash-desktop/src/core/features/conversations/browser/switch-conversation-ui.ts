@@ -1,8 +1,8 @@
 import { toast } from '@emdash/ui/react/primitives';
-import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
 import type { Conversation, ConversationType } from '@core/primitives/conversations/api';
 import { log } from '@core/primitives/logging/browser/logger';
+import { currentChoice, restartConversation } from './restart-conversation';
 
 /** Providers whose session ids resume both in the CLI (--resume) and in ACP (session/load). */
 // Pi has no chat (ACP) adapter, so it stays terminal-only.
@@ -27,30 +27,17 @@ export function canSwitchConversationUi(conversation: Conversation): boolean {
 }
 
 /**
- * Reopens a conversation's session in the other UI. The current conversation is removed
- * first (killing its agent, so two processes never write one session), then a new one of
- * the other type resumes the same session: terminal via --resume, chat via session/load.
- * Provider session files are untouched, so a failure leaves it resumable from History.
+ * Reopens a conversation's session in the other UI, on the same provider, model and
+ * approval setting: terminal via --resume, chat via session/load. See
+ * `restartConversation`, which it shares with restarting on another provider.
  */
 export async function switchConversationUi(
   conversation: Conversation
 ): Promise<{ conversationId: string; type: ConversationType }> {
-  const manager = conversationRegistry.get(conversation.taskId);
-  if (!manager) throw new Error('The task is not loaded');
-  const sessionId = conversation.sessionId;
-  if (!sessionId) throw new Error('The conversation has no session to resume');
   const type = switchTarget(conversation);
-
-  await manager.deleteConversation(conversation.id);
-  const created = await manager.createConversation({
-    id: crypto.randomUUID(),
-    projectId: conversation.projectId,
-    taskId: conversation.taskId,
-    provider: conversation.providerId,
-    title: conversation.title,
+  const created = await restartConversation(conversation, currentChoice(conversation), {
     type,
-    providerSessionId: sessionId,
-    isInitialConversation: conversation.isInitialConversation ?? undefined,
+    requireSession: true,
   });
   return { conversationId: created.id, type };
 }

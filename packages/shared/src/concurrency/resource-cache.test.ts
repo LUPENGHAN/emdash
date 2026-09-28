@@ -111,6 +111,37 @@ describe('createResourceCache', () => {
     await cache.dispose();
   });
 
+  it('evicts an idle entry at once, but never one still held', async () => {
+    const clock = createManualClock();
+    const cleanup = vi.fn();
+    const cache = createResourceCache({
+      key: (key: string) => key,
+      idleTtlMs: 60_000,
+      clock,
+      create: (key: string, scope: Scope) => {
+        scope.add(cleanup);
+        return { key };
+      },
+    });
+
+    const first = cache.acquire('same');
+    const second = cache.acquire('same');
+    await first.ready();
+    await second.ready();
+    await first.release();
+    expect(await cache.evictIfIdle('same')).toBe(false);
+    expect(cleanup).not.toHaveBeenCalled();
+
+    await second.release();
+    expect(cache.peek('same')).toBeDefined();
+    expect(await cache.evictIfIdle('same')).toBe(true);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(cache.peek('same')).toBeUndefined();
+    expect(await cache.evictIfIdle('missing')).toBe(false);
+
+    await cache.dispose();
+  });
+
   it('maps expected acquire errors to err results', async () => {
     const expected = { type: 'test-error', message: 'boom' } as const;
     const cache = createResourceCache({

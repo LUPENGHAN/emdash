@@ -143,6 +143,8 @@ export const plugin = definePlugin(
   { icon }
 );
 
+const NO_DAEMON_FLAG = '--no-daemon';
+
 export const provider = registerPluginBehavior(plugin, {
   acp: {
     buildSpawn: (ctx) => ({
@@ -170,18 +172,28 @@ export const provider = registerPluginBehavior(plugin, {
     },
   },
   prompt: {
+    // Newer Codex runs terminal sessions in a shared background server that keeps the
+    // session open after Emdash stops the terminal, so resuming it elsewhere (another
+    // provider, the chat UI) is refused as "open in another app". Emdash owns the
+    // agent's lifetime, so the session stays in the process it starts.
+    probeFlags: [NO_DAEMON_FLAG],
     buildCommand: (ctx) =>
-      buildStandardCommand(ctx, {
-        autoApproveFlag:
-          '-c approval_policy=never -c sandbox_mode=danger-full-access --dangerously-bypass-hook-trust',
-        initialPromptFlag: '',
-        resumeFlag: 'resume',
-        sessionIdFlag: ' ',
-        sessionIdOnResumeOnly: true,
-        resumeWithoutSessionFlag: 'resume --last',
-        deduplicateFlags: ['--dangerously-bypass-approvals-and-sandbox'],
-        modelFlag: '-m',
-      }),
+      buildStandardCommand(
+        ctx.supportedFlags?.includes(NO_DAEMON_FLAG)
+          ? { ...ctx, extraArgs: [...(ctx.extraArgs ?? []), NO_DAEMON_FLAG] }
+          : ctx,
+        {
+          autoApproveFlag:
+            '-c approval_policy=never -c sandbox_mode=danger-full-access --dangerously-bypass-hook-trust',
+          initialPromptFlag: '',
+          resumeFlag: 'resume',
+          sessionIdFlag: ' ',
+          sessionIdOnResumeOnly: true,
+          resumeWithoutSessionFlag: 'resume --last',
+          deduplicateFlags: ['--dangerously-bypass-approvals-and-sandbox', NO_DAEMON_FLAG],
+          modelFlag: '-m',
+        }
+      ),
   },
   hooks: buildCodexHookConfig(),
   mcp: codexMcpAdapter(),

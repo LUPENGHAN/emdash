@@ -43,11 +43,18 @@ export type ResolvedAuthProvider = {
   behavior?: IAgentAuthBehavior;
 };
 
+const CLI_HELP_TIMEOUT_MS = 10_000;
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export type ResolvedTuiProvider = {
   name: string;
   prompt: CLIAgentPluginProvider['capabilities']['prompt'];
   hooks: CLIAgentPluginProvider['capabilities']['hooks'];
   buildCommand: NonNullable<CLIAgentPluginProvider['behavior']['prompt']>['buildCommand'];
+  probeFlags?: readonly string[];
   parseHookEvent?: NonNullable<CLIAgentPluginProvider['behavior']['hooks']>['parseHookEvent'];
   validateSessionId?: NonNullable<
     CLIAgentPluginProvider['behavior']['sessions']
@@ -89,6 +96,8 @@ export class AgentPluginHost {
   private readonly platform: Platform;
   private readonly agentEnvPlatform: AgentEnvPlatform;
   private readonly spawnContext: SpawnContextResolver;
+  /** `--help` output per CLI path, for `probeFlags`. */
+  private readonly cliHelp = new Map<string, Promise<string>>();
   private readonly checkAuthStatusOnce: (
     providerId: string
   ) => Promise<Result<AgentAuthStatus, AgentHostError>>;
@@ -175,6 +184,7 @@ export class AgentPluginHost {
       prompt: plugin.capabilities.prompt,
       hooks: plugin.capabilities.hooks,
       buildCommand: prompt.buildCommand,
+      probeFlags: prompt.probeFlags,
       parseHookEvent: plugin.behavior.hooks?.parseHookEvent,
       validateSessionId: plugin.behavior.sessions?.validateSessionId,
     };
@@ -186,6 +196,8 @@ export class AgentPluginHost {
 
   invalidateSpawnContext(providerId?: string): void {
     this.spawnContext.invalidate(providerId);
+    // An install or update may have replaced the binary behind the same path.
+    this.cliHelp.clear();
   }
 
   dispose(): Promise<void> {
@@ -275,7 +287,18 @@ export class AgentPluginHost {
     if (!provider) return err({ type: 'capability-unsupported', providerId, capability: 'prompt' });
     const spawnContext = await this.resolveSpawnContext(providerId);
     if (!spawnContext.success) return err(spawnContext.error);
-    const command = provider.buildCommand({ ...ctx, cli: spawnContext.data.cli });
+    const supportedFlags = provider.probeFlags?.length
+      ? await this.supportedFlags(
+          spawnContext.data.cli,
+          provider.probeFlags,
+          spawnContext.data.agentEnv
+        )
+      : undefined;
+    const command = provider.buildCommand({
+      ...ctx,
+      cli: spawnContext.data.cli,
+      ...(supportedFlags && { supportedFlags }),
+    });
     return ok({
       ...command,
       env: mergeAgentEnvLayers(this.agentEnvPlatform, spawnContext.data.agentEnv, command.env),
@@ -339,6 +362,24 @@ export class AgentPluginHost {
         env: { ...agentEnv },
       })
     );
+  }
+
+  /** The `flags` a CLI's `--help` lists; a CLI whose help cannot be read supports none. */
+  private async supportedFlags(
+    cli: string,
+    flags: readonly string[],
+    env: Record<string, string>
+  ): Promise<string[]> {
+    let help = this.cliHelp.get(cli);
+    if (!help) {
+      help = this.deps.exec
+        .exec(cli, ['--help'], { env: { ...env }, timeout: CLI_HELP_TIMEOUT_MS })
+        .then(({ stdout }) => stdout)
+        .catch(() => '');
+      this.cliHelp.set(cli, help);
+    }
+    const text = await help;
+    return flags.filter((flag) => new RegExp(`(^|\\s)${escapeRegExp(flag)}\\b`, 'm').test(text));
   }
 
   private resolveMcpBehavior(

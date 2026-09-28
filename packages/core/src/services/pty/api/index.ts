@@ -26,6 +26,7 @@ export {
   type ProcessInfo,
   type ProcessTreeSnapshot,
 } from './process-tree';
+export { isLocalProcessAlive, waitForLocalProcessesToExit } from './process-exit';
 export { PtyRegistry } from './pty-registry';
 export type { PtyRegistryOptions } from './pty-registry';
 export { PtySession } from './pty-session';
@@ -33,6 +34,7 @@ export type { PtySessionOptions } from './pty-session';
 export {
   buildTmuxShellLine,
   killTmuxSession,
+  listTmuxPanePids,
   listTmuxSessions,
   type TmuxSessionInventoryEntry,
 } from './tmux-commands';

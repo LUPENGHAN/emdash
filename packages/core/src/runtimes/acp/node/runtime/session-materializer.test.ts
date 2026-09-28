@@ -231,6 +231,7 @@ function materializerHarness(
     acquire: vi.fn(() => ({ ready: async () => connection, release })),
     peek: () => connection,
     invalidate: async () => {},
+    evictIfIdle: async () => false,
     dispose: async () => {},
   };
   const scope = createScope({ label: 'session-materializer-test' });

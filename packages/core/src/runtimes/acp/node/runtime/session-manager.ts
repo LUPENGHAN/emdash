@@ -453,6 +453,11 @@ export class SessionManager {
       );
       await entry.forceRemove('conversation killed');
       this.removeHandle(entry);
+      // An idle adapter would otherwise linger for the pool's idle TTL still holding
+      // the session open (Codex's app-server keeps its thread loaded), so resuming it
+      // elsewhere right away (the terminal, another provider) is refused as in use.
+      const { providerId, cwd, env } = entry.descriptor;
+      await this.connections.evictIfIdle({ providerId, cwd, env });
       return ok();
     }
 

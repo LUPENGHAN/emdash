@@ -69,4 +69,46 @@ describe('PtyRegistry', () => {
       argv: [],
     });
   });
+
+  it('disposeAndWait waits for the killed process tree, but not forever', async () => {
+    let finish!: () => void;
+    const proc = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          })
+      ),
+      onData: vi.fn(),
+      onExit: vi.fn(),
+    };
+    const registry = new PtyRegistry({ spawn: () => proc });
+    await registry.create('agent', spec);
+
+    let done = false;
+    const waiting = registry.disposeAndWait('agent').then((disposed) => {
+      done = disposed;
+    });
+    await Promise.resolve();
+    expect(proc.kill).toHaveBeenCalledOnce();
+    expect(registry.get('agent')).toBeUndefined();
+    expect(done).toBe(false);
+
+    finish();
+    await waiting;
+    expect(done).toBe(true);
+
+    await registry.create('stuck', spec);
+    vi.useFakeTimers();
+    try {
+      const stuck = registry.disposeAndWait('stuck', 1000);
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(stuck).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await registry.disposeAndWait('missing')).toBe(false);
+  });
 });

@@ -76,6 +76,12 @@ export function createReplicaResourceCache<K, T>(
       const entry = retention.peek(key);
       return entry?.value.hasValue === true ? entry.value.value : undefined;
     },
+    async evictIfIdle(key): Promise<boolean> {
+      const entry = retention.peek(key);
+      if (!entry || retention.isRetained(key) || entry.value.createPromise) return false;
+      await retention.evict(key);
+      return true;
+    },
     async invalidate(key): Promise<void> {
       await retention.evict(key);
     },

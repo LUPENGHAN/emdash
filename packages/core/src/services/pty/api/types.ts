@@ -14,7 +14,8 @@ export interface PtyExitInfo {
 export interface PtyProcess {
   write(data: string): void;
   resize(cols: number, rows: number): void;
-  kill(): void;
+  /** May resolve once the process tree is gone; see `PtySession.dispose`. */
+  kill(): void | Promise<void>;
   onData(handler: (data: string) => void): void;
   onExit(handler: (info: PtyExitInfo) => void): void;
   getPid?(): number;

@@ -193,4 +193,39 @@ describe('PosixPtyTerminator', () => {
     expect(process.kill).toHaveBeenCalledWith(5678, 'SIGTERM');
     expect(process.kill).not.toHaveBeenCalledWith(5678, 'SIGKILL');
   });
+
+  it('resolves the kill only once the process group is gone', async () => {
+    let groupAlive = true;
+    vi.mocked(process.kill).mockImplementation((pid, signal) => {
+      if (pid === -1234 && signal === 0 && !groupAlive) {
+        throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      }
+      return true;
+    });
+    let done = false;
+    void terminator.kill(1234, killPty).then(() => {
+      done = true;
+    });
+    await flushSnapshot();
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(done).toBe(false);
+
+    groupAlive = false;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(done).toBe(true);
+  });
+
+  it('stops waiting shortly after the SIGKILL escalation', async () => {
+    let done = false;
+    void terminator.kill(1234, killPty).then(() => {
+      done = true;
+    });
+    await flushSnapshot();
+
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(done).toBe(true);
+  });
 });

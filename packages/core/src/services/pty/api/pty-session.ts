@@ -18,6 +18,7 @@ export class PtySession {
   readonly startedAt = Date.now();
   private disposed = false;
   private exitInfo: PtyExitInfo | null = null;
+  private termination: Promise<void> | null = null;
 
   constructor(
     readonly key: string,
@@ -70,13 +71,30 @@ export class PtySession {
 
   kill(): void {
     if (this.disposed) return;
-    this.process.kill();
+    const termination = this.process.kill();
+    if (termination && !this.termination) this.termination = termination.catch(() => {});
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.kill();
     this.disposed = true;
+  }
+
+  /**
+   * Resolves once a killed process tree is gone, as far as the process can tell, or
+   * after `timeoutMs`. Nothing to wait for when the process was never killed.
+   */
+  async terminated(timeoutMs: number): Promise<void> {
+    if (!this.termination) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.termination,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+    clearTimeout(timer);
   }
 
   getPid(): number | undefined {

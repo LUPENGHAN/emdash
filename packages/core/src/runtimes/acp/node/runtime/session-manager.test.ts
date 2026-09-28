@@ -1063,6 +1063,19 @@ describe('AcpRuntime session manager', () => {
     await vi.waitFor(() => expect(intents.snapshot()).toEqual([]));
     expectNoSessionResidue('conv-kill', leakContainers(rt));
   });
+  it('stops the idle adapter of a killed session instead of pooling it', async () => {
+    const h = makeAcpHarness();
+    const rt = new AcpRuntime(h.deps);
+    const input = makeStartInput({ conversationId: 'conv-evict' });
+    await rt.startSession(input, 'resume');
+    const key = { providerId: input.providerId, cwd: input.cwd, env: input.env };
+    expect(rt.connections.peek(key)).toBeDefined();
+
+    await rt.terminateSession('conv-evict');
+    // Its agent may still hold the session open, which a replacement resumes at once.
+    expect(rt.connections.peek(key)).toBeUndefined();
+    await rt.dispose();
+  });
   it('publishes activeTurn patches without root replacement during incremental text growth', async () => {
     const { h, rt, client, sessionId } = await launchHarness('conv-live');
     let resolvePrompt!: (value: { stopReason: 'end_turn' }) => void;

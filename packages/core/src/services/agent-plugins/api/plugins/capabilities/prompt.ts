@@ -15,6 +15,8 @@ export type CommandContext = {
   providerSessionId?: string;
   isResuming?: boolean;
   model: string;
+  /** Which of the behavior's `probeFlags` this CLI's `--help` lists. */
+  supportedFlags?: readonly string[];
 };
 
 export type AgentCommand = {
@@ -25,6 +27,11 @@ export type AgentCommand = {
 
 type Prompt = {
   buildCommand(ctx: CommandContext): AgentCommand;
+  /**
+   * Flags only newer CLI versions accept: the host checks the CLI's `--help` for them
+   * (once per binary) and reports the ones it lists as `ctx.supportedFlags`.
+   */
+  probeFlags?: readonly string[];
 };
 
 /**

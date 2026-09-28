@@ -30,4 +30,28 @@ describe('codex provider', () => {
       env: {},
     });
   });
+
+  it('keeps the session out of the shared background server when the CLI can', () => {
+    const noDaemon = { supportedFlags: ['--no-daemon'] };
+    const resume = {
+      ...baseContext,
+      isResuming: true,
+      providerSessionId: 'thread-1',
+      extraArgs: ['-c', 'model_provider=x'],
+    };
+    expect(provider.behavior.prompt!.probeFlags).toEqual(['--no-daemon']);
+    expect(provider.behavior.prompt!.buildCommand({ ...resume, ...noDaemon }).args).toEqual([
+      'resume',
+      'thread-1',
+      '-c',
+      'model_provider=x',
+      '--no-daemon',
+    ]);
+    expect(
+      provider.behavior.prompt!.buildCommand({ ...baseContext, ...noDaemon, initialPrompt: 'go' })
+        .args
+    ).toEqual(['--no-daemon', 'go']);
+    // An older Codex rejects the flag, so it is only passed when the CLI lists it.
+    expect(provider.behavior.prompt!.buildCommand(resume).args).not.toContain('--no-daemon');
+  });
 });

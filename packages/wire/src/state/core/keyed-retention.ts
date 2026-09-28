@@ -33,6 +33,8 @@ export type KeyedRetention<K, V> = {
   /** Returns the entry for `key`, creating it (idle, linger armed) if missing. */
   ensure(key: K): RetainedEntry<K, V>;
   peek(key: K): RetainedEntry<K, V> | undefined;
+  /** Whether anything currently holds `key`'s entry. */
+  isRetained(key: K): boolean;
   /** Creates the entry if missing and holds a refcount; never arms a birth linger. */
   retain(key: K): () => void;
   /** Retains `entry` if it is still current; a stale entry yields a no-op release. */
@@ -82,6 +84,9 @@ export function keyedRetention<K, V>(options: KeyedRetentionOptions<K, V>): Keye
     },
     peek(key) {
       return entries.get(keyFor(key));
+    },
+    isRetained(key) {
+      return (entries.get(keyFor(key))?.refCount ?? 0) > 0;
     },
     retain(key) {
       return retainEntry(entryFor(key));

@@ -59,6 +59,29 @@ export async function killTmuxSession(
   }
 }
 
+/** Pids of the processes running in a session's panes; empty when it is gone. */
+export async function listTmuxPanePids(
+  ctx: IExecutionContext,
+  sessionName: string
+): Promise<number[]> {
+  try {
+    const result = await ctx.exec('tmux', [
+      'list-panes',
+      '-s',
+      '-t',
+      `=${sessionName}`,
+      '-F',
+      '#{pane_pid}',
+    ]);
+    return result.stdout
+      .split('\n')
+      .map((line) => Number(line.trim()))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+  } catch {
+    return [];
+  }
+}
+
 export function parseTmuxSessionInventory(output: string): TmuxSessionInventoryEntry[] {
   const sessions: TmuxSessionInventoryEntry[] = [];
   for (const line of output.split('\n')) {

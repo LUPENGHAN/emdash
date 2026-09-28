@@ -2,6 +2,9 @@ import type { LiveLogSource } from '@emdash/wire/live';
 import { PtySession, type PtySessionOptions } from './pty-session';
 import type { PtySpawnSpec, PtySpawner } from './types';
 
+/** A bit past the terminator's own SIGKILL escalation and exit wait. */
+const DISPOSE_WAIT_TIMEOUT_MS = 4000;
+
 export interface PtyRegistryOptions {
   onSessionChanged?: (key: string, session: PtySession | null) => void;
 }
@@ -78,6 +81,18 @@ export class PtyRegistry {
     session.dispose();
     this.sessions.delete(key);
     this.options.onSessionChanged?.(key, null);
+    return true;
+  }
+
+  /**
+   * `dispose`, then wait (bounded) for the process tree to exit. Use it before starting
+   * a replacement that reopens the same agent session, which the old process may still
+   * hold (Codex refuses a session another process is writing).
+   */
+  async disposeAndWait(key: string, timeoutMs = DISPOSE_WAIT_TIMEOUT_MS): Promise<boolean> {
+    const session = this.sessions.get(key);
+    if (!this.dispose(key) || !session) return false;
+    await session.terminated(timeoutMs);
     return true;
   }
 

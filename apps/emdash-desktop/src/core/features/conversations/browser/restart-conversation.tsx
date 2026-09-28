@@ -15,7 +15,7 @@ import { ModelSourceSelect } from '@core/features/model-providers/contributions/
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
 import { openModal, useModalController } from '@core/manifests/browser/modal-api';
-import type { Conversation } from '@core/primitives/conversations/api';
+import type { Conversation, ConversationType } from '@core/primitives/conversations/api';
 import { ConfirmButton } from '@core/primitives/keybindings/browser/confirm-button';
 import { log } from '@core/primitives/logging/browser/logger';
 import { defineModal } from '@core/primitives/modals/react';
@@ -64,15 +64,28 @@ async function sourceProblem(providerId: string, choice: ModelSourceValue): Prom
   return error;
 }
 
+/** The source a conversation runs on now, to restart it unchanged. */
+export function currentChoice(conversation: Conversation): RestartChoice {
+  return {
+    ...(conversation.modelSource !== undefined && {
+      modelSource: conversation.modelSource,
+      sourceModel: conversation.sourceModel,
+    }),
+    ...(conversation.model && { model: conversation.model }),
+  };
+}
+
 /**
- * Restarts a conversation's agent on another source (provider and model): the current
- * conversation is removed first (killing its agent, so two processes never write one
- * session), then a new one of the same UI resumes the same session with the new source.
- * Provider session files are untouched, so a failure leaves it resumable from History.
+ * Restarts a conversation's agent on another source (provider and model), or in the
+ * other UI: the current conversation is removed first (killing its agent and waiting
+ * for it to exit, so two processes never write one session), then a new one resumes
+ * the same session. Provider session files are untouched, so a failure leaves it
+ * resumable from History. `requireSession` refuses rather than start a new session.
  */
 export async function restartConversation(
   current: Conversation,
-  choice: RestartChoice
+  choice: RestartChoice,
+  { type, requireSession = false }: { type?: ConversationType; requireSession?: boolean } = {}
 ): Promise<Conversation> {
   const conversation = await latestConversation(current);
   const manager = conversationRegistry.get(conversation.taskId);
@@ -81,6 +94,9 @@ export async function restartConversation(
   const problem = await sourceProblem(conversation.providerId, choice);
   if (problem) throw new Error(problem);
   const sessionId = resumableSessionId(conversation);
+  if (!sessionId && requireSession) throw new Error('The conversation has no session to resume');
+  const currentType = conversation.type ?? 'pty';
+  const nextType = type ?? currentType;
   await manager.deleteConversation(conversation.id);
   return manager.createConversation({
     id: crypto.randomUUID(),
@@ -88,9 +104,10 @@ export async function restartConversation(
     taskId: conversation.taskId,
     provider: conversation.providerId,
     title: conversation.title,
-    type: conversation.type ?? 'pty',
+    type: nextType,
     autoApprove: conversation.autoApprove,
-    options: conversation.options,
+    // Options (chat modes, effort) belong to one UI's adapter.
+    ...(nextType === currentType && { options: conversation.options }),
     isInitialConversation: conversation.isInitialConversation ?? undefined,
     ...(sessionId && { providerSessionId: sessionId }),
     ...(choice.modelSource !== undefined && { modelSource: choice.modelSource }),

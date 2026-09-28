@@ -7,6 +7,11 @@ export interface ResourceCache<K, T> {
   acquire(key: K): PendingLease<T>;
   peek(key: K): T | undefined;
   invalidate(key: K): Promise<void>;
+  /**
+   * Disposes the key's resource now if nothing holds it (instead of letting it linger
+   * for the idle TTL). Resolves whether it did.
+   */
+  evictIfIdle(key: K): Promise<boolean>;
   dispose(): Promise<void>;
 }
 
@@ -60,6 +65,12 @@ export function createResourceCache<K, T>(
       const entry = entries.get(options.key(key));
       if (!entry) return;
       await disposeEntry(entry);
+    },
+    async evictIfIdle(key): Promise<boolean> {
+      const entry = entries.get(options.key(key));
+      if (!entry || entry.refCount > 0 || entry.createPromise) return false;
+      await disposeEntry(entry);
+      return true;
     },
     async dispose(): Promise<void> {
       if (disposePromise) return disposePromise;

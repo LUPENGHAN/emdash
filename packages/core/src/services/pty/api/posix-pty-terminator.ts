@@ -1,4 +1,5 @@
 import { noopLogger, type Logger } from '@emdash/shared/logger';
+import { waitForLocalProcessesToExit } from './process-exit';
 import {
   collectLocalProcessInfosByPidAsync,
   collectLocalProcessTreeAsync,
@@ -7,6 +8,8 @@ import {
 } from './process-tree';
 
 const KILL_GRACE_MS = 2000;
+/** How long past the SIGKILL escalation a kill waits for the tree to be gone. */
+const EXIT_WAIT_MARGIN_MS = 1000;
 
 function signalPids(pids: number[], signal: NodeJS.Signals): void {
   for (const pid of pids) {
@@ -51,10 +54,23 @@ export class PosixPtyTerminator {
 
   constructor(private readonly logger: Logger = noopLogger) {}
 
-  kill(rootPid: number, killPty: () => void): void {
-    void collectLocalProcessTreeAsync(rootPid, this.logger).then(
-      (snapshot) => this.terminate(rootPid, snapshot, killPty),
-      () => this.terminate(rootPid, { descendants: [] }, killPty)
+  /**
+   * Signals the tree, then resolves once its processes are gone (or the wait gives up
+   * shortly after the SIGKILL escalation). Callers that start a replacement right away
+   * (a resumed agent session) await it: an agent that is still shutting down may hold
+   * locks on the very session the replacement opens.
+   */
+  async kill(rootPid: number, killPty: () => void): Promise<void> {
+    const snapshot = await collectLocalProcessTreeAsync(rootPid, this.logger).catch(
+      (): ProcessTreeSnapshot => ({ descendants: [] })
+    );
+    this.terminate(rootPid, snapshot, killPty);
+    const escaped = snapshot.descendants.filter((descendant) =>
+      isEscapedDescendant(snapshot.root, descendant)
+    );
+    await waitForLocalProcessesToExit(
+      [-rootPid, ...pidsOf(escaped)],
+      KILL_GRACE_MS + EXIT_WAIT_MARGIN_MS
     );
   }
 

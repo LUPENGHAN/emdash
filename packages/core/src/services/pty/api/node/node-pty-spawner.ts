@@ -99,21 +99,20 @@ class NodePtyProcess implements PtyProcess {
     }
   }
 
-  kill(): void {
-    if (this.killed) return;
+  kill(): Promise<void> {
+    if (this.killed) return Promise.resolve();
     this.killed = true;
 
     const pid = this.proc.pid;
     if (!Number.isInteger(pid) || pid <= 0) {
       this.killPty();
-      return;
+      return Promise.resolve();
     }
     if (this.platform === 'win32') {
-      void this.windowsTerminator.terminate();
-      return;
+      return this.windowsTerminator.terminate();
     }
 
-    this.posixTerminator.kill(pid, () => this.killPty());
+    return this.posixTerminator.kill(pid, () => this.killPty());
   }
 
   onData(handler: (data: string) => void): void {

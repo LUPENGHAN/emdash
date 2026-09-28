@@ -159,6 +159,50 @@ describe('AgentPluginHost', () => {
     });
   });
 
+  it('reports which probe flags the CLI help lists, reading the help once', async () => {
+    const buildCommand = vi.fn(
+      (ctx: CommandContext): AgentCommand => ({
+        command: ctx.cli,
+        args: [...(ctx.supportedFlags ?? [])],
+        env: {},
+      })
+    );
+    const exec = vi.fn(async (_command: string, args: string[]) => {
+      expect(args).toEqual(['--help']);
+      return {
+        stdout: 'Options:\n      --no-daemon\n          Run without the server\n',
+        stderr: '',
+      };
+    });
+    const host = createHost(
+      [
+        plugin({
+          behavior: {
+            prompt: { buildCommand, probeFlags: ['--no-daemon', '--no-daemons', '--new'] },
+          },
+        }),
+      ],
+      undefined,
+      { exec: { ...fakeExec(), exec } }
+    );
+
+    for (let i = 0; i < 2; i++) {
+      const result = await host.buildPromptCommand('test', { autoApprove: false, model: '' });
+      expect(result).toMatchObject({ success: true, data: { args: ['--no-daemon'] } });
+    }
+    expect(exec).toHaveBeenCalledTimes(1);
+
+    // An older CLI, or one whose help fails, supports none of them.
+    const failing = createHost(
+      [plugin({ behavior: { prompt: { buildCommand, probeFlags: ['--no-daemon'] } } })],
+      undefined,
+      { exec: fakeExec() }
+    );
+    expect(
+      await failing.buildPromptCommand('test', { autoApprove: false, model: '' })
+    ).toMatchObject({ success: true, data: { args: [] } });
+  });
+
   it('builds ACP spawn with allowlisted env merged under caller env', async () => {
     const buildSpawn = vi.fn(({ cwd, cli }: { cwd: string; cli: string }) => ({
       command: cli,
