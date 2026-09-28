@@ -7,7 +7,8 @@ import {
 
 /**
  * Carries the provider API key into the agent process. Config written to disk (Pi/OMP
- * model files, inline OpenCode/Codex config) references this variable, never the key.
+ * model files, inline OpenCode/Codex config) references this variable, never the key;
+ * only the Codex chat adapter's in-memory sign-in (an env var) carries the key itself.
  */
 export const PROVIDER_KEY_ENV = 'EMDASH_MODEL_PROVIDER_KEY';
 
@@ -86,6 +87,21 @@ export function buildSourceLaunch(
             ...(model && { model }),
           }),
           MODEL_PROVIDER: key,
+          // Without a ChatGPT login the chat UI adapter refuses to start ("sign in")
+          // before it ever reads CODEX_CONFIG. This sign-in routes it to the provider
+          // instead; it lives in the adapter's memory only, never in Codex's auth.json.
+          DEFAULT_AUTH_REQUEST: JSON.stringify({
+            methodId: 'gateway',
+            _meta: {
+              gateway: {
+                baseUrl: openai.url,
+                providerName: provider.name,
+                headers: { Authorization: `Bearer ${apiKey}` },
+              },
+            },
+          }),
+          // The adapter logs that request (key included) when this names a folder.
+          APP_SERVER_LOGS: '',
         },
         args: [
           ...codexOverride('model_provider', key),

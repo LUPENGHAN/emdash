@@ -1,8 +1,16 @@
 import { spawnSync } from 'node:child_process';
+import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { PluginFs } from '@emdash/core/services/agent-plugins/api/plugins';
 import { parse as parseToml } from 'smol-toml';
 import { describe, expect, it } from 'vitest';
-import { CODEX_CONFIG_PATH, CODEX_LEGACY_HOOKS_PATH, buildCodexHookConfig } from './hooks';
+import {
+  CODEX_CONFIG_PATH,
+  CODEX_LEGACY_HOOKS_PATH,
+  buildCodexHookConfig,
+  codexHookHash,
+} from './hooks';
 
 function createMemoryFs(initial: Record<string, string> = {}): PluginFs & {
   files: Map<string, string>;
@@ -137,6 +145,81 @@ trusted_hash = "sha256:trusted"
     });
     expect(await hooks.getHooksInstalled(fs)).toBe(false);
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'marks its own hooks reviewed with the hash Codex records, keeping user hooks as they are',
+    async () => {
+      const fs = {
+        ...createMemoryFs({
+          [CODEX_CONFIG_PATH]: `[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "echo user-stop"
+
+[hooks.state."/home/user/.codex/config.toml:stop:1:0"]
+enabled = false
+`,
+        }),
+        root: '/home/user/.codex',
+      };
+      const hooks = buildCodexHookConfig();
+      // Written by an Emdash that did not mark its hooks reviewed yet.
+      await hooks.writeHooks({ ...fs, root: undefined }, []);
+      await expect(hooks.getHooksInstalled(fs)).resolves.toBe(false);
+
+      await hooks.writeHooks(fs, []);
+      await expect(hooks.getHooksInstalled(fs)).resolves.toBe(true);
+      const config = parseToml((await fs.read(CODEX_CONFIG_PATH)) ?? '') as {
+        hooks: {
+          Stop: Record<string, unknown>[];
+          state: Record<string, { enabled?: boolean; trusted_hash?: string }>;
+        };
+      };
+      // Hashes Codex itself recorded when these exact hooks were reviewed by hand.
+      expect(config.hooks.state['/home/user/.codex/config.toml:stop:1:0']).toEqual({
+        enabled: false,
+        trusted_hash: 'sha256:cd0471cbdace6a9137ba1699388292eaeedf6222ad1cb562f79b51f0724e6343',
+      });
+      expect(config.hooks.state['/home/user/.codex/config.toml:session_start:0:0']).toEqual({
+        trusted_hash: 'sha256:d6db1e47b489fc9cdaa74d07e965b069880372d7920eb79fabe87c86961b91af',
+      });
+      expect(
+        config.hooks.state['/home/user/.codex/config.toml:permission_request:0:0']?.trusted_hash
+      ).toBe('sha256:ccf0467f85fc0a9457b7cabc4d28e20bb89251aa7deceb9602165ad8ce3314d3');
+      // The user's own hook is left for them to review.
+      expect(config.hooks.Stop[0]).toEqual({
+        hooks: [{ type: 'command', command: 'echo user-stop' }],
+      });
+      expect(Object.keys(config.hooks.state).some((key) => key.includes(':stop:0:'))).toBe(false);
+
+      // A changed hook is a different hash, so Codex asks again.
+      expect(
+        codexHookHash('Stop', { hooks: [{ type: 'command', command: 'echo changed' }] })
+      ).not.toBe(config.hooks.state['/home/user/.codex/config.toml:stop:1:0']?.trusted_hash);
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'keys the review by the canonical config path, as Codex does',
+    async () => {
+      const real = await mkdtemp(path.join(tmpdir(), 'codex-home-'));
+      const link = `${real}-link`;
+      await symlink(real, link);
+      try {
+        const fs = { ...createMemoryFs(), root: link };
+        await buildCodexHookConfig().writeHooks(fs, []);
+        const config = parseToml((await fs.read(CODEX_CONFIG_PATH)) ?? '') as {
+          hooks: { state: Record<string, unknown> };
+        };
+        const keys = Object.keys(config.hooks.state);
+        expect(keys).toContain(`${path.join(await realpath(real), 'config.toml')}:stop:0:0`);
+        expect(keys.some((key) => key.startsWith(link))).toBe(false);
+      } finally {
+        await rm(link, { force: true });
+        await rm(real, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('still validates Codex event hooks after separating trust state', async () => {
     const fs = createMemoryFs({

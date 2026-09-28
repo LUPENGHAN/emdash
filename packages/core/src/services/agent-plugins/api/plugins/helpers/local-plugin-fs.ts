@@ -23,6 +23,7 @@ export function createLocalPluginFs(root: string): PluginFs {
   }
 
   return {
+    root: absRoot,
     async read(path: string): Promise<string | null> {
       try {
         return await fs.readFile(resolveSafe(path), 'utf-8');

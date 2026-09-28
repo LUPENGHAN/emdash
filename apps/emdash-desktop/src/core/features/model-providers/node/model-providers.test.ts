@@ -136,6 +136,19 @@ describe('buildSourceLaunch', () => {
     });
     expect(launch.env[PROVIDER_KEY_ENV]).toBe('sk-1');
     expect(launch.env.CODEX_CONFIG).not.toContain('sk-1');
+    // The chat adapter signs in to the provider itself instead of asking for ChatGPT,
+    // and never logs that sign-in.
+    expect(JSON.parse(launch.env.DEFAULT_AUTH_REQUEST!)).toEqual({
+      methodId: 'gateway',
+      _meta: {
+        gateway: {
+          baseUrl: 'http://127.0.0.1:3000/v1',
+          providerName: provider.name,
+          headers: { Authorization: 'Bearer sk-1' },
+        },
+      },
+    });
+    expect(launch.env.APP_SERVER_LOGS).toBe('');
   });
 
   it('adds an OpenCode provider inline, with the key referenced from env', () => {

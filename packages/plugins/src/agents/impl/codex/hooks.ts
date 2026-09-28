@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
 import type { PluginFs } from '@emdash/core/services/agent-plugins/api/plugins';
 import type {
   CanonicalHookEvent,
@@ -109,6 +112,117 @@ function hasCodexEmdashHooks(hooks: Record<string, unknown[]>, specs: [string, s
   });
 }
 
+/** Codex's `hooks.state` key segment for an event: `SessionStart` → `session_start`. */
+function codexEventKey(event: string): string {
+  return event.replace(/(?<=[a-z])(?=[A-Z])/g, '_').toLowerCase();
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (!isConfigObject(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonicalJson(value[key])])
+  );
+}
+
+/**
+ * The hash Codex records when a hook is reviewed (codex-rs hooks `hook_hash`): SHA-256
+ * of the canonical JSON of the event name and the hook group, its handler normalized
+ * (default 600s timeout, not async).
+ */
+export function codexHookHash(event: string, group: Record<string, unknown>): string {
+  const [handler = {}] = Array.isArray(group.hooks)
+    ? (group.hooks as Record<string, unknown>[])
+    : [];
+  const identity = {
+    event_name: codexEventKey(event),
+    ...(typeof group.matcher === 'string' && { matcher: group.matcher }),
+    hooks: [
+      {
+        type: 'command',
+        command: handler.command,
+        timeout: typeof handler.timeout === 'number' ? handler.timeout : 600,
+        async: handler.async === true,
+        ...(typeof handler.statusMessage === 'string' && { statusMessage: handler.statusMessage }),
+      },
+    ],
+  };
+  const digest = createHash('sha256')
+    .update(JSON.stringify(canonicalJson(identity)))
+    .digest('hex');
+  return `sha256:${digest}`;
+}
+
+function canonicalPath(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return dir;
+  }
+}
+
+/** The `hooks.state` entries that mark Emdash's hook groups as reviewed, by key. */
+function emdashHookTrust(
+  hooks: Record<string, unknown[]>,
+  specs: [string, string][],
+  root: string
+): Map<string, string> {
+  // Codex keys the review by its config file's canonical path (/tmp → /private/tmp).
+  const configFile = path.join(canonicalPath(root), CODEX_CONFIG_PATH);
+  const trust = new Map<string, string>();
+  for (const [event, command] of specs) {
+    const expected = JSON.stringify(buildNestedEntry(command));
+    (Array.isArray(hooks[event]) ? hooks[event] : []).forEach((entry, groupIndex) => {
+      if (JSON.stringify(entry) !== expected) return;
+      const key = `${configFile}:${codexEventKey(event)}:${groupIndex}:0`;
+      trust.set(key, codexHookHash(event, entry as Record<string, unknown>));
+    });
+  }
+  return trust;
+}
+
+function hookState(config: Record<string, unknown>): Record<string, unknown> {
+  const hooks = isConfigObject(config.hooks) ? config.hooks : {};
+  return isConfigObject(hooks.state) ? hooks.state : {};
+}
+
+/**
+ * Codex runs a hook only after the user reviews it ("Hooks need review"); until then
+ * Emdash cannot tell which session a terminal holds, so it could not resume it. Emdash
+ * marks its own hooks reviewed as it writes them; an edited hook no longer matches its
+ * hash and is reviewed again. Without a local root (a remote config) nothing is added.
+ */
+function withEmdashHooksTrusted(
+  config: Record<string, unknown>,
+  hooks: Record<string, unknown[]>,
+  specs: [string, string][],
+  root: string | undefined
+): Record<string, unknown> {
+  if (!root) return config;
+  const state = { ...hookState(config) };
+  for (const [key, hash] of emdashHookTrust(hooks, specs, root)) {
+    const current = isConfigObject(state[key]) ? state[key] : {};
+    state[key] = { ...current, trusted_hash: hash };
+  }
+  return { ...config, hooks: { ...(config.hooks as Record<string, unknown>), state } };
+}
+
+function emdashHooksTrusted(
+  config: Record<string, unknown>,
+  hooks: Record<string, unknown[]>,
+  specs: [string, string][],
+  root: string | undefined
+): boolean {
+  if (!root) return true;
+  const state = hookState(config);
+  return [...emdashHookTrust(hooks, specs, root)].every(([key, hash]) => {
+    const entry = state[key];
+    return isConfigObject(entry) && entry.trusted_hash === hash;
+  });
+}
+
 async function readLegacyHooks(fs: PluginFs): Promise<Record<string, unknown[]>> {
   const config = await readJsonConfig(fs, CODEX_LEGACY_HOOKS_PATH);
   return getHooks(config, CODEX_LEGACY_HOOKS_PATH);
@@ -201,7 +315,11 @@ export function buildCodexHookConfig() {
         const existing = Array.isArray(hooks[key]) ? hooks[key] : [];
         hooks[key] = [...filterUserHooks(existing), buildNestedEntry(cmd)];
       }
-      await writeTomlConfig(fs, CODEX_CONFIG_PATH, configWithEventHooks(config, hooks));
+      await writeTomlConfig(
+        fs,
+        CODEX_CONFIG_PATH,
+        withEmdashHooksTrusted(configWithEventHooks(config, hooks), hooks, specs, fs.root)
+      );
       await cleanupLegacy();
       await removeLegacyCodexNotify(fs).catch(() => {});
       return [CODEX_CONFIG_PATH];
@@ -227,10 +345,10 @@ export function buildCodexHookConfig() {
     },
     async getHooksInstalled(fs: PluginFs): Promise<boolean> {
       const config = await readTomlConfig(fs, CODEX_CONFIG_PATH);
-      return (
-        hasCodexEmdashHooks(getHooks(config, CODEX_CONFIG_PATH), specs) ||
-        hasCodexEmdashHooks(await readLegacyHooks(fs), specs)
-      );
+      const hooks = getHooks(config, CODEX_CONFIG_PATH);
+      // Installed but never reviewed (hooks written by an older Emdash) counts as not
+      // installed, so the next install adds the review.
+      return hasCodexEmdashHooks(hooks, specs) && emdashHooksTrusted(config, hooks, specs, fs.root);
     },
     parseHookEvent: parseCodexHookEvent,
   };
