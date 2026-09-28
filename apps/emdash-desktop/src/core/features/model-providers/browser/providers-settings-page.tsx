@@ -10,6 +10,8 @@ import { openModal } from '@core/manifests/browser/modal-api';
 import {
   defaultSourceLabel,
   describeProvider,
+  formatContextWindow,
+  parseContextWindow,
   PROVIDER_CAPABLE_AGENTS,
   PROVIDER_PROTOCOL_LABELS,
   PROVIDER_PROTOCOLS,
@@ -162,6 +164,15 @@ function ProviderForm({
   const [modelsUrl, setModelsUrl] = useState(initial?.modelsUrl ?? '');
   const [upstream, setUpstream] = useState<string[]>([]);
   const [selected, setSelected] = useState<string[]>(initial?.models ?? []);
+  // Per-model context windows as typed ("1m", "256k"); blank leaves the agent's default.
+  const [contexts, setContexts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      Object.entries(initial?.contextWindows ?? {}).map(([model, tokens]) => [
+        model,
+        formatContextWindow(tokens),
+      ])
+    )
+  );
   const [filter, setFilter] = useState('');
   const [manualModel, setManualModel] = useState('');
   const [testState, setTestState] = useState<string | null>(null);
@@ -180,6 +191,16 @@ function ProviderForm({
     ...(modelsUrl.trim() && { modelsUrl: modelsUrl.trim() }),
     models: selected,
   };
+  const contextWindows = Object.fromEntries(
+    selected.flatMap((model) => {
+      const tokens = parseContextWindow(contexts[model] ?? '');
+      return tokens ? [[model, tokens] as const] : [];
+    })
+  );
+  if (Object.keys(contextWindows).length > 0) draft.contextWindows = contextWindows;
+  const invalidContext = selected.some(
+    (model) => (contexts[model] ?? '').trim() !== '' && !parseContextWindow(contexts[model] ?? '')
+  );
   const defaultModelsUrl = baseUrl.trim()
     ? providerModelsUrl({ ...draft, modelsUrl: undefined })
     : 'Filled in from the base URL';
@@ -338,14 +359,30 @@ function ProviderForm({
             </div>
             <ul className="max-h-60 overflow-y-auto rounded-md border border-border py-1">
               {listed.map((model) => (
-                <li key={model}>
-                  <label className="flex items-center gap-2 px-2 py-1 text-sm hover:bg-background-1">
+                <li key={model} className="flex items-center gap-2 pr-2 hover:bg-background-1">
+                  <label className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1 text-sm">
                     <Checkbox
                       checked={selected.includes(model)}
                       onCheckedChange={(checked) => toggle(model, checked === true)}
                     />
                     <span className="truncate font-mono text-xs">{model}</span>
                   </label>
+                  {selected.includes(model) ? (
+                    <div className="w-24 shrink-0">
+                      <Input
+                        value={contexts[model] ?? ''}
+                        placeholder="Context"
+                        aria-label={`Context window of ${model}`}
+                        aria-invalid={
+                          (contexts[model] ?? '').trim() !== '' &&
+                          !parseContextWindow(contexts[model] ?? '')
+                        }
+                        onChange={(e) =>
+                          setContexts((current) => ({ ...current, [model]: e.target.value }))
+                        }
+                      />
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -353,6 +390,12 @@ function ProviderForm({
         ) : (
           <Field.Description>Fetch the upstream models, or type model ids below.</Field.Description>
         )}
+        {selected.length > 0 ? (
+          <Field.Description>
+            Context: the model's context window, e.g. 1m or 256k. Codex uses it instead of its own
+            default for models it does not know; leave it blank to keep the default.
+          </Field.Description>
+        ) : null}
         <div className="flex gap-2">
           <div className="min-w-0 flex-1">
             <Input
@@ -387,7 +430,7 @@ function ProviderForm({
         <Button
           size="sm"
           variant="primary"
-          disabled={busy || !name.trim() || !baseUrl.trim()}
+          disabled={busy || !name.trim() || !baseUrl.trim() || invalidContext}
           onClick={() => void save()}
         >
           Save

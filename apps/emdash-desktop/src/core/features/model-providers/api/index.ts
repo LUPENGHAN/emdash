@@ -27,6 +27,11 @@ export const modelProviderSchema = z.object({
   modelsUrl: z.string().optional(),
   /** The models agents may use: the ones picked from the upstream list or typed in. */
   models: z.array(z.string()).default([]),
+  /**
+   * Context window in tokens, per model, where the agent would otherwise guess it (Codex
+   * falls back to its own default for models it does not know).
+   */
+  contextWindows: z.record(z.string(), z.number().int().positive()).optional(),
 });
 export type ModelProvider = z.infer<typeof modelProviderSchema>;
 
@@ -245,3 +250,19 @@ export type UsageLimits = { agents: AgentUsage[] };
 export type UsageLimitsService = {
   get(options?: { refresh?: boolean }): Promise<UsageLimits>;
 };
+
+/** A context window as typed: `1000000`, `1m`, `256k`, `1.5M`. Null when not a size. */
+export function parseContextWindow(text: string): number | null {
+  const match = /^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(text.trim());
+  if (!match) return null;
+  const scale = match[2] ? { k: 1_000, m: 1_000_000 }[match[2].toLowerCase() as 'k' | 'm'] : 1;
+  const tokens = Math.round(Number(match[1]) * scale);
+  return tokens > 0 ? tokens : null;
+}
+
+/** A context window for display, the way people write them: `1m`, `256k`, `131072`. */
+export function formatContextWindow(tokens: number): string {
+  if (tokens % 1_000_000 === 0) return `${tokens / 1_000_000}m`;
+  if (tokens % 1_000 === 0) return `${tokens / 1_000}k`;
+  return String(tokens);
+}

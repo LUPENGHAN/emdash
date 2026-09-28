@@ -4,6 +4,11 @@ import {
   type ModelProvider,
   type ProviderCapableAgent,
 } from '../api';
+import {
+  codexAppServerWrapperPath,
+  codexModelCatalogPath,
+  type CodexModelCatalog,
+} from './codex-model-catalog';
 
 /**
  * Carries the provider API key into the agent process. Config written to disk (Pi/OMP
@@ -29,6 +34,8 @@ export type SourceLaunch = {
   /** Extra CLI arguments; each must be whitespace-free (extraArgs is split on spaces). */
   args: string[];
   file?: AgentProviderFile;
+  /** Model metadata Codex reads (model_catalog_json), written before the launch. */
+  codexCatalog?: CodexModelCatalog;
 };
 
 /**
@@ -71,6 +78,21 @@ export function buildSourceLaunch(
     }
     case 'codex': {
       if (!openai || openai.api === 'chat') return null;
+      // Codex sizes its context (and when to compact) from its own model metadata, which a
+      // provider's model ids usually miss; the provider's figure, when set, wins.
+      const contextWindow = model ? provider.contextWindows?.[model] : undefined;
+      // Codex caps the context at its metadata's maximum (272k for models it does not
+      // know), so a set context comes with a catalog describing the provider's models.
+      const catalogFile = contextWindow ? codexModelCatalogPath(key) : undefined;
+      const catalog: CodexModelCatalog | undefined =
+        catalogFile && !/\s/.test(catalogFile)
+          ? {
+              providerKey: key,
+              models: Object.entries(provider.contextWindows ?? {})
+                .filter(([id]) => provider.models.includes(id))
+                .map(([id, tokens]) => ({ id, contextWindow: tokens })),
+            }
+          : undefined;
       const providerConfig = {
         name: key,
         base_url: openai.url,
@@ -85,6 +107,8 @@ export function buildSourceLaunch(
             model_provider: key,
             model_providers: { [key]: providerConfig },
             ...(model && { model }),
+            ...(contextWindow && { model_context_window: contextWindow }),
+            ...(catalog && { model_catalog_json: catalogFile }),
           }),
           MODEL_PROVIDER: key,
           // Without a ChatGPT login the chat UI adapter refuses to start ("sign in")
@@ -102,6 +126,12 @@ export function buildSourceLaunch(
           }),
           // The adapter logs that request (key included) when this names a folder.
           APP_SERVER_LOGS: '',
+          // The chat UI's Codex reads the catalog only at startup (see the wrapper).
+          ...(catalog &&
+            process.platform !== 'win32' && {
+              CODEX_PATH: codexAppServerWrapperPath(),
+              EMDASH_CODEX_MODEL_CATALOG: catalogFile!,
+            }),
         },
         args: [
           ...codexOverride('model_provider', key),
@@ -109,7 +139,10 @@ export function buildSourceLaunch(
             codexOverride(`model_providers.${key}.${field}`, value)
           ),
           ...(model ? codexOverride('model', model) : []),
+          ...(contextWindow ? codexOverride('model_context_window', contextWindow) : []),
+          ...(catalog ? codexOverride('model_catalog_json', catalogFile!) : []),
         ],
+        ...(catalog && { codexCatalog: catalog }),
       };
     }
     case 'opencode': {
@@ -163,6 +196,6 @@ export function buildSourceLaunch(
   }
 }
 
-function codexOverride(path: string, value: string): string[] {
+function codexOverride(path: string, value: string | number): string[] {
   return ['-c', `${path}=${JSON.stringify(value)}`];
 }

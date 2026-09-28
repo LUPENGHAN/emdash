@@ -153,6 +153,8 @@ export const provider = registerPluginBehavior(plugin, {
       env: {
         ELECTRON_RUN_AS_NODE: '1',
         CODEX_PATH: ctx.cli,
+        // The real CLI, for a launch that points CODEX_PATH at a wrapper around it.
+        EMDASH_CODEX_BIN: ctx.cli,
       },
     }),
     connect: (io, toClient) => {

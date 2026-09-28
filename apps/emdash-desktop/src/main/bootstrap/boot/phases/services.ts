@@ -79,6 +79,7 @@ import type {
   UsageLimitsService,
 } from '@core/features/model-providers/api';
 import { ensureAgentProviderFile } from '@core/features/model-providers/node/agent-provider-files';
+import { ensureCodexModelCatalog } from '@core/features/model-providers/node/codex-model-catalog';
 import {
   createEffectiveAgentConfig,
   type EffectiveAgentConfig,
@@ -354,6 +355,7 @@ export async function bootServices(
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
     getApiKey: modelProviderKeys.read,
     ensureProviderFile: (file) => ensureAgentProviderFile(file),
+    ensureCodexModelCatalog: (catalog) => ensureCodexModelCatalog(catalog),
     warn: (message, details) => log.warn(message, details),
   });
   const workspacePlacement = new WorkspacePlacementResolver({

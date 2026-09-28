@@ -4,6 +4,8 @@ import path from 'node:path';
 import { secret } from '@emdash/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  formatContextWindow,
+  parseContextWindow,
   anthropicBaseUrl,
   openAiBaseUrl,
   providerEndpoints,
@@ -149,6 +151,47 @@ describe('buildSourceLaunch', () => {
       },
     });
     expect(launch.env.APP_SERVER_LOGS).toBe('');
+  });
+
+  it("gives Codex the model's context window when the provider sets one", () => {
+    const sized = { ...provider, contextWindows: { 'moonshotai/kimi-k3': 1_000_000 } };
+    const launch = buildSourceLaunch('codex', sized, 'sk-1', 'moonshotai/kimi-k3')!;
+    expect(launch.args).toContain('model_context_window=1000000');
+    expect(JSON.parse(launch.env.CODEX_CONFIG!).model_context_window).toBe(1_000_000);
+    // Codex caps the context at its metadata's maximum, so a catalog comes with it.
+    expect(launch.codexCatalog).toEqual({
+      providerKey: 'emdash-newapi',
+      models: [{ id: 'moonshotai/kimi-k3', contextWindow: 1_000_000 }],
+    });
+    const catalogArg = launch.args.find((arg) => arg.startsWith('model_catalog_json='));
+    expect(catalogArg).toMatch(/emdash-model-catalog-emdash-newapi\.json"$/);
+    expect(JSON.parse(launch.env.CODEX_CONFIG!).model_catalog_json).toBe(
+      JSON.parse(catalogArg!.slice('model_catalog_json='.length))
+    );
+    // The chat UI's Codex reads it at startup, through the wrapper.
+    if (process.platform !== 'win32') {
+      expect(launch.env.CODEX_PATH).toMatch(/emdash-codex-app-server\.sh$/);
+      expect(launch.env.EMDASH_CODEX_MODEL_CATALOG).toBe(
+        JSON.parse(catalogArg!.slice('model_catalog_json='.length))
+      );
+    }
+    // Another model of the same provider keeps Codex's own default.
+    const other = buildSourceLaunch('codex', sized, 'sk-1', 'x-ai/grok-4.7')!;
+    expect(other.args.join(' ')).not.toContain('model_context_window');
+    expect(JSON.parse(other.env.CODEX_CONFIG!).model_context_window).toBeUndefined();
+    expect(other.codexCatalog).toBeUndefined();
+    expect(other.env.CODEX_PATH).toBeUndefined();
+  });
+
+  it('reads and writes context windows the way people type them', () => {
+    expect(parseContextWindow('1m')).toBe(1_000_000);
+    expect(parseContextWindow(' 256K ')).toBe(256_000);
+    expect(parseContextWindow('1.5M')).toBe(1_500_000);
+    expect(parseContextWindow('131072')).toBe(131_072);
+    for (const bad of ['', 'abc', '0', '-1', '1g']) expect(parseContextWindow(bad)).toBeNull();
+    expect(formatContextWindow(1_000_000)).toBe('1m');
+    expect(formatContextWindow(256_000)).toBe('256k');
+    expect(formatContextWindow(131_072)).toBe('131072');
   });
 
   it('adds an OpenCode provider inline, with the key referenced from env', () => {

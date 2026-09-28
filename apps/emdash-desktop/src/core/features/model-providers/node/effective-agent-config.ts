@@ -5,6 +5,7 @@ import {
   type ModelProvider,
   type ModelSourceOverride,
 } from '../api';
+import type { CodexModelCatalog } from './codex-model-catalog';
 import { buildSourceLaunch, type AgentProviderFile } from './source-launch';
 
 export type EffectiveAgentConfigDeps = {
@@ -12,6 +13,7 @@ export type EffectiveAgentConfigDeps = {
   getProviders: () => Promise<ModelProvider[]>;
   getApiKey: (providerId: string) => Promise<string | null>;
   ensureProviderFile: (file: AgentProviderFile) => Promise<void>;
+  ensureCodexModelCatalog?: (catalog: CodexModelCatalog) => Promise<void>;
   warn?: (message: string, details: Record<string, unknown>) => void;
 };
 
@@ -54,6 +56,7 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
       );
     }
     if (launch.file) await deps.ensureProviderFile(launch.file);
+    if (launch.codexCatalog) await deps.ensureCodexModelCatalog?.(launch.codexCatalog);
     return {
       ...config,
       env: { ...config?.env, ...launch.env },

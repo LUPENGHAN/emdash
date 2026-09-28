@@ -51,6 +51,7 @@ describe('codex acp behavior', () => {
     it('passes CODEX_PATH from ctx.cli', () => {
       const result = acpBehavior().buildSpawn(spawnCtx);
       expect(result.env?.CODEX_PATH).toBe('/usr/local/bin/codex');
+      expect(result.env?.EMDASH_CODEX_BIN).toBe('/usr/local/bin/codex');
     });
 
     it('sets ELECTRON_RUN_AS_NODE=1', () => {

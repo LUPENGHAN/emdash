@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Conversation } from '@core/primitives/conversations/api';
-import { canSwitchConversationUi, switchTarget } from './switch-conversation-ui';
+import {
+  canSwitchConversationUi,
+  switchConversationUiCommands,
+  switchTarget,
+} from './switch-conversation-ui';
 
 vi.mock('@core/features/conversations/api/browser/stores/conversation-registry', () => ({
   conversationRegistry: { get: vi.fn() },
@@ -35,14 +39,22 @@ describe('canSwitchConversationUi', () => {
     expect(canSwitchConversationUi(conversation({ sessionId: 'conv-1' }))).toBe(true);
   });
 
-  it('skips placeholders, chat conversations, unknown providers and missing ids', () => {
+  it('offers conversations without a session yet, labelled as starting a new one', () => {
+    const fresh = conversation({ providerId: 'codex', sessionId: 'conv-1' });
+    expect(canSwitchConversationUi(fresh)).toBe(true);
+    expect(canSwitchConversationUi(conversation({}))).toBe(true);
+    expect(switchConversationUiCommands(fresh)[0]?.label).toBe('Switch to chat UI (new session)');
     expect(
-      canSwitchConversationUi(conversation({ providerId: 'codex', sessionId: 'conv-1' }))
-    ).toBe(false);
+      switchConversationUiCommands(conversation({ providerId: 'codex', sessionId: 'thread-1' }))[0]
+        ?.label
+    ).toBe('Switch to chat UI');
+  });
+
+  it('skips agents that cannot resume a session in both UIs', () => {
     expect(
       canSwitchConversationUi(conversation({ providerId: 'amp' as never, sessionId: 'T-1' }))
     ).toBe(false);
-    expect(canSwitchConversationUi(conversation({}))).toBe(false);
+    expect(canSwitchConversationUi(conversation({ providerId: 'pi', sessionId: 'x' }))).toBe(false);
   });
 
   it('offers chat conversations switching back to the terminal', () => {
