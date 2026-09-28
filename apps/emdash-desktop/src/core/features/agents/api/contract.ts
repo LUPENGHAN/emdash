@@ -204,6 +204,20 @@ export const agentsContract = defineContract({
     }),
     output: z.object({ error: z.string().nullable() }),
   }),
+  /**
+   * For an agent running on its own configuration: whether that is its vendor's sign-in
+   * or which provider its config names. `modelId` is a model the conversation picked.
+   */
+  describeOwnSource: procedure({
+    input: z.object({ agentId: z.string(), modelId: z.string().optional() }),
+    output: z
+      .object({
+        official: z.boolean(),
+        provider: z.string().nullable(),
+        model: z.string().nullable(),
+      })
+      .nullable(),
+  }),
   /** Subscription limit usage (5h / weekly) for agents that expose it. */
   getUsageLimits: procedure({
     input: z.object({ refresh: z.boolean().optional() }),

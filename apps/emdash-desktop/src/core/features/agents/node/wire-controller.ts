@@ -7,6 +7,7 @@ import type { AgentOperations } from '@core/features/agents/node/controller';
 import type {
   ModelProviderKeys,
   ModelSourceOverride,
+  OwnSource,
   UsageLimitsService,
 } from '@core/features/model-providers/api';
 import { forwardLiveModel } from '@core/services/runtime-clients/node/forward-live-model';
@@ -26,6 +27,8 @@ export type CreateAgentsWireControllerOptions = Readonly<{
   usageLimits?: UsageLimitsService;
   /** Resolves an agent's launch config the way a launch would; throws when it cannot start. */
   effectiveAgentConfig?: (agentId: string, override?: ModelSourceOverride) => Promise<unknown>;
+  /** Reads what an agent's own configuration runs on (see model-providers describeOwnSource). */
+  describeOwnSource?: (agentId: string, modelId?: string) => Promise<OwnSource | null>;
 }>;
 
 export function createAgentsWireController(options: CreateAgentsWireControllerOptions): Controller {
@@ -158,6 +161,8 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
         return { error: error instanceof Error ? error.message : String(error) };
       }
     },
+    describeOwnSource: async ({ agentId, modelId }) =>
+      (await options.describeOwnSource?.(agentId, modelId).catch(() => null)) ?? null,
     listModelProviderModels: async (input) => {
       if (!options.modelProviderKeys) return err({ message: 'Provider keys are unavailable' });
       try {

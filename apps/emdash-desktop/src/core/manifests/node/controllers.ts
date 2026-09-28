@@ -51,6 +51,7 @@ import { createMachinesWireController } from '@core/features/machines/node/wire-
 import { createMcpWireController } from '@core/features/mcp/node/wire-controller';
 import type { ModelProviderKeys, UsageLimitsService } from '@core/features/model-providers/api';
 import type { EffectiveAgentConfig } from '@core/features/model-providers/node/effective-agent-config';
+import { describeOwnSource } from '@core/features/model-providers/node/own-source';
 import type { PreviewServerAccessOperations } from '@core/features/preview-servers/node/preview-server-access-service';
 import { createPreviewServersWireController } from '@core/features/preview-servers/node/wire-controller';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
@@ -223,6 +224,7 @@ export const desktopNodeControllers = {
         modelProviderKeys,
         usageLimits,
         effectiveAgentConfig,
+        describeOwnSource: (agentId, modelId) => describeOwnSource(agentId, modelId),
       }),
   },
   appSettings: {

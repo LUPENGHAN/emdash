@@ -196,6 +196,12 @@ export function modelSourceUnavailableMessage(error: unknown): string | null {
 }
 
 /** A per-conversation source; `null` means the agent's own login/config. */
+/**
+ * Where an agent on its own configuration gets its model: its vendor's sign-in
+ * (`official`), or the third-party provider its config names.
+ */
+export type OwnSource = { official: boolean; provider: string | null; model: string | null };
+
 export type ModelSourceOverride = { modelSource: string | null; sourceModel?: string };
 
 /** The conversation's own source choice, or undefined to use the agent's default. */

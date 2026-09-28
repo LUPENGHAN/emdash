@@ -42,7 +42,7 @@ export const ConversationTabBarItem = observer(function ConversationTabBarItem({
       labelSlot={
         <TabTitle isActive={tab.isActive} isPreview={tab.isPreview}>
           {title}
-          <ConversationSourceSuffix source={source} />
+          <ConversationSourceSuffix agentId={store.data.providerId} source={source} />
         </TabTitle>
       }
       preSlot={<AgentIcon id={store.data.providerId} size={16} />}

@@ -53,7 +53,12 @@ export const AcpChatTabBarItem = observer(function AcpChatTabBarItem({
   const label = conversation
     ? formatConversationTitleForDisplay(conversation.data.providerId, conversation.data.title)
     : 'ACP Chat';
-  const source = useConversationSource(conversation?.data);
+  // The model picked in the chat (OpenCode's `provider/model` names its provider).
+  const liveModel = store.providerOptions?.find((option) => option.category === 'model');
+  const source = useConversationSource(
+    conversation?.data,
+    typeof liveModel?.currentValue === 'string' ? liveModel.currentValue : undefined
+  );
 
   return (
     <GenericTabItem
@@ -65,7 +70,7 @@ export const AcpChatTabBarItem = observer(function AcpChatTabBarItem({
       labelSlot={
         <TabTitle isActive={tab.isActive} isPreview={tab.isPreview}>
           {label}
-          <ConversationSourceSuffix source={source} />
+          <ConversationSourceSuffix agentId={providerId} source={source} />
         </TabTitle>
       }
       preSlot={<ConversationAgentIcon providerId={providerId} isAcp size={16} />}
