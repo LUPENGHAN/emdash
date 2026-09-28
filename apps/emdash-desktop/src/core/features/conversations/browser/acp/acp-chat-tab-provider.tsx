@@ -2,6 +2,11 @@ import { AgentStatus } from '@emdash/ui/react/components';
 import { observer } from 'mobx-react-lite';
 import { formatConversationTitleForDisplay } from '@core/features/conversations/api/browser/conversation-title-utils';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
+import {
+  ConversationSourceSuffix,
+  conversationSourceTooltip,
+  useConversationSource,
+} from '@core/features/model-providers/contributions/browser/conversation-source';
 import type { TaskTabContext } from '@core/features/workbench/api/browser/tabs/task-tab-context';
 import { MAX_CONVERSATION_TITLE_LENGTH } from '@core/primitives/conversations/api';
 import type {
@@ -17,6 +22,7 @@ import {
   GenericTabDragPreview,
   GenericTabItem,
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
+import { TabTitle } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/tab-title';
 import { ConversationAgentIcon } from '../conversation-agent-icon';
 import { handoffCommands } from '../handoff';
 import { restartConversationCommands } from '../restart-conversation';
@@ -47,6 +53,7 @@ export const AcpChatTabBarItem = observer(function AcpChatTabBarItem({
   const label = conversation
     ? formatConversationTitleForDisplay(conversation.data.providerId, conversation.data.title)
     : 'ACP Chat';
+  const source = useConversationSource(conversation?.data);
 
   return (
     <GenericTabItem
@@ -54,6 +61,13 @@ export const AcpChatTabBarItem = observer(function AcpChatTabBarItem({
       host={host}
       ctx={ctx}
       label={label}
+      tooltip={conversationSourceTooltip(label, source)}
+      labelSlot={
+        <TabTitle isActive={tab.isActive} isPreview={tab.isPreview}>
+          {label}
+          <ConversationSourceSuffix source={source} />
+        </TabTitle>
+      }
       preSlot={<ConversationAgentIcon providerId={providerId} isAcp size={16} />}
       statusSlot={
         conversation ? (

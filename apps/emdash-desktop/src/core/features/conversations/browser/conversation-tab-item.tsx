@@ -2,6 +2,11 @@ import { AgentStatus } from '@emdash/ui/react/components';
 import { observer } from 'mobx-react-lite';
 import { AgentIcon } from '@core/features/agents/contributions/browser/agent-icon';
 import { formatConversationTitleForDisplay } from '@core/features/conversations/api/browser/conversation-title-utils';
+import {
+  ConversationSourceSuffix,
+  conversationSourceTooltip,
+  useConversationSource,
+} from '@core/features/model-providers/contributions/browser/conversation-source';
 import { MAX_CONVERSATION_TITLE_LENGTH } from '@core/primitives/conversations/api';
 import type {
   TabBarItemProps,
@@ -11,6 +16,7 @@ import {
   GenericTabDragPreview,
   GenericTabItem,
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
+import { TabTitle } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/tab-title';
 import type { ConversationTabResource } from './conversation-tab-resource';
 import { handoffCommands } from './handoff';
 import { restartConversationCommands } from './restart-conversation';
@@ -24,6 +30,7 @@ export const ConversationTabBarItem = observer(function ConversationTabBarItem({
   const store = tab.resource.store;
   const title = formatConversationTitleForDisplay(store.data.providerId, store.data.title);
   const rawTitle = store.data.title ?? '';
+  const source = useConversationSource(store.data);
 
   return (
     <GenericTabItem
@@ -31,6 +38,13 @@ export const ConversationTabBarItem = observer(function ConversationTabBarItem({
       host={host}
       ctx={ctx}
       label={title}
+      tooltip={conversationSourceTooltip(title, source)}
+      labelSlot={
+        <TabTitle isActive={tab.isActive} isPreview={tab.isPreview}>
+          {title}
+          <ConversationSourceSuffix source={source} />
+        </TabTitle>
+      }
       preSlot={<AgentIcon id={store.data.providerId} size={16} />}
       statusSlot={
         <span className="transition-opacity group-hover:opacity-0">
