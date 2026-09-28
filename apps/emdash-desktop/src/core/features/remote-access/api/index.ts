@@ -80,6 +80,11 @@ export type RemoteClientState = {
   error: string | null;
   /** Set when the other computer runs a different Emdash build. */
   versionMismatch: { local: string; remote: string } | null;
+  /**
+   * The computer this window was opened for ("open in new window"), or null for the
+   * main window. Such a window has its own profile, so "this computer" is the main one.
+   */
+  windowServerId: string | null;
 };
 
 export interface RemoteClientService {
@@ -89,6 +94,11 @@ export interface RemoteClientService {
   removeServer(id: string): Promise<void>;
   /** Drives the given computer (null: this one) and reloads the window. */
   switchTo(serverId: string | null): Promise<void>;
+  /**
+   * Opens another window on the given computer: an app instance with that computer's own
+   * profile, connected to it. Null brings up the main window (this computer).
+   */
+  openWindow(serverId: string | null): Promise<void>;
 }
 
 export const remoteClientDomain = 'remoteClient' as const;
@@ -101,6 +111,10 @@ export const remoteClientContract = defineContract({
   }),
   removeServer: procedure({ input: z.object({ id: z.string() }), output: z.void() }),
   switchTo: procedure({ input: z.object({ serverId: z.string().nullable() }), output: z.void() }),
+  openWindow: procedure({
+    input: z.object({ serverId: z.string().nullable() }),
+    output: z.void(),
+  }),
 });
 
 /**

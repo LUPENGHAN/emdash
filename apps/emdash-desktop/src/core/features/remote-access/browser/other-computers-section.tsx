@@ -4,9 +4,9 @@ import { useState } from 'react';
 import { getRemoteClientClient } from '../api/browser/remote-client';
 import {
   REMOTE_CLIENT_STATE_KEY,
-  switchComputer,
   useRemoteClientState,
 } from '../contributions/browser/connection-switcher';
+import { chooseComputerWindow } from './open-computer-modal';
 
 /** Computers this window can drive, saved on this computer only. */
 export function OtherComputersSection() {
@@ -58,7 +58,9 @@ export function OtherComputersSection() {
                 className="flex items-center gap-3 rounded-md border border-border px-3 py-2"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm">{server.name}</div>
+                  <div translate="no" className="truncate text-sm">
+                    {server.name}
+                  </div>
                   <div className="truncate text-xs text-foreground-muted">{server.baseUrl}</div>
                 </div>
                 {inUse ? (
@@ -67,7 +69,7 @@ export function OtherComputersSection() {
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={() => void switchComputer(server.id, server.name)}
+                    onClick={() => chooseComputerWindow(server)}
                   >
                     Use
                   </Button>

@@ -178,12 +178,13 @@ import { createSystemNotificationSink } from '@main/host/notifications/system-no
 import { createRemoteAccessServer } from '@main/host/remote-access-server';
 import { setRemoteBrowserProxyPort } from '@main/host/remote-client/browser-proxy';
 import { createRemoteClientService } from '@main/host/remote-client/remote-client-service';
+import { launchAppWindow, takeWindowServer } from '@main/host/remote-client/window-launcher';
 import { encryptedAppSecretsStore } from '@main/host/secrets/encrypted-app-secrets-store';
 import { toPlaintextSecretStore } from '@main/host/secrets/plaintext-secret-store';
 import { setTrayVisible } from '@main/host/tray';
 import { installUpdateNotifications } from '@main/host/updates/update-notifications';
 import { getMainWindow } from '@main/host/window';
-import { applyNativeTheme, isAppFocused } from '@main/host/window';
+import { applyNativeTheme, isAppFocused, setWindowComputer } from '@main/host/window';
 import { log } from '@main/lib/logger';
 import { telemetryService } from '@main/lib/telemetry';
 import { appScope } from '../../core/app-scope';
@@ -346,6 +347,9 @@ export async function bootServices(
     setBrowserProxyPort: setRemoteBrowserProxyPort,
     reloadWindow: () => getMainWindow()?.webContents.reload(),
     warn: (message, details) => log.warn(message, details),
+    launchWindow: launchAppWindow,
+    windowServer: takeWindowServer(),
+    setWindowTitle: setWindowComputer,
   });
   // Before the gateway registers controllers: window traffic waits for the choice.
   void remoteClient.start();

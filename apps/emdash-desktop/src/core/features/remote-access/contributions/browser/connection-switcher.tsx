@@ -1,11 +1,13 @@
-import { DropdownMenu, toast } from '@emdash/ui/react/primitives';
+import { DropdownMenu } from '@emdash/ui/react/primitives';
 import { useQuery } from '@tanstack/react-query';
-import { Check, ChevronsUpDown, Laptop, MonitorSmartphone, Plus } from 'lucide-react';
+import { AppWindow, Check, ChevronsUpDown, Laptop, MonitorSmartphone, Plus } from 'lucide-react';
 import { settingsViewDef } from '@core/features/settings/contributions/views';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { cn } from '@core/primitives/styling/browser/cn';
 import type { RemoteClientState } from '../../api';
 import { getRemoteClientClient } from '../../api/browser/remote-client';
+import { openComputerWindow, switchComputer } from '../../browser/computer-switch';
+import { chooseComputerWindow } from '../../browser/open-computer-modal';
 
 export const REMOTE_CLIENT_STATE_KEY = ['remoteClientState'];
 
@@ -15,18 +17,6 @@ export function useRemoteClientState() {
     queryFn: async () => (await getRemoteClientClient()).state(),
     refetchInterval: 3_000,
   });
-}
-
-/** Switches this window between this computer and another one's Emdash. */
-export async function switchComputer(serverId: string | null, name: string): Promise<void> {
-  // The window reloads once the switch lands, replacing the toast.
-  const switched = (async () => (await getRemoteClientClient()).switchTo({ serverId }))();
-  toast.promise(switched, {
-    loading: `Connecting to ${name}…`,
-    success: `Using ${name}`,
-    error: (error: unknown) => (error instanceof Error ? error.message : String(error)),
-  });
-  await switched.catch(() => {});
 }
 
 /**
@@ -74,7 +64,12 @@ export function ConnectionSwitcher() {
               ) : (
                 <Laptop className="size-3.5 shrink-0" />
               )}
-              <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+              <span
+                translate={active ? 'no' : undefined}
+                className="min-w-0 flex-1 truncate text-left"
+              >
+                {label}
+              </span>
               {dot ? <span className={cn('size-1.5 shrink-0 rounded-full', dot)} /> : null}
               {state.error && !active ? (
                 <span className="size-1.5 shrink-0 rounded-full bg-red-500" />
@@ -86,18 +81,30 @@ export function ConnectionSwitcher() {
         <DropdownMenu.Content className="min-w-56">
           <DropdownMenu.Group>
             <DropdownMenu.Label>Use Emdash on</DropdownMenu.Label>
-            <DropdownMenu.Item onClick={() => void switchComputer(null, 'this computer')}>
-              <Laptop className="size-4" />
-              <span className="flex-1">This computer</span>
-              {!active ? <Check className="size-4" /> : null}
-            </DropdownMenu.Item>
+            {state.windowServerId ? (
+              // This window has its own profile: this computer lives in the main window.
+              <DropdownMenu.Item onClick={() => void openComputerWindow(null, 'this computer')}>
+                <AppWindow className="size-4" />
+                <span className="flex-1">This computer (main window)</span>
+              </DropdownMenu.Item>
+            ) : (
+              <DropdownMenu.Item onClick={() => void switchComputer(null, 'this computer')}>
+                <Laptop className="size-4" />
+                <span className="flex-1">This computer</span>
+                {!active ? <Check className="size-4" /> : null}
+              </DropdownMenu.Item>
+            )}
             {state.servers.map((server) => (
               <DropdownMenu.Item
                 key={server.id}
-                onClick={() => void switchComputer(server.id, server.name)}
+                onClick={() => {
+                  if (active?.id !== server.id) chooseComputerWindow(server);
+                }}
               >
                 <MonitorSmartphone className="size-4" />
-                <span className="flex-1 truncate">{server.name}</span>
+                <span translate="no" className="flex-1 truncate">
+                  {server.name}
+                </span>
                 {active?.id === server.id ? <Check className="size-4" /> : null}
               </DropdownMenu.Item>
             ))}

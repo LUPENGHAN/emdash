@@ -45,6 +45,18 @@ export type RemoteClientDeps = {
   setBrowserProxyPort: (port: number | null) => Promise<void>;
   reloadWindow: () => void;
   warn?: (message: string, details: Record<string, unknown>) => void;
+  /**
+   * Starts another app instance: with `server`, one on that computer's own profile,
+   * handed the computer and its sign-in; without, the main window (this computer).
+   */
+  launchWindow?: (server: { server: RemoteServer; token: string } | null) => Promise<void>;
+  /**
+   * Set in a window opened for one computer: that computer and its sign-in, saved into
+   * this window's profile and connected at startup.
+   */
+  windowServer?: { server: RemoteServer; token: string } | null;
+  /** Names the computer the window drives in its title (null: this computer). */
+  setWindowTitle?: (computerName: string | null) => void;
 };
 
 type ActiveRemote = {
@@ -173,7 +185,20 @@ export function createRemoteClientService(deps: RemoteClientDeps): ManagedRemote
       let settle!: (controllers: Record<string, Controller> | null) => void;
       deps.setRouting(new Promise((resolve) => (settle = resolve)));
       return serialize(async () => {
-        const stored = await load();
+        let stored = await load();
+        const seed = deps.windowServer;
+        if (seed) {
+          // A window opened for this computer: remember it here and drive it from the start.
+          await deps.secrets.write(seed.server.id, seed.token);
+          stored = {
+            activeServerId: seed.server.id,
+            servers: [
+              ...stored.servers.filter((entry) => entry.id !== seed.server.id),
+              seed.server,
+            ],
+          };
+          await save(stored);
+        }
         const server = stored.servers.find((entry) => entry.id === stored.activeServerId);
         if (!server) {
           settle(null);
@@ -187,6 +212,7 @@ export function createRemoteClientService(deps: RemoteClientDeps): ManagedRemote
           await deps.setBrowserProxyPort(remote.proxy.port);
           connection = 'connected';
           error = null;
+          deps.setWindowTitle?.(server.name);
         } catch (cause) {
           settle(null);
           connection = 'local';
@@ -207,6 +233,7 @@ export function createRemoteClientService(deps: RemoteClientDeps): ManagedRemote
         connection,
         error,
         versionMismatch: active ? versionMismatch : null,
+        windowServerId: deps.windowServer?.server.id ?? null,
       };
     },
     addServer: ({ link, name }) =>
@@ -259,8 +286,21 @@ export function createRemoteClientService(deps: RemoteClientDeps): ManagedRemote
           }
         }
         await save({ ...stored, activeServerId: serverId });
+        deps.setWindowTitle?.(active?.server.name ?? null);
         deps.reloadWindow();
       }),
+    openWindow: async (serverId) => {
+      if (!deps.launchWindow) throw new Error('This app cannot open another window');
+      if (serverId === null) {
+        await deps.launchWindow(null);
+        return;
+      }
+      const server = (await load()).servers.find((entry) => entry.id === serverId);
+      if (!server) throw new Error('That computer is no longer saved');
+      const token = await deps.secrets.read(server.id);
+      if (!token) throw new Error(`No sign-in saved for ${server.name}; add it again`);
+      await deps.launchWindow({ server, token });
+    },
     dispose: () => serialize(disconnect),
   };
 }

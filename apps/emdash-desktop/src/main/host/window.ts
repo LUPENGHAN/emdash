@@ -18,11 +18,14 @@ import {
   validateBrowserWebviewAttach,
 } from '@main/host/browser/webview-security';
 import { registerExternalLinkHandlers } from '@main/host/externalLinks';
+import { COMPUTER_WINDOW_QUERY, takeWindowServer } from '@main/host/remote-client/window-launcher';
 import { log } from '@main/lib/logger';
 import { telemetryService } from '@main/lib/telemetry';
 import { APP_ORIGIN } from './protocol';
 
 let mainWindow: BrowserWindow | null = null;
+/** "Emdash Fork — <computer>" while the window drives another computer. */
+let computerTitle: string | null = null;
 
 export function applyNativeTheme(theme: Theme): void {
   if (process.platform !== 'win32') return;
@@ -83,11 +86,19 @@ export function createMainWindow(): BrowserWindow {
   if (process.platform !== 'darwin') {
     mainWindow.setMenuBarVisibility(false);
   }
+  // The page's own <title> would replace the computer's name.
+  mainWindow.on('page-title-updated', (event) => {
+    if (computerTitle) event.preventDefault();
+  });
+  if (computerTitle) mainWindow.setTitle(computerTitle);
 
   const rendererUrl = import.meta.env.DEV
     ? process.env.ELECTRON_RENDERER_URL!
     : `${APP_ORIGIN}/index.html`;
-  void mainWindow.loadURL(rendererUrl);
+  // A window opened for another computer runs on that computer's setup: no onboarding.
+  void mainWindow.loadURL(
+    takeWindowServer() ? `${rendererUrl}?${COMPUTER_WINDOW_QUERY}` : rendererUrl
+  );
 
   // Route anything outside the renderer origin through the external-link flow
   registerExternalLinkHandlers(mainWindow, rendererUrl);
@@ -149,6 +160,15 @@ export function createMainWindow(): BrowserWindow {
   });
 
   return mainWindow;
+}
+
+/**
+ * Names the computer this window drives in its title (Mission Control, the Window menu,
+ * app switching), so windows on different computers tell apart. Null: this computer.
+ */
+export function setWindowComputer(name: string | null): void {
+  computerTitle = name ? `${PRODUCT_NAME} — ${name}` : null;
+  mainWindow?.setTitle(computerTitle ?? PRODUCT_NAME);
 }
 
 export function getMainWindow(): BrowserWindow | null {

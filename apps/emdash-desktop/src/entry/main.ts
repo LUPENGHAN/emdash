@@ -1,5 +1,6 @@
 import { app, dialog } from 'electron';
 import { configureChromiumCommandLine } from '@main/host/chromium-command-line';
+import { takeWindowServer } from '@main/host/remote-client/window-launcher';
 
 // Packaged Electron does not set NODE_ENV, so environment-keyed defaults (such
 // as the wire validation policy) would otherwise resolve to their development
@@ -7,6 +8,10 @@ import { configureChromiumCommandLine } from '@main/host/chromium-command-line';
 if (app.isPackaged && !process.env.NODE_ENV) {
   process.env.NODE_ENV = 'production';
 }
+
+// A window opened for another computer gets that computer's sign-in in its environment;
+// take it out now, before any worker process is spawned and would inherit it.
+takeWindowServer();
 
 // Electron consumes Chromium switches during initialization. Keep this call
 // synchronous at module scope, before bootstrap's dynamic import crosses an

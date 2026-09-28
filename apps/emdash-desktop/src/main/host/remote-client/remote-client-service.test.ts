@@ -119,6 +119,65 @@ describe('createRemoteClientService', () => {
     await service.dispose();
   });
 
+  it('opens a computer in a window of its own, and the main window from there', async () => {
+    const launched: unknown[] = [];
+    const titles: (string | null)[] = [];
+    const main = createRemoteClientService({
+      storePath: path.join(dir, 'remote-servers.json'),
+      secrets: {
+        read: async (id) => secrets.get(id) ?? null,
+        write: async (id, token) => void secrets.set(id, token),
+        remove: async (id) => void secrets.delete(id),
+      },
+      localVersion: '1.2.6',
+      setRouting: (next) => {
+        routing = next;
+      },
+      setBrowserProxyPort: async () => {},
+      reloadWindow: () => {},
+      launchWindow: async (target) => void launched.push(target),
+    });
+    await main.start();
+    const added = await main.addServer({ link: `http://127.0.0.1:${port}/connect?token=${TOKEN}` });
+    await main.openWindow(added.id);
+    // The main window stays on this computer; the new one gets the computer and sign-in.
+    expect((await main.state()).activeServerId).toBeNull();
+    expect(launched).toEqual([{ server: added, token: TOKEN }]);
+    await main.dispose();
+
+    // The new window: its own (empty) profile, seeded with that computer, drives it.
+    const windowSecrets = new Map<string, string>();
+    const window = createRemoteClientService({
+      storePath: path.join(dir, 'window', 'remote-servers.json'),
+      secrets: {
+        read: async (id) => windowSecrets.get(id) ?? null,
+        write: async (id, token) => void windowSecrets.set(id, token),
+        remove: async (id) => void windowSecrets.delete(id),
+      },
+      localVersion: '1.2.6',
+      setRouting: (next) => {
+        routing = next;
+      },
+      setBrowserProxyPort: async () => {},
+      reloadWindow: () => {},
+      launchWindow: async (target) => void launched.push(target),
+      windowServer: { server: added, token: TOKEN },
+      setWindowTitle: (name) => void titles.push(name),
+    });
+    await window.start();
+    expect(await routing).not.toBeNull();
+    expect(windowSecrets.get(added.id)).toBe(TOKEN);
+    expect(await window.state()).toMatchObject({
+      activeServerId: added.id,
+      windowServerId: added.id,
+      connection: 'connected',
+    });
+    expect(titles).toEqual(['studio-mac']);
+    await window.openWindow(null);
+    expect(launched.at(-1)).toBeNull();
+    await window.dispose();
+  });
+
   it('reconnects to the saved computer on start and notes a different build', async () => {
     const first = makeService();
     await first.start();

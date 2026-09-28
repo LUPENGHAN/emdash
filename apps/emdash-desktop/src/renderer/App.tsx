@@ -34,7 +34,11 @@ function AppContent() {
   useIntegrationAccountEvents();
   useGitHubAuthEvents();
   const [view, setView] = useState<AppView>(() =>
-    localStorage.getItem(HAS_SEEN_ONBOARDING) === 'true' ? 'workspace' : 'onboarding'
+    // A window opened for another computer runs on that computer's setup.
+    localStorage.getItem(HAS_SEEN_ONBOARDING) === 'true' ||
+    new URLSearchParams(window.location.search).has('computer-window')
+      ? 'workspace'
+      : 'onboarding'
   );
 
   const { data: session, isLoading: sessionLoading } = useAccountSession();

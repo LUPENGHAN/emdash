@@ -6,6 +6,7 @@ import { integrationsBrowserContributions } from '@core/features/integrations/co
 import { libraryBrowserContributions } from '@core/features/library/contributions/browser';
 import { machinesBrowserContributions } from '@core/features/machines/contributions/browser';
 import { projectsBrowserContributions } from '@core/features/projects/contributions/browser';
+import { remoteAccessBrowserContributions } from '@core/features/remote-access/contributions/browser';
 import { settingsBrowserContributions } from '@core/features/settings/contributions/browser';
 import { skillsBrowserContributions } from '@core/features/skills/contributions/browser';
 import { sourceControlBrowserContributions } from '@core/features/source-control/contributions/browser';
@@ -28,6 +29,7 @@ export const featureModalDefs = [
   ...libraryBrowserContributions.modalDefs,
   ...machinesBrowserContributions.modalDefs,
   ...projectsBrowserContributions.modalDefs,
+  ...remoteAccessBrowserContributions.modalDefs,
   ...settingsBrowserContributions.modalDefs,
   ...skillsBrowserContributions.modalDefs,
   ...sourceControlBrowserContributions.modalDefs,

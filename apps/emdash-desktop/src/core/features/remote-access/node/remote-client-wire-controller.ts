@@ -7,5 +7,6 @@ export function createRemoteClientWireController(service: RemoteClientService): 
     addServer: (input) => service.addServer(input),
     removeServer: ({ id }) => service.removeServer(id),
     switchTo: ({ serverId }) => service.switchTo(serverId),
+    openWindow: ({ serverId }) => service.openWindow(serverId),
   });
 }
