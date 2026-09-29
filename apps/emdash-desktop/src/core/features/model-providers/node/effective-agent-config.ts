@@ -1,11 +1,14 @@
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import {
+  isOfficialAccount,
   isProviderCapableAgent,
   MODEL_SOURCE_UNAVAILABLE_HINT,
   type ModelProvider,
   type ModelSourceOverride,
+  type OfficialAccount,
 } from '../api';
 import type { CodexModelCatalog } from './codex-model-catalog';
+import { ACCOUNT_HOME_ENV } from './official-accounts';
 import { buildSourceLaunch, type ExtensionProviderAgent } from './source-launch';
 
 export type EffectiveAgentConfigDeps = {
@@ -14,6 +17,8 @@ export type EffectiveAgentConfigDeps = {
   getApiKey: (providerId: string) => Promise<string | null>;
   prepareAgentProvider: (agent: ExtensionProviderAgent) => Promise<void>;
   ensureCodexModelCatalog?: (catalog: CodexModelCatalog) => Promise<void>;
+  /** Readies an official account's config dir and returns it. */
+  prepareAccountHome: (account: OfficialAccount) => Promise<string>;
   warn?: (message: string, details: Record<string, unknown>) => void;
 };
 
@@ -38,6 +43,17 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
       throw new ModelSourceUnavailableError(
         'The provider this agent is set to run on was deleted.'
       );
+    }
+    if (isOfficialAccount(provider)) {
+      // Another sign-in of the agent's own vendor: only its config (and login) dir moves.
+      if (provider.account.agent !== agentId) {
+        throw new ModelSourceUnavailableError(`“${provider.name}” is an account of another agent.`);
+      }
+      const home = await deps.prepareAccountHome(provider);
+      return {
+        ...config,
+        env: { ...config?.env, [ACCOUNT_HOME_ENV[provider.account.agent]]: home },
+      };
     }
     const apiKey = await deps.getApiKey(provider.id);
     if (!apiKey) {

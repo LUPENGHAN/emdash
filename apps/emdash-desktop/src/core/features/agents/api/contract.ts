@@ -208,6 +208,20 @@ export const agentsContract = defineContract({
    * For an agent running on its own configuration: whether that is its vendor's sign-in
    * or which provider its config names. `modelId` is a model the conversation picked.
    */
+  /** Whether an official account (a provider with `account`) is signed in, and as whom. */
+  officialAccountStatus: procedure({
+    input: z.object({ providerId: z.string() }),
+    output: z.object({
+      signedIn: z.boolean(),
+      email: z.string().nullable(),
+      plan: z.string().nullable(),
+    }),
+  }),
+  /** Opens the agent's own sign-in for an official account (a Terminal window on macOS). */
+  openOfficialAccountLogin: procedure({
+    input: z.object({ providerId: z.string() }),
+    output: z.object({ opened: z.boolean(), command: z.string() }),
+  }),
   describeOwnSource: procedure({
     input: z.object({ agentId: z.string(), modelId: z.string().optional() }),
     output: z

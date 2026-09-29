@@ -9,6 +9,10 @@ import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-s
 import { openModal } from '@core/manifests/browser/modal-api';
 import {
   CLAUDE_MODEL_ALIASES,
+  OFFICIAL_ACCOUNT_AGENTS,
+  OFFICIAL_ACCOUNT_LABELS,
+  sourcesForAgent,
+  type OfficialAccountAgent,
   defaultSourceLabel,
   describeProvider,
   formatContextWindow,
@@ -37,6 +41,7 @@ const AGENT_NAMES: Record<string, string> = {
 export function ProvidersSettingsPage() {
   const { value, update } = useAppSettingsKey('modelProviders');
   const providers = value?.providers ?? [];
+  const apis = providers.filter((provider) => !provider.account);
   const [editing, setEditing] = useState<ModelProvider | 'new' | null>(null);
 
   const saveProviders = (next: ModelProvider[]) => update({ providers: next });
@@ -50,11 +55,11 @@ export function ProvidersSettingsPage() {
       />
       <section className="space-y-3">
         <h3 className="text-sm font-medium text-foreground">Your providers</h3>
-        {providers.length === 0 && !editing ? (
+        {apis.length === 0 && !editing ? (
           <p className="text-sm text-foreground-muted">No providers yet.</p>
         ) : null}
         <ul className="flex flex-col gap-2">
-          {providers.map((provider) =>
+          {apis.map((provider) =>
             editing !== 'new' && editing?.id === provider.id ? (
               <li key={provider.id}>
                 <ProviderForm
@@ -103,6 +108,7 @@ export function ProvidersSettingsPage() {
           </Button>
         ) : null}
       </section>
+      <OfficialAccounts providers={providers} saveProviders={saveProviders} />
       <AgentDefaults providers={providers} />
     </div>
   );
@@ -398,9 +404,8 @@ function ProviderForm({
         )}
         {selected.length > 0 ? (
           <Field.Description>
-            Context: the model's context window, e.g. 1m or 256k. Codex, OpenCode, Pi, and Oh My Pi
-            use it. Claude Code uses it for custom gateway models. Leave it blank to keep the
-            default.
+            Context: the model's context window, e.g. 1m or 256k. Codex, OpenCode, Pi, Oh My Pi and
+            Claude Code use it. Leave it blank to keep the default.
           </Field.Description>
         ) : null}
         <div className="flex gap-2">
@@ -446,6 +451,204 @@ function ProviderForm({
           Save
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * More sign-ins of Claude Code's or Codex's own vendor account, each with a config dir
+ * of its own (its login), sharing sessions, settings and skills with the main one.
+ */
+function OfficialAccounts({
+  providers,
+  saveProviders,
+}: {
+  providers: ModelProvider[];
+  saveProviders: (next: ModelProvider[]) => void;
+}) {
+  const accounts = providers.filter((provider) => provider.account);
+  const [adding, setAdding] = useState(false);
+  const [agent, setAgent] = useState<OfficialAccountAgent>('claude');
+  const [name, setName] = useState('');
+
+  const add = () => {
+    if (!name.trim()) return;
+    saveProviders([
+      ...providers,
+      {
+        id: crypto.randomUUID().slice(0, 8),
+        name: name.trim(),
+        baseUrl: '',
+        models: [],
+        account: { agent },
+      },
+    ]);
+    setName('');
+    setAdding(false);
+  };
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h3 className="text-sm font-medium text-foreground">Official accounts</h3>
+        <p className="text-xs text-foreground-muted">
+          More Claude or ChatGPT accounts to run Claude Code or Codex on, picked like a provider.
+          Each keeps its own sign-in; sessions, settings, skills and MCP servers stay shared, so a
+          conversation can resume on another account. Your usual login stays the default.
+        </p>
+      </div>
+      {accounts.length > 0 ? (
+        <ul className="flex flex-col gap-2">
+          {accounts.map((account) => (
+            <li key={account.id}>
+              <OfficialAccountRow
+                account={account}
+                onRename={(next) =>
+                  saveProviders(
+                    providers.map((p) => (p.id === account.id ? { ...p, name: next } : p))
+                  )
+                }
+                onDelete={async () => {
+                  const confirmed = await openModal('confirmActionModal', {
+                    title: `Remove ${account.name}?`,
+                    description:
+                      'Emdash stops offering it; conversations set to it will not start until you pick another source. Its sign-in stays on this computer (in ~/.emdash/accounts); sign out there with the agent’s own logout if you want it gone.',
+                    confirmLabel: 'Remove',
+                  });
+                  if (!confirmed.success) return;
+                  saveProviders(providers.filter((p) => p.id !== account.id));
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {adding ? (
+        <div className="flex items-end gap-2 rounded-md border border-border p-3">
+          <Field.Root className="w-40 shrink-0">
+            <Field.Label>Agent</Field.Label>
+            <Select.Root
+              value={agent}
+              onValueChange={(next) => next && setAgent(next as OfficialAccountAgent)}
+            >
+              <Select.Trigger appearance="input" className="w-full">
+                <Select.Value>{AGENT_NAMES[agent]}</Select.Value>
+              </Select.Trigger>
+              <Select.Content align="start" width="trigger">
+                {OFFICIAL_ACCOUNT_AGENTS.map((candidate) => (
+                  <Select.Item key={candidate} value={candidate}>
+                    {AGENT_NAMES[candidate]}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+          </Field.Root>
+          <Field.Root className="min-w-0 flex-1">
+            <Field.Label>Name</Field.Label>
+            <Input
+              value={name}
+              placeholder="Work account"
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') add();
+              }}
+            />
+          </Field.Root>
+          <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
+            Cancel
+          </Button>
+          <Button size="sm" variant="primary" disabled={!name.trim()} onClick={add}>
+            Add
+          </Button>
+        </div>
+      ) : (
+        <Button variant="secondary" onClick={() => setAdding(true)}>
+          Add account
+        </Button>
+      )}
+    </section>
+  );
+}
+
+function OfficialAccountRow({
+  account,
+  onRename,
+  onDelete,
+}: {
+  account: ModelProvider;
+  onRename: (name: string) => void;
+  onDelete: () => void;
+}) {
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const {
+    data: status,
+    refetch,
+    isFetching,
+  } = useQuery({
+    queryKey: ['officialAccountStatus', account.id],
+    queryFn: async () =>
+      (await getAgentsClient()).officialAccountStatus({ providerId: account.id }),
+  });
+  const agent = account.account!.agent;
+
+  const signIn = async () => {
+    const result = await (
+      await getAgentsClient()
+    ).openOfficialAccountLogin({ providerId: account.id });
+    if (result.opened) {
+      toast.success('Finish signing in in the Terminal window, then press Refresh.');
+    } else {
+      await navigator.clipboard.writeText(result.command).catch(() => undefined);
+      toast.success(`Run this in a terminal (copied): ${result.command}`);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-border px-3 py-2.5">
+      <div className="min-w-0 flex-1">
+        {renaming !== null ? (
+          <Input
+            autoFocus
+            value={renaming}
+            onChange={(e) => setRenaming(e.target.value)}
+            onBlur={() => {
+              if (renaming.trim()) onRename(renaming.trim());
+              setRenaming(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+              if (e.key === 'Escape') setRenaming(null);
+            }}
+          />
+        ) : (
+          <p className="text-sm text-foreground">{account.name}</p>
+        )}
+        <p className="truncate text-xs text-foreground-muted">
+          {AGENT_NAMES[agent]} · {OFFICIAL_ACCOUNT_LABELS[agent]} ·{' '}
+          {!status ? (
+            'checking…'
+          ) : status.signedIn ? (
+            <span translate="no">
+              {status.email ?? 'signed in'}
+              {status.plan ? ` (${status.plan})` : ''}
+            </span>
+          ) : (
+            'not signed in'
+          )}
+        </p>
+      </div>
+      <Button size="sm" variant="ghost" onClick={() => void signIn()}>
+        {status?.signedIn ? 'Sign in again' : 'Sign in'}
+      </Button>
+      <Button size="sm" variant="ghost" disabled={isFetching} onClick={() => void refetch()}>
+        Refresh
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setRenaming(account.name)}>
+        Rename
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => void onDelete()}>
+        Remove
+      </Button>
     </div>
   );
 }
@@ -616,7 +819,7 @@ const AgentDefaultRow = observer(function AgentDefaultRow({
           {sourceId && !provider ? (
             <Select.Item value={sourceId}>Missing provider</Select.Item>
           ) : null}
-          {providers.map((candidate) => {
+          {sourcesForAgent(providers, agentId).map((candidate) => {
             const support = providerSupportsAgent(candidate, agentId);
             return (
               <Select.Item key={candidate.id} value={candidate.id} disabled={!support.ok}>

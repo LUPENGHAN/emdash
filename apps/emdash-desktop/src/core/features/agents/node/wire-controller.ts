@@ -7,6 +7,7 @@ import type { AgentOperations } from '@core/features/agents/node/controller';
 import type {
   ModelProviderKeys,
   ModelSourceOverride,
+  OfficialAccountStatus,
   OwnSource,
   UsageLimitsService,
 } from '@core/features/model-providers/api';
@@ -29,6 +30,11 @@ export type CreateAgentsWireControllerOptions = Readonly<{
   effectiveAgentConfig?: (agentId: string, override?: ModelSourceOverride) => Promise<unknown>;
   /** Reads what an agent's own configuration runs on (see model-providers describeOwnSource). */
   describeOwnSource?: (agentId: string, modelId?: string) => Promise<OwnSource | null>;
+  /** Official accounts, looked up by provider id from the saved settings. */
+  officialAccounts?: {
+    status: (providerId: string) => Promise<OfficialAccountStatus>;
+    openLogin: (providerId: string) => Promise<{ opened: boolean; command: string }>;
+  };
 }>;
 
 export function createAgentsWireController(options: CreateAgentsWireControllerOptions): Controller {
@@ -160,6 +166,14 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
+    },
+    officialAccountStatus: async ({ providerId }) => {
+      if (!options.officialAccounts) throw new Error('Official accounts are unavailable');
+      return options.officialAccounts.status(providerId);
+    },
+    openOfficialAccountLogin: async ({ providerId }) => {
+      if (!options.officialAccounts) throw new Error('Official accounts are unavailable');
+      return options.officialAccounts.openLogin(providerId);
     },
     describeOwnSource: async ({ agentId, modelId }) =>
       (await options.describeOwnSource?.(agentId, modelId).catch(() => null)) ?? null,

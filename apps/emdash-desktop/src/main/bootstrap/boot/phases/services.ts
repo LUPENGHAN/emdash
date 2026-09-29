@@ -84,6 +84,7 @@ import {
   createEffectiveAgentConfig,
   type EffectiveAgentConfig,
 } from '@core/features/model-providers/node/effective-agent-config';
+import { prepareAccountHome } from '@core/features/model-providers/node/official-accounts';
 import { createModelProviderKeys } from '@core/features/model-providers/node/provider-keys';
 import { createUsageLimitsService } from '@core/features/model-providers/node/usage-limits';
 import { previewServerService } from '@core/features/preview-servers/api/node/preview-server-service-instance';
@@ -359,6 +360,7 @@ export async function bootServices(
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
     getApiKey: modelProviderKeys.read,
     prepareAgentProvider: (agent) => prepareAgentProvider(agent),
+    prepareAccountHome: (account) => prepareAccountHome(account),
     ensureCodexModelCatalog: (catalog) => ensureCodexModelCatalog(catalog),
     warn: (message, details) => log.warn(message, details),
   });

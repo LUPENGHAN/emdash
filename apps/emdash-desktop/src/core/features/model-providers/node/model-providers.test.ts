@@ -374,6 +374,7 @@ describe('createEffectiveAgentConfig', () => {
       getProviders: async () => [provider],
       getApiKey: async () => 'sk-1',
       prepareAgentProvider: vi.fn(async () => {}),
+      prepareAccountHome: vi.fn(async () => '/accounts/claude-work'),
       ...overrides,
     });
   }
@@ -382,6 +383,27 @@ describe('createEffectiveAgentConfig', () => {
     const config = await resolver()('codex');
     expect(config?.extraArgs?.startsWith('--verbose -c model_provider=')).toBe(true);
     expect(config?.env?.[PROVIDER_KEY_ENV]).toBe('sk-1');
+  });
+
+  it('runs an official account on its own config dir, with no key or args', async () => {
+    const work: ModelProvider = {
+      id: 'work',
+      name: 'Work',
+      baseUrl: '',
+      models: [],
+      account: { agent: 'claude' },
+    };
+    const resolve = resolver({
+      getProviders: async () => [work],
+      getApiKey: async () => null,
+      getAgentConfig: async () => ({ extraArgs: '--verbose', modelSource: 'work' }),
+    });
+    expect(await resolve('claude')).toEqual({
+      extraArgs: '--verbose',
+      modelSource: 'work',
+      env: { CLAUDE_CONFIG_DIR: '/accounts/claude-work' },
+    });
+    await expect(resolve('codex')).rejects.toThrow(/account of another agent/);
   });
 
   it('refuses to start rather than fall back to the own login', async () => {

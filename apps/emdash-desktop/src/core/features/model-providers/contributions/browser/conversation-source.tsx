@@ -13,7 +13,14 @@ import type { Conversation } from '@core/primitives/conversations/api';
  * `isAgentDefault` marks conversations following the agent's default source.
  */
 export type ConversationSource =
-  | { kind: 'provider'; name: string; model: string | null; isAgentDefault: boolean }
+  | {
+      kind: 'provider';
+      name: string;
+      model: string | null;
+      /** An official account (another sign-in), not an API. */
+      account: boolean;
+      isAgentDefault: boolean;
+    }
   | {
       kind: 'own';
       official: boolean;
@@ -69,6 +76,7 @@ export function useConversationSource(
     return {
       kind: 'provider',
       name: provider?.name ?? 'Missing provider',
+      account: Boolean(provider?.account),
       // No model picked runs on the provider's first one (see effectiveAgentConfig).
       model: chosenModel || provider?.models[0] || null,
       isAgentDefault,
@@ -92,6 +100,11 @@ export function conversationSourceTooltip(
     }
     if (!source.provider) return `${label} — runs on the agent's own sign-in or configuration`;
     return `${label} — runs on the provider ${source.provider} with the model ${source.model ?? 'default'}, set in the agent's own configuration`;
+  }
+  if (source.account) {
+    return source.isAgentDefault
+      ? `${label} — runs on the official account ${source.name} (the agent default)`
+      : `${label} — runs on the official account ${source.name}`;
   }
   const model = source.model ?? 'default';
   return source.isAgentDefault

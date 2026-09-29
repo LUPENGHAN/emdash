@@ -4,6 +4,7 @@ import {
   defaultSourceLabel,
   isProviderCapableAgent,
   providerSupportsAgent,
+  sourcesForAgent,
   type ModelSourceValue,
 } from '@core/features/model-providers/api';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
@@ -78,7 +79,7 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
             {typeof value.modelSource === 'string' && !provider ? (
               <Select.Item value={value.modelSource}>Missing provider</Select.Item>
             ) : null}
-            {providers.map((candidate) => {
+            {sourcesForAgent(providers, agentId).map((candidate) => {
               const support = providerSupportsAgent(candidate, agentId);
               return (
                 <Select.Item key={candidate.id} value={candidate.id} disabled={!support.ok}>

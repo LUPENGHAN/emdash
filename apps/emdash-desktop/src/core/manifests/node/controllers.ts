@@ -50,7 +50,12 @@ import { createPromptLibraryWireController } from '@core/features/library/node/w
 import { createMachinesWireController } from '@core/features/machines/node/wire-controller';
 import { createMcpWireController } from '@core/features/mcp/node/wire-controller';
 import type { ModelProviderKeys, UsageLimitsService } from '@core/features/model-providers/api';
+import { isOfficialAccount, type OfficialAccount } from '@core/features/model-providers/api';
 import type { EffectiveAgentConfig } from '@core/features/model-providers/node/effective-agent-config';
+import {
+  openOfficialAccountLogin,
+  officialAccountStatus,
+} from '@core/features/model-providers/node/official-accounts';
 import { describeOwnSource } from '@core/features/model-providers/node/own-source';
 import type { PreviewServerAccessOperations } from '@core/features/preview-servers/node/preview-server-access-service';
 import { createPreviewServersWireController } from '@core/features/preview-servers/node/wire-controller';
@@ -201,6 +206,17 @@ function controllerFromImpl<Defs extends ContractDefinitions>(
   return createController(contract, owner.impl);
 }
 
+async function findOfficialAccount(
+  appSettings: AppSettingsService,
+  providerId: string
+): Promise<OfficialAccount> {
+  const provider = (await appSettings.get('modelProviders')).providers.find(
+    (candidate) => candidate.id === providerId
+  );
+  if (!provider || !isOfficialAccount(provider)) throw new Error('No such official account');
+  return provider;
+}
+
 export const desktopNodeControllers = {
   account: {
     create: ({ accountService, logger, telemetry }) =>
@@ -209,6 +225,7 @@ export const desktopNodeControllers = {
   agents: {
     create: ({
       agentDependencies,
+      appSettings,
       providerSettings,
       runtimes,
       modelProviderKeys,
@@ -225,6 +242,12 @@ export const desktopNodeControllers = {
         usageLimits,
         effectiveAgentConfig,
         describeOwnSource: (agentId, modelId) => describeOwnSource(agentId, modelId),
+        officialAccounts: {
+          status: async (providerId) =>
+            officialAccountStatus(await findOfficialAccount(appSettings, providerId)),
+          openLogin: async (providerId) =>
+            openOfficialAccountLogin(await findOfficialAccount(appSettings, providerId)),
+        },
       }),
   },
   appSettings: {

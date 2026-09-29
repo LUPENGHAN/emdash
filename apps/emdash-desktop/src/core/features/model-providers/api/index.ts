@@ -21,8 +21,16 @@ export const modelProviderSchema = z.object({
   name: z.string().min(1),
   /** Absent on providers saved before protocols: a new-api style gateway serving all three. */
   protocol: z.enum(PROVIDER_PROTOCOLS).optional(),
-  /** Anthropic: the root (clients add `/v1/messages`). OpenAI: the base, e.g. `…/v1`. */
-  baseUrl: z.string().min(1),
+  /**
+   * Anthropic: the root (clients add `/v1/messages`). OpenAI: the base, e.g. `…/v1`.
+   * Empty for an official account.
+   */
+  baseUrl: z.string(),
+  /**
+   * Set when this is not an API but another sign-in of an agent's own vendor account:
+   * the agent runs with its own login, kept in a config dir of its own for this account.
+   */
+  account: z.object({ agent: z.enum(['claude', 'codex']) }).optional(),
   /** Where to list the upstream models, when not the protocol's usual models endpoint. */
   modelsUrl: z.string().optional(),
   /** The models agents may use: the ones picked from the upstream list or typed in. */
@@ -73,6 +81,36 @@ export type ModelProvidersSettings = z.infer<typeof modelProvidersSettingsSchema
  */
 export const PROVIDER_CAPABLE_AGENTS = ['claude', 'codex', 'opencode', 'pi', 'oh-my-pi'] as const;
 export type ProviderCapableAgent = (typeof PROVIDER_CAPABLE_AGENTS)[number];
+
+/** Agents that can sign in with more than one of their vendor's accounts. */
+export const OFFICIAL_ACCOUNT_AGENTS = ['claude', 'codex'] as const;
+export type OfficialAccountAgent = (typeof OFFICIAL_ACCOUNT_AGENTS)[number];
+
+export const OFFICIAL_ACCOUNT_LABELS: Record<OfficialAccountAgent, string> = {
+  claude: 'Claude subscription',
+  codex: 'ChatGPT',
+};
+
+export type OfficialAccount = ModelProvider & { account: { agent: OfficialAccountAgent } };
+
+export function isOfficialAccount(provider: ModelProvider): provider is OfficialAccount {
+  return provider.account !== undefined;
+}
+
+/**
+ * The sources an agent can pick from: every API provider (some may not suit it; see
+ * {@link providerSupportsAgent}), and only its own vendor's accounts.
+ */
+export function sourcesForAgent(providers: ModelProvider[], agentId: string): ModelProvider[] {
+  return providers.filter((provider) => !provider.account || provider.account.agent === agentId);
+}
+
+/** Whether an official account is signed in, and as whom. */
+export type OfficialAccountStatus = {
+  signedIn: boolean;
+  email: string | null;
+  plan: string | null;
+};
 
 export function isProviderCapableAgent(agentId: string): agentId is ProviderCapableAgent {
   return (PROVIDER_CAPABLE_AGENTS as readonly string[]).includes(agentId);
@@ -128,8 +166,9 @@ export type ProviderEndpoints = {
 
 /** The APIs a provider speaks, with normalized URLs. */
 export function providerEndpoints(
-  provider: Pick<ModelProvider, 'protocol' | 'baseUrl'>
+  provider: Pick<ModelProvider, 'protocol' | 'baseUrl'> & Partial<Pick<ModelProvider, 'account'>>
 ): ProviderEndpoints {
+  if ('account' in provider && provider.account) return {};
   const base = provider.baseUrl;
   switch (provider.protocol) {
     case undefined:
@@ -174,6 +213,11 @@ export function providerSupportsAgent(
   provider: ModelProvider,
   agentId: string
 ): { ok: true } | { ok: false; reason: string } {
+  if (provider.account) {
+    return provider.account.agent === agentId
+      ? { ok: true }
+      : { ok: false, reason: `a ${OFFICIAL_ACCOUNT_LABELS[provider.account.agent]} account` };
+  }
   const endpoints = providerEndpoints(provider);
   switch (agentId) {
     case 'claude':
@@ -189,6 +233,7 @@ export function providerSupportsAgent(
 
 /** One line describing a provider's protocol and URL, for lists. */
 export function describeProvider(provider: ModelProvider): string {
+  if (provider.account) return `${OFFICIAL_ACCOUNT_LABELS[provider.account.agent]} account`;
   const protocol = provider.protocol
     ? PROVIDER_PROTOCOL_LABELS[provider.protocol]
     : 'Gateway (all protocols)';
