@@ -214,7 +214,12 @@ export function createConversationsWireController(
     getConversationsForTask: ({ projectId, taskId }) =>
       conversationOperations.getConversationsForTask(projectId, taskId),
     listImportableSessions: ({ taskId }) => conversationOperations.listImportableSessions(taskId),
-    prepareHandoff: ({ conversationId }) => conversationOperations.prepareHandoff(conversationId),
+    prepareHandoff: ({ conversationId, summaryPath, note }) =>
+      conversationOperations.prepareHandoff(conversationId, { summaryPath, note }),
+    requestHandoffSummary: ({ conversationId }) =>
+      conversationOperations.requestHandoffSummary(conversationId),
+    readHandoffSummary: ({ conversationId, summaryPath }) =>
+      conversationOperations.readHandoffSummary(conversationId, summaryPath),
     listProjectImportableSessions: ({ projectId }) =>
       conversationOperations.listProjectImportableSessions(projectId),
     getConversationsForProject: ({ projectId }) =>

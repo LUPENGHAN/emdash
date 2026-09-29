@@ -9,6 +9,7 @@ import { browserDiagnosticsStore } from '@core/features/browser/api/browser/brow
 import { browserSessionStore } from '@core/features/browser/api/browser/browser-session-store';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { nextDefaultConversationTitle } from '@core/features/conversations/api/browser/conversation-title-utils';
+import { sendToConversation } from '@core/features/conversations/api/browser/send-to-conversation';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import {
   agentDisplayName,
@@ -74,26 +75,7 @@ export async function executeAgentAction(
       const target = manager.conversations.get(action.conversationId);
       if (!target) throw new Error(`No conversation ${action.conversationId} in this task`);
       await confirm(`${who} wants to message “${target.data.title}”`, action.text, 'Send');
-      if (target.data.type === 'acp') {
-        const result = await (
-          await getConversationsClient()
-        ).acp.sendPrompt(
-          {
-            conversationId: target.data.id,
-            promptId: crypto.randomUUID(),
-            prompt: { text: action.text },
-            placement: 'auto',
-          },
-          { timeoutMs: 0 }
-        );
-        if (!result.success) throw new Error('The chat did not accept the message');
-      } else {
-        const session = manager.sessions.get(target.data.id);
-        if (!session) throw new Error('That terminal conversation is not running');
-        await session.connect();
-        if (!session.pty) throw new Error('That terminal conversation is not running');
-        session.pty.sendInput(`${action.text}\r`);
-      }
+      await sendToConversation(manager, target.data, action.text);
       return { text: `Sent to “${target.data.title}”.` };
     }
 

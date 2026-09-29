@@ -250,8 +250,24 @@ export const conversationsContract = defineContract({
   }),
   /** Transcript file + first message for handing a conversation to another agent. */
   prepareHandoff: procedure({
-    input: z.object({ conversationId: z.string() }),
+    input: z.object({
+      conversationId: z.string(),
+      /** A summary the source agent wrote (requestHandoffSummary), to lead the message. */
+      summaryPath: z.string().optional(),
+      /** What the user tells the next agent. */
+      note: z.string().optional(),
+    }),
     output: z.custom<HandoffPreparation>(),
+  }),
+  /** The message asking the source agent for a handoff summary, and the file it writes. */
+  requestHandoffSummary: procedure({
+    input: z.object({ conversationId: z.string() }),
+    output: z.object({ summaryPath: z.string(), prompt: z.string() }),
+  }),
+  /** The summary once the source agent finished writing it; null until then. */
+  readHandoffSummary: procedure({
+    input: z.object({ conversationId: z.string(), summaryPath: z.string() }),
+    output: z.string().nullable(),
   }),
   /** Same, for the project's own checkout: its terminal/IDE session history. */
   listProjectImportableSessions: procedure({

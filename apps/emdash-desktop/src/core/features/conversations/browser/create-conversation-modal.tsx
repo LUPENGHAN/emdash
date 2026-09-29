@@ -1,10 +1,19 @@
 import { formatHostRef } from '@emdash/core/primitives/host/api';
 import type { AgentProviderId } from '@emdash/plugins/agents/types';
-import { Dialog, Field, Input, Select, Switch } from '@emdash/ui/react/primitives';
+import {
+  Button,
+  Checkbox,
+  Dialog,
+  Field,
+  Input,
+  Select,
+  Switch,
+  Textarea,
+} from '@emdash/ui/react/primitives';
 import { useQuery } from '@tanstack/react-query';
 import { formatDistanceToNow } from 'date-fns';
 import { observer } from 'mobx-react-lite';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgents } from '@core/features/agents/api/browser/use-agents';
 import { AgentSelector } from '@core/features/agents/contributions/browser/agent-selector';
@@ -29,6 +38,7 @@ import type { ConversationType } from '@core/primitives/conversations/api';
 import { ConfirmButton } from '@core/primitives/keybindings/browser/confirm-button';
 import { defineModal } from '@core/primitives/modals/react';
 import { useCloseGuard } from '@core/primitives/modals/react/use-close-guard';
+import { agentDisplayName, collectHandoffSummary } from './handoff';
 
 // Select value for the "type any model id" row; not a real model id.
 const CUSTOM_MODEL_VALUE = '__emdash_custom_model__';
@@ -58,6 +68,20 @@ export const CreateConversationModal = observer(function CreateConversationModal
     handoff?.providerId
   );
   const conversationMgr = conversationRegistry.get(taskId);
+  const handoffSource = handoff
+    ? conversationMgr?.conversations.get(handoff.fromConversationId)?.data
+    : undefined;
+  // Handoff: a note for the next agent, and optionally a summary by the source agent first.
+  const [handoffNote, setHandoffNote] = useState('');
+  const [askSummary, setAskSummary] = useState(false);
+  const [summaryWait, setSummaryWait] = useState<{ startedAt: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const stopWaiting = useRef<'skip' | 'cancel' | null>(null);
+  useEffect(() => {
+    if (!summaryWait) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [summaryWait]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const liveActionDisabledReason = projectAvailabilityUi.getLiveActionDisabledReason(projectId);
@@ -162,12 +186,33 @@ export const CreateConversationModal = observer(function CreateConversationModal
     try {
       const settings = await readProviderSettings({ host, providerId });
       const conversationType: ConversationType = useAcp ? 'acp' : 'pty';
+      // Asked for only on confirm; the source agent spends its own tokens on it.
+      let summaryPath: string | null = null;
+      if (handoff && askSummary && handoffSource) {
+        stopWaiting.current = null;
+        setSummaryWait({ startedAt: Date.now() });
+        try {
+          summaryPath = await collectHandoffSummary(handoffSource, () =>
+            Boolean(stopWaiting.current)
+          );
+        } finally {
+          setSummaryWait(null);
+        }
+        if (stopWaiting.current === 'cancel') {
+          setIsSubmitting(false);
+          return;
+        }
+      }
       // Written only on confirm, so a cancelled handoff leaves no transcript behind.
       const handoffPrompt = handoff
         ? (
             await (
               await getConversationsClient()
-            ).prepareHandoff({ conversationId: handoff.fromConversationId })
+            ).prepareHandoff({
+              conversationId: handoff.fromConversationId,
+              ...(summaryPath && { summaryPath }),
+              ...(handoffNote.trim() && { note: handoffNote.trim() }),
+            })
           ).prompt
         : undefined;
       await conversationMgr.createConversation({
@@ -199,6 +244,9 @@ export const CreateConversationModal = observer(function CreateConversationModal
     }
   }, [
     handoff,
+    handoffSource,
+    askSummary,
+    handoffNote,
     conversationMgr,
     liveActionDisabledReason,
     createDisabled,
@@ -243,10 +291,61 @@ export const CreateConversationModal = observer(function CreateConversationModal
             />
           </Field.Root>
           {handoff ? (
-            <p className="text-xs text-foreground-muted">
-              The new conversation starts with the original ask, the last reply, the git state and
-              the path of the full transcript.
-            </p>
+            <>
+              <p className="text-xs text-foreground-muted">
+                The new conversation starts with the recent turns, the git state and the path of the
+                full transcript.
+              </p>
+              <Field.Root>
+                <Field.Label>Note for the next agent (optional)</Field.Label>
+                <Textarea
+                  value={handoffNote}
+                  rows={3}
+                  placeholder="What it should do now, e.g. the importer migration, not the export page"
+                  disabled={isSubmitting}
+                  onChange={(event) => setHandoffNote(event.target.value)}
+                />
+              </Field.Root>
+              {handoffSource ? (
+                <label className="flex items-start gap-2 text-sm">
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={askSummary}
+                    disabled={isSubmitting}
+                    onCheckedChange={(checked) => setAskSummary(checked === true)}
+                  />
+                  <span className="flex flex-col gap-0.5">
+                    <span>
+                      First ask{' '}
+                      <span translate="no">{agentDisplayName(handoffSource.providerId)}</span> for a
+                      handoff summary
+                    </span>
+                    <span className="text-xs text-foreground-muted">
+                      More accurate about where the work stands, but it spends that agent's quota
+                      and takes a minute or two. Leave it off when the agent is out of quota.
+                    </span>
+                  </span>
+                </label>
+              ) : null}
+              {summaryWait ? (
+                <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs">
+                  <span className="min-w-0 flex-1 text-foreground-muted">
+                    Waiting for the handoff summary…{' '}
+                    {Math.max(0, Math.round((now - summaryWait.startedAt) / 1000))}s
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={() => (stopWaiting.current = 'skip')}>
+                    Hand off without it
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => (stopWaiting.current = 'cancel')}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              ) : null}
+            </>
           ) : null}
           {!handoff && agentSessions.length > 0 ? (
             <Field.Root>

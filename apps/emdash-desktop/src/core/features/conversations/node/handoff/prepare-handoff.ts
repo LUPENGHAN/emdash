@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { HandoffPreparation } from '@core/primitives/conversations/api';
+import { HANDOFF_PROMPT_OPENER, type HandoffPreparation } from '@core/primitives/conversations/api';
 import { readTranscript, type TranscriptTurn } from './transcript';
 
 const execFileAsync = promisify(execFile);
@@ -56,12 +56,15 @@ const defaultDeps: HandoffDeps = {
  */
 export async function prepareHandoff(
   source: HandoffSource,
-  deps: HandoffDeps = defaultDeps
+  deps: HandoffDeps = defaultDeps,
+  extra: HandoffExtras = {}
 ): Promise<HandoffPreparation> {
   const agent = AGENT_NAMES[source.providerId] ?? source.providerId;
-  const turns = source.sessionId
-    ? await deps.readTranscript(source.providerId, source.sessionId, source.cwd)
-    : [];
+  const turns = withoutSummaryRequests(
+    source.sessionId
+      ? await deps.readTranscript(source.providerId, source.sessionId, source.cwd)
+      : []
+  );
 
   let transcriptPath: string | null = null;
   if (turns.length > 0) {
@@ -82,13 +85,22 @@ export async function prepareHandoff(
   // ask is only background.
   const firstAsk = turns.find((turn) => turn.role === 'user')?.text;
   const recent = recentTurns(turns);
+  const summary = extra.summaryPath ? await readSummary(source.cwd, extra.summaryPath) : null;
   const sections = [
-    `你在接手另一个 AI 编码助手（${agent}）没做完的工作。项目目录和代码改动是同一份，已经在你的工作目录里。`,
+    `${HANDOFF_PROMPT_OPENER}（${agent}）没做完的工作。项目目录和代码改动是同一份，已经在你的工作目录里。`,
   ];
+  if (extra.note?.trim()) {
+    sections.push(`## 用户的说明（最优先）\n\n${clip(extra.note.trim(), 2000)}`);
+  }
+  if (summary) {
+    sections.push(
+      `## ${agent} 写的交接总结\n\n文件：\`${extra.summaryPath}\`\n\n${clip(summary, SUMMARY_CHARS)}`
+    );
+  }
   if (recent.length > 0) {
     sections.push(
       [
-        '## 最近的对话（当前在做什么以这里为准）',
+        summary ? '## 最近的对话（用来核对总结）' : '## 最近的对话（当前在做什么以这里为准）',
         '',
         '任务在过程中可能已经换了方向，最后几条用户消息才是现在的目标。',
         '',
@@ -129,6 +141,106 @@ export async function prepareHandoff(
   return { prompt: sections.join('\n\n'), transcriptPath };
 }
 
+export type HandoffExtras = {
+  /** A summary the source agent wrote (see {@link handoffSummaryRequest}). */
+  summaryPath?: string;
+  /** What the user told the next agent in the handoff dialog. */
+  note?: string;
+};
+
+const SUMMARY_CHARS = 6000;
+/** The last line of a finished summary, so a half-written file is never taken. */
+export const SUMMARY_DONE_MARKER = '<!-- 交接总结完成 -->';
+
+/**
+ * Asks the source agent for a handoff summary: the message to send it, and the workspace
+ * file it writes. Spends the source agent's tokens, so it is opt-in in the dialog.
+ */
+export async function handoffSummaryRequest(
+  cwd: string,
+  deps: Pick<HandoffDeps, 'git' | 'now'> = defaultDeps
+): Promise<{ summaryPath: string; prompt: string }> {
+  const stamp = deps.now().toISOString().slice(0, 19).replace(/:/g, '-');
+  const summaryPath = `${HANDOFF_DIR}/${stamp}-summary.md`;
+  await mkdir(path.join(cwd, HANDOFF_DIR), { recursive: true });
+  await ensureGitExcluded(cwd, deps);
+  return { summaryPath, prompt: summaryPrompt(summaryPath) };
+}
+
+/** The summary once finished (its last line is the marker), else null. */
+export async function readHandoffSummary(cwd: string, summaryPath: string): Promise<string | null> {
+  const text = await readSummary(cwd, summaryPath, { requireDone: true });
+  return text;
+}
+
+async function readSummary(
+  cwd: string,
+  summaryPath: string,
+  { requireDone = false }: { requireDone?: boolean } = {}
+): Promise<string | null> {
+  // Only files Emdash asked for, inside the workspace's handoff folder.
+  if (!/^\.emdash\/handoffs\/[\w-]+-summary\.md$/.test(summaryPath)) return null;
+  const text = await readFile(path.join(cwd, summaryPath), 'utf8').catch(() => null);
+  if (!text?.trim()) return null;
+  const done = text.trimEnd().endsWith(SUMMARY_DONE_MARKER);
+  if (requireDone && !done) return null;
+  return text.replace(SUMMARY_DONE_MARKER, '').trim();
+}
+
+const SUMMARY_REQUEST_START = '请先停下手上的工作，为接手的另一个 AI 编码助手写一份交接总结。';
+
+/** Drops Emdash's own summary requests (and the replies to them) from a transcript. */
+function withoutSummaryRequests(turns: TranscriptTurn[]): TranscriptTurn[] {
+  return turns.filter(
+    (turn, index) =>
+      !(turn.role === 'user' && turn.text.startsWith(SUMMARY_REQUEST_START)) &&
+      !(
+        turn.role === 'assistant' &&
+        turns[index - 1]?.role === 'user' &&
+        turns[index - 1]!.text.startsWith(SUMMARY_REQUEST_START)
+      )
+  );
+}
+
+function summaryPrompt(summaryPath: string): string {
+  return [
+    `${SUMMARY_REQUEST_START}这一步不要再改代码，也不要提交。`,
+    '',
+    `把总结写进文件 \`${summaryPath}\`（新建，一次写完），用中文，按下面的结构：`,
+    '',
+    '# 交接总结',
+    '',
+    '## 当前目标',
+    '现在真正要完成的是什么。任务中途换过方向的话，写最新的目标，再用一两句话说明它是怎么从最初的需求变过来的。',
+    '',
+    '## 已完成',
+    '已经做完并确认可用的部分：改了哪些文件，怎么验证过（跑了哪些测试或命令）。',
+    '',
+    '## 进行中',
+    '做了一半的部分：做到哪一步，还差什么，下一处具体要改的地方。',
+    '',
+    '## 未解决的问题',
+    '失败的测试、报错、还没查清的疑点。附上关键报错原文和复现命令。',
+    '',
+    '## 关键决定和约束',
+    '做过的取舍和原因；用户明确提出的要求和禁止事项（比如不要改某个文件、必须用某个库、不要推送）。',
+    '',
+    '## 接下来的步骤',
+    '按顺序列出接手者该做的事，第一步要具体到可以直接动手。',
+    '',
+    '## 相关文件',
+    '和当前目标有关的文件路径，每个一句话说明作用。',
+    '',
+    '要求：',
+    '- 只写事实；没验证过的标明“未确认”，不要写成已完成。',
+    '- 重点写接手者从代码和 git diff 里看不出来的东西：意图、原因、试过但失败的办法、用户的偏好。不要逐行复述代码改动。',
+    '- 控制在 1500 字以内，没有内容的小节写“无”。',
+    `- 文件最后单独一行写 \`${SUMMARY_DONE_MARKER}\`，表示写完了。`,
+    '',
+    '写完后只回复一句“交接总结已写好”。',
+  ].join('\n');
+}
+
 /** How many of the last user messages (with the replies between them) lead the handoff. */
 const RECENT_USER_TURNS = 4;
 const RECENT_USER_CHARS = 1200;
@@ -162,7 +274,7 @@ function renderTranscript(agent: string, turns: TranscriptTurn[]): string {
 }
 
 /** Keeps handoff files out of `git status` via the local, uncommitted exclude file. */
-async function ensureGitExcluded(cwd: string, deps: HandoffDeps): Promise<void> {
+async function ensureGitExcluded(cwd: string, deps: Pick<HandoffDeps, 'git'>): Promise<void> {
   const excludePath = await deps.git(cwd, ['rev-parse', '--git-path', 'info/exclude']);
   if (!excludePath) return;
   const file = path.resolve(cwd, excludePath);

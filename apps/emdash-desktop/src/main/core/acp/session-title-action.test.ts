@@ -1,5 +1,6 @@
 import type { SessionSummary } from '@emdash/core/runtimes/acp/api';
 import { describe, expect, it } from 'vitest';
+import { HANDOFF_PROMPT_OPENER } from '@core/primitives/conversations/api';
 import { deriveAcpSessionTitleAction } from './session-title-action';
 
 function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {
@@ -51,6 +52,15 @@ describe('deriveAcpSessionTitleAction', () => {
   it('ignores missing titles', () => {
     expect(
       deriveAcpSessionTitleAction(summary({ title: 'Initial title' }), summary({ title: null }))
+    ).toBeNull();
+  });
+
+  it('keeps the title of a conversation started with a handoff message', () => {
+    expect(
+      deriveAcpSessionTitleAction(
+        undefined,
+        summary({ title: `${HANDOFF_PROMPT_OPENER}（Codex）没做完的工作。` })
+      )
     ).toBeNull();
   });
 });

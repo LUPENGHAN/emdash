@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { claudeProjectDirName } from '../external-sessions';
-import { prepareHandoff, type HandoffDeps } from './prepare-handoff';
+import {
+  handoffSummaryRequest,
+  prepareHandoff,
+  readHandoffSummary,
+  SUMMARY_DONE_MARKER,
+  type HandoffDeps,
+} from './prepare-handoff';
 import { readTranscript } from './transcript';
 
 vi.mock('better-sqlite3', () => ({ default: vi.fn() }));
@@ -171,6 +177,46 @@ describe('prepareHandoff', () => {
     // Earlier replies are only a line of context.
     expect(prompt).not.toContain('x'.repeat(500));
     expect(prompt.slice(first)).toContain('Build the export page');
+  });
+
+  it("asks for a summary file and leads with it, and the user's note, once it is done", async () => {
+    const { summaryPath, prompt: ask } = await handoffSummaryRequest(cwd, deps());
+    expect(summaryPath).toBe('.emdash/handoffs/2026-09-25T10-20-30-summary.md');
+    expect(ask).toContain(summaryPath);
+    expect(ask).toContain('## 当前目标');
+    expect(ask).toContain(SUMMARY_DONE_MARKER);
+
+    // Half written: not taken yet.
+    await writeFile(path.join(cwd, summaryPath), '# 交接总结\n\n## 当前目标\n迁移 importer');
+    expect(await readHandoffSummary(cwd, summaryPath)).toBeNull();
+    await writeFile(
+      path.join(cwd, summaryPath),
+      `# 交接总结\n\n## 当前目标\n迁移 importer 到 streams\n\n${SUMMARY_DONE_MARKER}\n`
+    );
+    expect(await readHandoffSummary(cwd, summaryPath)).toContain('迁移 importer 到 streams');
+
+    const { prompt } = await prepareHandoff(
+      { providerId: 'claude', sessionId: 's1', cwd },
+      deps(),
+      {
+        summaryPath,
+        note: 'Only the writer is left',
+      }
+    );
+    const note = prompt.indexOf('## 用户的说明');
+    const summary = prompt.indexOf('## Claude Code 写的交接总结');
+    const recent = prompt.indexOf('## 最近的对话（用来核对总结）');
+    expect(note).toBeGreaterThan(-1);
+    expect(summary).toBeGreaterThan(note);
+    expect(recent).toBeGreaterThan(summary);
+    expect(prompt).toContain('迁移 importer 到 streams');
+    expect(prompt).not.toContain(SUMMARY_DONE_MARKER);
+  });
+
+  it('never reads a summary path outside the handoff folder', async () => {
+    await writeFile(path.join(cwd, 'secret.md'), `x\n${SUMMARY_DONE_MARKER}`);
+    expect(await readHandoffSummary(cwd, 'secret.md')).toBeNull();
+    expect(await readHandoffSummary(cwd, '.emdash/handoffs/../../secret-summary.md')).toBeNull();
   });
 
   it('adds the handoff directory to the local git exclude file once', async () => {

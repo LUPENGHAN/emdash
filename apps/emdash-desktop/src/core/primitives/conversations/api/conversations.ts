@@ -152,6 +152,12 @@ export type ImportableSession = {
   resumeIn?: ConversationType;
 };
 
+/**
+ * How every handoff message starts. Agents title a session after its first message, so
+ * titles starting with this are handoff messages, not names (the conversation keeps its own).
+ */
+export const HANDOFF_PROMPT_OPENER = '你在接手另一个 AI 编码助手';
+
 /** What a receiving agent gets when a conversation is handed off to it. */
 export type HandoffPreparation = {
   /** First message for the receiving agent: short, pointing at the transcript file. */

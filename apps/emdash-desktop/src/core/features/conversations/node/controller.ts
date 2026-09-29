@@ -14,7 +14,11 @@ import { deleteConversation } from './deleteConversation';
 import { getConversations } from './getConversations';
 import { getConversationsForProject } from './getConversationsForProject';
 import { getConversationsForTask } from './getConversationsForTask';
-import { prepareConversationHandoff } from './handoff/prepare-conversation-handoff';
+import {
+  prepareConversationHandoff,
+  readConversationHandoffSummary,
+  requestConversationHandoffSummary,
+} from './handoff/prepare-conversation-handoff';
 import { hydrateConversation } from './hydrateConversation';
 import { linkConversationToTask } from './link-conversation-to-task';
 import { listHostConversations } from './list-host-conversations';
@@ -78,7 +82,12 @@ export function createConversationOperations(dependencies: {
     getConversationsForProject: (projectId: string) => getConversationsForProject(db, projectId),
     listImportableSessions: (taskId: string) =>
       listImportableSessions(db, dependencies.workspaceIdentity, taskId),
-    prepareHandoff: (conversationId: string) => prepareConversationHandoff(db, conversationId),
+    prepareHandoff: (conversationId: string, extra: { summaryPath?: string; note?: string } = {}) =>
+      prepareConversationHandoff(db, conversationId, extra),
+    requestHandoffSummary: (conversationId: string) =>
+      requestConversationHandoffSummary(db, conversationId),
+    readHandoffSummary: (conversationId: string, summaryPath: string) =>
+      readConversationHandoffSummary(db, conversationId, summaryPath),
     listProjectImportableSessions: (projectId: string) =>
       listProjectImportableSessions(db, dependencies.workspaceIdentity, projectId),
     markConversationSeen: (conversationId: string) => markConversationSeen(db, conversationId),

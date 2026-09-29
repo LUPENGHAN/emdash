@@ -1,6 +1,7 @@
 import type { AgentProviderId } from '@emdash/plugins/agents/types';
 import { toast } from '@emdash/ui/react/primitives';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
+import { sendToConversation } from '@core/features/conversations/api/browser/send-to-conversation';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
 import { openModal } from '@core/manifests/browser/modal-api';
@@ -22,10 +23,11 @@ const HANDOFF_TARGETS: { id: AgentProviderId; name: string }[] = [
 
 /**
  * Hands a conversation's work to another agent in the same task. The new-conversation
- * dialog opens on the target agent so its model and source can be chosen; on confirm the
+ * dialog opens on the target agent so its model and source can be chosen, with an
+ * optional note and an optional summary written by the source agent first; on confirm the
  * new conversation (same UI type where the target has it) starts with a short handoff
- * message (original ask, last reply, git state, and the path of a text-only transcript it
- * can read on demand). The source is kept, retitled "→ <agent>", so it can be picked up
+ * message (the note, the summary, the recent turns, git state, and the path of a
+ * text-only transcript it can read on demand). The source is kept, retitled "→ <agent>", so it can be picked up
  * again once its quota resets.
  */
 export async function handOffConversation(
@@ -144,4 +146,35 @@ export function handoffCommands(conversation: Conversation | undefined) {
       },
     },
   ];
+}
+
+/** How long a handoff waits for the source agent's summary before giving up. */
+export const HANDOFF_SUMMARY_TIMEOUT_MS = 5 * 60_000;
+const SUMMARY_POLL_MS = 2_000;
+
+/**
+ * Asks the source conversation's agent to write a handoff summary and waits until the
+ * file is finished. Resolves with its path, or null when `stop()` says to go on without
+ * it (the user skipped, or the wait timed out). Throws when the message cannot be sent.
+ */
+export async function collectHandoffSummary(
+  source: Conversation,
+  stop: () => boolean
+): Promise<string | null> {
+  const manager = conversationRegistry.get(source.taskId);
+  if (!manager) throw new Error('The task is not loaded');
+  const client = await getConversationsClient();
+  const { summaryPath, prompt } = await client.requestHandoffSummary({
+    conversationId: source.id,
+  });
+  await sendToConversation(manager, source, prompt);
+  const deadline = Date.now() + HANDOFF_SUMMARY_TIMEOUT_MS;
+  while (!stop() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, SUMMARY_POLL_MS));
+    const summary = await client
+      .readHandoffSummary({ conversationId: source.id, summaryPath })
+      .catch(() => null);
+    if (summary) return summaryPath;
+  }
+  return null;
 }
