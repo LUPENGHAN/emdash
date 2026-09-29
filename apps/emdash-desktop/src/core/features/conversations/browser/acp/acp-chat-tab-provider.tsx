@@ -24,6 +24,7 @@ import {
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
 import { TabTitle } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/tab-title';
 import { ConversationAgentIcon } from '../conversation-agent-icon';
+import { ConversationSubagentsBadge } from '../conversation-subagents';
 import { handoffCommands } from '../handoff';
 import { restartConversationCommands } from '../restart-conversation';
 import { switchConversationUiCommands } from '../switch-conversation-ui';
@@ -68,10 +69,13 @@ export const AcpChatTabBarItem = observer(function AcpChatTabBarItem({
       label={label}
       tooltip={conversationSourceTooltip(label, source)}
       labelSlot={
-        <TabTitle isActive={tab.isActive} isPreview={tab.isPreview}>
-          {label}
-          <ConversationSourceSuffix agentId={providerId} source={source} />
-        </TabTitle>
+        <>
+          <TabTitle isActive={tab.isActive} isPreview={tab.isPreview}>
+            {label}
+            <ConversationSourceSuffix agentId={providerId} source={source} />
+          </TabTitle>
+          {conversation ? <ConversationSubagentsBadge conversation={conversation.data} /> : null}
+        </>
       }
       preSlot={<ConversationAgentIcon providerId={providerId} isAcp size={16} />}
       statusSlot={

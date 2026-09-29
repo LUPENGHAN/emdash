@@ -9,7 +9,8 @@ import {
   type HandoffExtras,
 } from './prepare-handoff';
 
-async function localConversation(db: Pick<AppDb, 'select'>, conversationId: string) {
+/** A conversation on this computer: its agent, session and workspace. */
+export async function localConversation(db: Pick<AppDb, 'select'>, conversationId: string) {
   const [row] = await db
     .select({
       provider: conversations.provider,

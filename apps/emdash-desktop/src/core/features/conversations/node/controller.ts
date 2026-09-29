@@ -25,6 +25,7 @@ import { listHostConversations } from './list-host-conversations';
 import { listImportableSessions, listProjectImportableSessions } from './list-importable-sessions';
 import { markConversationSeen } from './markConversationSeen';
 import { renameConversation } from './renameConversation';
+import { listConversationSubagents, readConversationSubagentTranscript } from './subagents';
 
 export function createConversationOperations(dependencies: {
   db: AppDb;
@@ -88,6 +89,9 @@ export function createConversationOperations(dependencies: {
       requestConversationHandoffSummary(db, conversationId),
     readHandoffSummary: (conversationId: string, summaryPath: string) =>
       readConversationHandoffSummary(db, conversationId, summaryPath),
+    listSubagents: (conversationId: string) => listConversationSubagents(db, conversationId),
+    readSubagentTranscript: (conversationId: string, subagentId: string) =>
+      readConversationSubagentTranscript(db, conversationId, subagentId),
     listProjectImportableSessions: (projectId: string) =>
       listProjectImportableSessions(db, dependencies.workspaceIdentity, projectId),
     markConversationSeen: (conversationId: string) => markConversationSeen(db, conversationId),

@@ -29,6 +29,7 @@ import { formatConversationTitleForDisplay } from '@core/features/conversations/
 import { getAcpChatResourceManager } from '@core/features/conversations/browser/acp/acp-chat-resource-manager';
 import { ConversationAgentIcon } from '@core/features/conversations/browser/conversation-agent-icon';
 import { ConversationSelectionControl } from '@core/features/conversations/browser/conversation-selection-control';
+import { ConversationSubagentsBadge } from '@core/features/conversations/browser/conversation-subagents';
 import { deleteConversationBatch } from '@core/features/conversations/browser/delete-conversation-batch';
 // TODO(conversations-extraction): Pass task scope into the sidebar instead of importing task hooks.
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
@@ -233,6 +234,7 @@ const ConversationRow = observer(function ConversationRow({
           ) : (
             <span className="min-w-0 flex-1 truncate">{displayTitle}</span>
           )}
+          <ConversationSubagentsBadge conversation={conversation.data} />
           <ConversationSelectionControl
             label={`Select ${displayTitle}`}
             selected={isSelected}

@@ -37,6 +37,7 @@ import type {
   HandoffPreparation,
   HostConversationRow,
   ImportableSession,
+  SubagentSummary,
 } from '@core/primitives/conversations/api';
 import {
   localTerminalFilesSchema,
@@ -258,6 +259,16 @@ export const conversationsContract = defineContract({
       note: z.string().optional(),
     }),
     output: z.custom<HandoffPreparation>(),
+  }),
+  /** Subagents the conversation's agent started in its own process; empty when unknown. */
+  listSubagents: procedure({
+    input: z.object({ conversationId: z.string() }),
+    output: z.custom<SubagentSummary[]>(),
+  }),
+  /** What one of those subagents was asked and answered. */
+  readSubagentTranscript: procedure({
+    input: z.object({ conversationId: z.string(), subagentId: z.string() }),
+    output: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string() })),
   }),
   /** The message asking the source agent for a handoff summary, and the file it writes. */
   requestHandoffSummary: procedure({

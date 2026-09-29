@@ -218,6 +218,9 @@ export function createConversationsWireController(
       conversationOperations.prepareHandoff(conversationId, { summaryPath, note }),
     requestHandoffSummary: ({ conversationId }) =>
       conversationOperations.requestHandoffSummary(conversationId),
+    listSubagents: ({ conversationId }) => conversationOperations.listSubagents(conversationId),
+    readSubagentTranscript: ({ conversationId, subagentId }) =>
+      conversationOperations.readSubagentTranscript(conversationId, subagentId),
     readHandoffSummary: ({ conversationId, summaryPath }) =>
       conversationOperations.readHandoffSummary(conversationId, summaryPath),
     listProjectImportableSessions: ({ projectId }) =>

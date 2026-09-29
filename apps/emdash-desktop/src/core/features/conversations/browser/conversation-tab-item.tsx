@@ -17,6 +17,7 @@ import {
   GenericTabItem,
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
 import { TabTitle } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/tab-title';
+import { ConversationSubagentsBadge } from './conversation-subagents';
 import type { ConversationTabResource } from './conversation-tab-resource';
 import { handoffCommands } from './handoff';
 import { restartConversationCommands } from './restart-conversation';
@@ -40,10 +41,13 @@ export const ConversationTabBarItem = observer(function ConversationTabBarItem({
       label={title}
       tooltip={conversationSourceTooltip(title, source)}
       labelSlot={
-        <TabTitle isActive={tab.isActive} isPreview={tab.isPreview}>
-          {title}
-          <ConversationSourceSuffix agentId={store.data.providerId} source={source} />
-        </TabTitle>
+        <>
+          <TabTitle isActive={tab.isActive} isPreview={tab.isPreview}>
+            {title}
+            <ConversationSourceSuffix agentId={store.data.providerId} source={source} />
+          </TabTitle>
+          <ConversationSubagentsBadge conversation={store.data} />
+        </>
       }
       preSlot={<AgentIcon id={store.data.providerId} size={16} />}
       statusSlot={

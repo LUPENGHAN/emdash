@@ -158,6 +158,18 @@ export type ImportableSession = {
  */
 export const HANDOFF_PROMPT_OPENER = '你在接手另一个 AI 编码助手';
 
+/** A subagent an agent session started inside its own process (e.g. a Claude Task agent). */
+export type SubagentSummary = {
+  id: string;
+  /** The agent's type, e.g. "Explore", or "agent" when it names none. */
+  kind: string;
+  /** What it was asked to do, when the agent recorded it. */
+  description: string | null;
+  status: 'running' | 'done';
+  startedAt: string | null;
+  updatedAt: string | null;
+};
+
 /** What a receiving agent gets when a conversation is handed off to it. */
 export type HandoffPreparation = {
   /** First message for the receiving agent: short, pointing at the transcript file. */
