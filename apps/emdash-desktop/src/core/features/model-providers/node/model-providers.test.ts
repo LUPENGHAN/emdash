@@ -46,6 +46,7 @@ describe('buildSourceLaunch', () => {
         ANTHROPIC_DEFAULT_OPUS_MODEL: 'z-ai/glm-5.3-flash',
         ANTHROPIC_DEFAULT_SONNET_MODEL: 'z-ai/glm-5.3-flash',
         ANTHROPIC_DEFAULT_HAIKU_MODEL: 'z-ai/glm-5.3-flash',
+        ANTHROPIC_DEFAULT_FABLE_MODEL: 'z-ai/glm-5.3-flash',
         ANTHROPIC_SMALL_FAST_MODEL: 'z-ai/glm-5.3-flash',
       },
       args: [],
@@ -56,6 +57,53 @@ describe('buildSourceLaunch', () => {
       ANTHROPIC_AUTH_TOKEN: 'sk-1',
       ANTHROPIC_MODEL: 'claude-opus-5-5',
     });
+  });
+
+  it('sizes Claude Code gateway models: [1m] for a 1M window, else the unknown-model window', () => {
+    const sized = {
+      ...provider,
+      contextWindows: { 'z-ai/glm-5.3-flash': 1_000_000, 'moonshotai/kimi-k3': 256_000 },
+    };
+    const million = buildSourceLaunch('claude', sized, 'sk-1', 'z-ai/glm-5.3-flash')!.env;
+    expect(million.ANTHROPIC_MODEL).toBe('z-ai/glm-5.3-flash[1m]');
+    expect(million.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('z-ai/glm-5.3-flash[1m]');
+    expect(million.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+
+    const smaller = buildSourceLaunch('claude', sized, 'sk-1', 'moonshotai/kimi-k3')!.env;
+    expect(smaller.ANTHROPIC_MODEL).toBe('moonshotai/kimi-k3');
+    expect(smaller.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('256000');
+  });
+
+  it("points each Claude Code alias, subagents, and the default at the provider's models", () => {
+    const roles: ModelProvider = {
+      ...provider,
+      models: ['claude-opus-4-8', 'claude-sonnet-4-5', 'glm-5', 'kimi-k3'],
+      contextWindows: { 'claude-opus-4-8': 1_000_000 },
+      claude: {
+        model: 'claude-opus-4-8',
+        opus: 'claude-opus-4-8',
+        sonnet: 'claude-sonnet-4-5',
+        haiku: 'glm-5',
+        subagent: 'kimi-k3',
+        names: { opus: 'Opus (gateway)', haiku: ' ', fable: 'unused' },
+      },
+    };
+    expect(buildSourceLaunch('claude', roles, 'sk-1')!.env).toEqual({
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:3000',
+      ANTHROPIC_AUTH_TOKEN: 'sk-1',
+      ANTHROPIC_MODEL: 'claude-opus-4-8[1m]',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
+      ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: 'Opus (gateway)',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-4-5',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-5',
+      ANTHROPIC_SMALL_FAST_MODEL: 'glm-5',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-k3',
+    });
+    // The conversation's own pick wins over the provider's default; unset aliases follow it.
+    const picked = buildSourceLaunch('claude', roles, 'sk-1', 'kimi-k3')!.env;
+    expect(picked.ANTHROPIC_MODEL).toBe('kimi-k3');
+    expect(picked.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('claude-opus-4-8[1m]');
+    expect(picked.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('kimi-k3');
   });
 
   it('uses x-api-key for Anthropic’s own API and keeps agents to suitable protocols', () => {
@@ -206,6 +254,18 @@ describe('buildSourceLaunch', () => {
     expect(launch.env.OPENCODE_CONFIG_CONTENT).not.toContain('sk-1');
   });
 
+  it('passes configured context windows to OpenCode models', () => {
+    const sized = { ...provider, contextWindows: { 'moonshotai/kimi-k3': 1_000_000 } };
+    const config = JSON.parse(
+      buildSourceLaunch('opencode', sized, 'sk-1')!.env.OPENCODE_CONFIG_CONTENT!
+    );
+
+    expect(config.provider['emdash-newapi'].models).toEqual({
+      'moonshotai/kimi-k3': { name: 'moonshotai/kimi-k3', limit: { context: 1_000_000 } },
+      'z-ai/glm-5.3-flash': { name: 'z-ai/glm-5.3-flash' },
+    });
+  });
+
   it('selects the provider for Pi / Oh My Pi and describes their file entry', () => {
     const launch = buildSourceLaunch('pi', provider, 'sk-1', 'moonshotai/kimi-k3')!;
     expect(launch.args).toEqual(['--model', 'emdash-newapi/moonshotai/kimi-k3']);
@@ -218,6 +278,17 @@ describe('buildSourceLaunch', () => {
     const ompLaunch = buildSourceLaunch('oh-my-pi', provider, 'sk-1')!;
     expect(ompLaunch.args).toEqual(['--provider', 'emdash-newapi']);
     expect(ompLaunch.file?.entry.apiKey).toBe(PROVIDER_KEY_ENV);
+  });
+
+  it('passes configured context windows to Pi and Oh My Pi models', () => {
+    const sized = { ...provider, contextWindows: { 'moonshotai/kimi-k3': 1_000_000 } };
+
+    for (const agent of ['pi', 'oh-my-pi'] as const) {
+      expect(buildSourceLaunch(agent, sized, 'sk-1')?.file?.entry.models).toEqual([
+        { id: 'moonshotai/kimi-k3', contextWindow: 1_000_000 },
+        { id: 'z-ai/glm-5.3-flash' },
+      ]);
+    }
   });
 });
 

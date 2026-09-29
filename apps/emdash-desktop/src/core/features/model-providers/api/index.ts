@@ -28,12 +28,38 @@ export const modelProviderSchema = z.object({
   /** The models agents may use: the ones picked from the upstream list or typed in. */
   models: z.array(z.string()).default([]),
   /**
-   * Context window in tokens, per model, where the agent would otherwise guess it (Codex
-   * falls back to its own default for models it does not know).
+   * Context window in tokens, per model, where an agent would otherwise guess it.
    */
   contextWindows: z.record(z.string(), z.number().int().positive()).optional(),
+  /** Which of the models Claude Code uses for what (Anthropic Messages providers). */
+  claude: z
+    .object({
+      /** The model when the conversation or agent default names none. */
+      model: z.string().optional(),
+      opus: z.string().optional(),
+      sonnet: z.string().optional(),
+      haiku: z.string().optional(),
+      fable: z.string().optional(),
+      /** Subagents, agent-team teammates, and workflow agents not given a model. */
+      subagent: z.string().optional(),
+      /** How `/model` names each alias, instead of the raw model ID. */
+      names: z
+        .object({
+          opus: z.string().optional(),
+          sonnet: z.string().optional(),
+          haiku: z.string().optional(),
+          fable: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 export type ModelProvider = z.infer<typeof modelProviderSchema>;
+export type ClaudeModelRoles = NonNullable<ModelProvider['claude']>;
+
+/** Claude Code's model aliases, each pointable at one of a provider's models. */
+export const CLAUDE_MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'fable'] as const;
+export type ClaudeModelAlias = (typeof CLAUDE_MODEL_ALIASES)[number];
 
 export const modelProvidersSettingsSchema = z
   .object({ providers: z.array(modelProviderSchema).default([]) })

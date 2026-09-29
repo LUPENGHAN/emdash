@@ -8,6 +8,7 @@ import { useAgentSettings } from '@core/features/agents/api/browser/use-agent-se
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { openModal } from '@core/manifests/browser/modal-api';
 import {
+  CLAUDE_MODEL_ALIASES,
   defaultSourceLabel,
   describeProvider,
   formatContextWindow,
@@ -18,6 +19,7 @@ import {
   providerModelsAuth,
   providerModelsUrl,
   providerSupportsAgent,
+  type ClaudeModelRoles,
   type ModelProvider,
   type ProviderProtocol,
 } from '../api';
@@ -173,6 +175,7 @@ function ProviderForm({
       ])
     )
   );
+  const [claudeRoles, setClaudeRoles] = useState<ClaudeModelRoles>(initial?.claude ?? {});
   const [filter, setFilter] = useState('');
   const [manualModel, setManualModel] = useState('');
   const [testState, setTestState] = useState<string | null>(null);
@@ -198,6 +201,9 @@ function ProviderForm({
     })
   );
   if (Object.keys(contextWindows).length > 0) draft.contextWindows = contextWindows;
+  const speaksAnthropic = protocol === 'anthropic' || protocol === 'gateway';
+  const claude = speaksAnthropic ? cleanClaudeRoles(claudeRoles, selected) : undefined;
+  if (claude) draft.claude = claude;
   const invalidContext = selected.some(
     (model) => (contexts[model] ?? '').trim() !== '' && !parseContextWindow(contexts[model] ?? '')
   );
@@ -392,8 +398,9 @@ function ProviderForm({
         )}
         {selected.length > 0 ? (
           <Field.Description>
-            Context: the model's context window, e.g. 1m or 256k. Codex uses it instead of its own
-            default for models it does not know; leave it blank to keep the default.
+            Context: the model's context window, e.g. 1m or 256k. Codex, OpenCode, Pi, and Oh My Pi
+            use it. Claude Code uses it for custom gateway models. Leave it blank to keep the
+            default.
           </Field.Description>
         ) : null}
         <div className="flex gap-2">
@@ -423,6 +430,9 @@ function ProviderForm({
           </Button>
         </div>
       </Field.Root>
+      {speaksAnthropic && selected.length > 0 ? (
+        <ClaudeModelRolesField models={selected} value={claudeRoles} onChange={setClaudeRoles} />
+      ) : null}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={onCancel}>
           Cancel
@@ -437,6 +447,114 @@ function ProviderForm({
         </Button>
       </div>
     </div>
+  );
+}
+
+const CLAUDE_ROLE_ROWS: { role: keyof Omit<ClaudeModelRoles, 'names'>; label: string }[] = [
+  { role: 'model', label: 'Default' },
+  { role: 'opus', label: 'Opus' },
+  { role: 'sonnet', label: 'Sonnet' },
+  { role: 'haiku', label: 'Haiku' },
+  { role: 'fable', label: 'Fable' },
+  { role: 'subagent', label: 'Subagents' },
+];
+const UNSET = '__unset__';
+
+/** Keeps only roles pointing at models still on the provider, and non-blank names. */
+function cleanClaudeRoles(roles: ClaudeModelRoles, models: string[]): ClaudeModelRoles | undefined {
+  const clean: ClaudeModelRoles = {};
+  for (const { role } of CLAUDE_ROLE_ROWS) {
+    const id = roles[role];
+    if (id && models.includes(id)) clean[role] = id;
+  }
+  const names = Object.fromEntries(
+    CLAUDE_MODEL_ALIASES.flatMap((alias) => {
+      const name = roles.names?.[alias]?.trim();
+      return name && clean[alias] ? [[alias, name] as const] : [];
+    })
+  );
+  if (Object.keys(names).length > 0) clean.names = names;
+  return Object.keys(clean).length > 0 ? clean : undefined;
+}
+
+/**
+ * Which of the provider's models Claude Code runs for the session, for each of its
+ * aliases (`/model`, background work, fallback), and for subagents, with the name
+ * `/model` shows for each alias.
+ */
+function ClaudeModelRolesField({
+  models,
+  value,
+  onChange,
+}: {
+  models: string[];
+  value: ClaudeModelRoles;
+  onChange: (next: ClaudeModelRoles) => void;
+}) {
+  return (
+    <Field.Root>
+      <Field.Label>Claude Code models</Field.Label>
+      <div className="grid grid-cols-[5.5rem_minmax(0,1fr)_minmax(0,0.8fr)] items-center gap-x-2 gap-y-1.5">
+        {CLAUDE_ROLE_ROWS.map(({ role, label }) => {
+          const alias = (CLAUDE_MODEL_ALIASES as readonly string[]).includes(role)
+            ? (role as (typeof CLAUDE_MODEL_ALIASES)[number])
+            : null;
+          const current = value[role];
+          return (
+            <div key={role} className="contents">
+              <span className="text-sm text-foreground-muted">{label}</span>
+              <Select.Root
+                value={current && models.includes(current) ? current : UNSET}
+                onValueChange={(next) =>
+                  onChange({ ...value, [role]: !next || next === UNSET ? undefined : next })
+                }
+              >
+                <Select.Trigger appearance="input" className="w-full">
+                  <Select.Value>
+                    {current && models.includes(current) ? (
+                      <span className="truncate font-mono text-xs">{current}</span>
+                    ) : (
+                      <span className="text-foreground-passive">
+                        {role === 'model' || role === 'subagent' ? 'Not set' : 'Follow default'}
+                      </span>
+                    )}
+                  </Select.Value>
+                </Select.Trigger>
+                <Select.Content align="start" width="trigger">
+                  <Select.Item value={UNSET}>
+                    {role === 'model' || role === 'subagent' ? 'Not set' : 'Follow default'}
+                  </Select.Item>
+                  {models.map((model) => (
+                    <Select.Item key={model} value={model}>
+                      <span className="font-mono text-xs">{model}</span>
+                    </Select.Item>
+                  ))}
+                </Select.Content>
+              </Select.Root>
+              {alias ? (
+                <Input
+                  value={value.names?.[alias] ?? ''}
+                  placeholder="Name in /model"
+                  aria-label={`${label} display name`}
+                  disabled={!current}
+                  onChange={(e) =>
+                    onChange({ ...value, names: { ...value.names, [alias]: e.target.value } })
+                  }
+                />
+              ) : (
+                <span />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <Field.Description>
+        Only conversations running Claude Code on this provider use these. Default applies when the
+        conversation picks no model. An alias left on Follow default uses the conversation's model
+        when that is not a Claude model. Models with a 1m context get Claude Code's 1M window;
+        another context set on the conversation's model sizes it.
+      </Field.Description>
+    </Field.Root>
   );
 }
 

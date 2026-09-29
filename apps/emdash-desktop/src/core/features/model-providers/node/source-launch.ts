@@ -1,4 +1,5 @@
 import {
+  CLAUDE_MODEL_ALIASES,
   providerConfigId,
   providerEndpoints,
   type ModelProvider,
@@ -25,7 +26,7 @@ export type AgentProviderFile = {
     baseUrl: string;
     api: 'openai-completions' | 'openai-responses' | 'anthropic-messages';
     apiKey: string;
-    models: { id: string }[];
+    models: { id: string; contextWindow?: number }[];
   };
 };
 
@@ -56,22 +57,13 @@ export function buildSourceLaunch(
   switch (agent) {
     case 'claude': {
       if (!anthropic) return null;
-      // Other vendors' models: point Claude Code's Opus/Sonnet/Haiku aliases (sub-agents,
-      // titles, /model) at them too, so nothing asks the provider for a Claude model it lacks.
-      const aliases = model && !model.startsWith('claude') ? model : undefined;
       return {
         env: {
           ANTHROPIC_BASE_URL: anthropic.url,
           ...(anthropic.auth === 'api-key'
             ? { ANTHROPIC_API_KEY: apiKey }
             : { ANTHROPIC_AUTH_TOKEN: apiKey }),
-          ...(model && { ANTHROPIC_MODEL: model }),
-          ...(aliases && {
-            ANTHROPIC_DEFAULT_OPUS_MODEL: aliases,
-            ANTHROPIC_DEFAULT_SONNET_MODEL: aliases,
-            ANTHROPIC_DEFAULT_HAIKU_MODEL: aliases,
-            ANTHROPIC_SMALL_FAST_MODEL: aliases,
-          }),
+          ...claudeModelEnv(provider, model),
         },
         args: [],
       };
@@ -162,7 +154,15 @@ export function buildSourceLaunch(
                 npm: options.npm,
                 name: provider.name,
                 options: { baseURL: options.baseURL, apiKey: `{env:${PROVIDER_KEY_ENV}}` },
-                models: Object.fromEntries(provider.models.map((id) => [id, { name: id }])),
+                models: Object.fromEntries(
+                  provider.models.map((id) => {
+                    const contextWindow = provider.contextWindows?.[id];
+                    return [
+                      id,
+                      { name: id, ...(contextWindow && { limit: { context: contextWindow } }) },
+                    ];
+                  })
+                ),
               },
             },
             ...(model && { model: `${key}/${model}` }),
@@ -189,12 +189,54 @@ export function buildSourceLaunch(
               : 'anthropic-messages',
             // Pi interpolates $NAME; Oh My Pi resolves a bare env var name.
             apiKey: agent === 'pi' ? `$${PROVIDER_KEY_ENV}` : PROVIDER_KEY_ENV,
-            models: provider.models.map((id) => ({ id })),
+            models: provider.models.map((id) => {
+              const contextWindow = provider.contextWindows?.[id];
+              return { id, ...(contextWindow && { contextWindow }) };
+            }),
           },
         },
       };
     }
   }
+}
+
+/** Claude Code's context for an ID it strips `[1m]` from before calling the provider. */
+const CLAUDE_1M = 1_000_000;
+
+/**
+ * Which provider model Claude Code runs for the session, for each alias, and for
+ * subagents. Aliases left unset follow a non-Claude main model, so nothing asks the
+ * provider for a Claude model it lacks. A model with a 1M window gets Claude Code's
+ * `[1m]` marker (per variable, as Claude Code reads it); another set window on the main
+ * model sizes the unrecognized models (Claude Code applies it only to those).
+ */
+function claudeModelEnv(provider: ModelProvider, chosen?: string): Record<string, string> {
+  const roles = provider.claude ?? {};
+  const main = chosen ?? roles.model;
+  const windowOf = (id: string) => provider.contextWindows?.[id];
+  const sized = (id: string) =>
+    (windowOf(id) ?? 0) >= CLAUDE_1M && !/\[1m\]$/i.test(id) ? `${id}[1m]` : id;
+  const fallback = main && !main.startsWith('claude') ? main : undefined;
+  const env: Record<string, string> = {};
+  if (main) env.ANTHROPIC_MODEL = sized(main);
+  for (const alias of CLAUDE_MODEL_ALIASES) {
+    const id = roles[alias] ?? fallback;
+    if (!id) continue;
+    const variable = `ANTHROPIC_DEFAULT_${alias.toUpperCase()}_MODEL`;
+    env[variable] = sized(id);
+    const name = roles.names?.[alias]?.trim();
+    if (name) env[`${variable}_NAME`] = name;
+  }
+  // Older Claude Code reads the background model from here.
+  if (env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
+    env.ANTHROPIC_SMALL_FAST_MODEL = env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+  }
+  if (roles.subagent) env.CLAUDE_CODE_SUBAGENT_MODEL = sized(roles.subagent);
+  const mainWindow = main ? windowOf(main) : undefined;
+  if (main && mainWindow && mainWindow < CLAUDE_1M && !main.startsWith('claude-')) {
+    env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(mainWindow);
+  }
+  return env;
 }
 
 function codexOverride(path: string, value: string | number): string[] {
