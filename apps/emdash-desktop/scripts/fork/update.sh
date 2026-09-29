@@ -52,7 +52,9 @@ main() {
   echo "==> Installing dependencies"
   pnpm install --frozen-lockfile
 
-  if pgrep -x "Emdash Fork" >/dev/null && [ "$assume_yes" -eq 0 ]; then
+  local running
+  running="$(osascript -e 'application id "com.emdash.fork" is running' 2>/dev/null || true)"
+  if [ "$running" = true ] && [ "$assume_yes" -eq 0 ]; then
     echo
     echo "Emdash Fork is running. Installing quits it, which stops any agents running in it."
     local answer

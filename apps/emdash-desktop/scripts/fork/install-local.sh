@@ -42,10 +42,14 @@ else
   codesign --force --deep --sign - "$bundle"
 fi
 
-# Match the process name exactly: a -f pattern would also match this script's own shell.
-if pgrep -x "Emdash Fork" >/dev/null; then
+# By bundle id: macOS records the process name as the truncated path
+# ("/Applications/Em"), so matching "Emdash Fork" by name never finds it.
+fork_running() {
+  [ "$(osascript -e 'application id "com.emdash.fork" is running' 2>/dev/null)" = true ]
+}
+if fork_running; then
   osascript -e 'tell application id "com.emdash.fork" to quit' || true
-  while pgrep -x "Emdash Fork" >/dev/null; do sleep 1; done
+  while fork_running; do sleep 1; done
 fi
 rm -rf "/Applications/Emdash Fork.app"
 ditto "$bundle" "/Applications/Emdash Fork.app"
