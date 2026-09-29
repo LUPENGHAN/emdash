@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Updates the fork in one go: pulls the branch, installs dependencies, then builds,
-# signs and installs Emdash Fork (install-local.sh). Linked as `edhash-update` in
+# signs and installs Emdash Fork (install-local.sh). Linked as `emdash-update` in
 # ~/.local/bin. `-y` skips the question asked when Emdash Fork is running.
 set -euo pipefail
 
@@ -11,7 +11,7 @@ main() {
   case "${1:-}" in
     -y | --yes) assume_yes=1 ;;
     -h | --help)
-      echo "Usage: edhash-update [-y]  pull, build and install Emdash Fork"
+      echo "Usage: emdash-update [-y]  pull, build and install Emdash Fork"
       return 0
       ;;
     '') ;;
@@ -62,7 +62,7 @@ main() {
     case "$answer" in
       y | Y | yes) ;;
       *)
-        echo "Stopped before building. Run edhash-update again when it is free."
+        echo "Stopped before building. Run emdash-update again when it is free."
         return 1
         ;;
     esac
