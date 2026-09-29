@@ -16,10 +16,16 @@ import {
   usesProviderSource,
   type ModelProvider,
 } from '../api';
-import { agentProviderFilePath, ensureAgentProviderFile } from './agent-provider-files';
+import { agentProviderFilePath, removeLegacyProviderEntries } from './agent-provider-files';
 import { createEffectiveAgentConfig, ModelSourceUnavailableError } from './effective-agent-config';
 import { createModelProviderKeys } from './provider-keys';
-import { buildSourceLaunch, PROVIDER_KEY_ENV } from './source-launch';
+import {
+  AGENT_MODEL_ENV,
+  AGENT_PROVIDER_ENV,
+  buildSourceLaunch,
+  PROVIDER_KEY_ENV,
+  type SourceLaunch,
+} from './source-launch';
 
 const provider: ModelProvider = {
   id: 'NewAPI',
@@ -27,6 +33,11 @@ const provider: ModelProvider = {
   baseUrl: 'http://127.0.0.1:3000/v1/',
   models: ['moonshotai/kimi-k3', 'z-ai/glm-5.3-flash'],
 };
+
+/** The provider config a Pi / Oh My Pi launch hands Emdash's extension. */
+function piProvider(launch: SourceLaunch | null) {
+  return JSON.parse(launch!.env[AGENT_PROVIDER_ENV]!);
+}
 
 describe('base urls', () => {
   it('normalizes to an OpenAI /v1 base and an Anthropic root', () => {
@@ -126,7 +137,7 @@ describe('buildSourceLaunch', () => {
       npm: '@ai-sdk/anthropic',
       options: { baseURL: 'https://api.anthropic.com/v1' },
     });
-    expect(buildSourceLaunch('pi', anthropicApi, 'sk-ant')?.file?.entry).toMatchObject({
+    expect(piProvider(buildSourceLaunch('pi', anthropicApi, 'sk-ant'))).toMatchObject({
       baseUrl: 'https://api.anthropic.com',
       api: 'anthropic-messages',
     });
@@ -154,7 +165,7 @@ describe('buildSourceLaunch', () => {
       ok: false,
       reason: 'needs OpenAI Responses',
     });
-    expect(buildSourceLaunch('pi', glm, 'k')?.file?.entry).toMatchObject({
+    expect(piProvider(buildSourceLaunch('pi', glm, 'k'))).toMatchObject({
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
       api: 'openai-completions',
     });
@@ -163,7 +174,7 @@ describe('buildSourceLaunch', () => {
 
     const responses: ModelProvider = { ...glm, protocol: 'openai-responses' };
     expect(providerSupportsAgent(responses, 'codex')).toEqual({ ok: true });
-    expect(buildSourceLaunch('pi', responses, 'k')?.file?.entry.api).toBe('openai-responses');
+    expect(piProvider(buildSourceLaunch('pi', responses, 'k')).api).toBe('openai-responses');
     expect(
       JSON.parse(buildSourceLaunch('opencode', responses, 'k')!.env.OPENCODE_CONFIG_CONTENT!)
         .provider['emdash-glm'].npm
@@ -266,25 +277,30 @@ describe('buildSourceLaunch', () => {
     });
   });
 
-  it('selects the provider for Pi / Oh My Pi and describes their file entry', () => {
+  it('hands Pi / Oh My Pi the provider through env only, for their Emdash extension', () => {
     const launch = buildSourceLaunch('pi', provider, 'sk-1', 'moonshotai/kimi-k3')!;
     expect(launch.args).toEqual(['--model', 'emdash-newapi/moonshotai/kimi-k3']);
-    expect(launch.file?.entry).toEqual({
+    expect(launch.extensionAgent).toBe('pi');
+    expect(launch.env[AGENT_MODEL_ENV]).toBe('emdash-newapi/moonshotai/kimi-k3');
+    expect(piProvider(launch)).toEqual({
+      key: 'emdash-newapi',
+      name: 'new-api',
       baseUrl: 'http://127.0.0.1:3000/v1',
       api: 'openai-completions',
       apiKey: `$${PROVIDER_KEY_ENV}`,
       models: [{ id: 'moonshotai/kimi-k3' }, { id: 'z-ai/glm-5.3-flash' }],
     });
+    expect(launch.env[AGENT_PROVIDER_ENV]).not.toContain('sk-1');
     const ompLaunch = buildSourceLaunch('oh-my-pi', provider, 'sk-1')!;
     expect(ompLaunch.args).toEqual(['--provider', 'emdash-newapi']);
-    expect(ompLaunch.file?.entry.apiKey).toBe(PROVIDER_KEY_ENV);
+    expect(piProvider(ompLaunch).apiKey).toBe(PROVIDER_KEY_ENV);
   });
 
   it('passes configured context windows to Pi and Oh My Pi models', () => {
     const sized = { ...provider, contextWindows: { 'moonshotai/kimi-k3': 1_000_000 } };
 
     for (const agent of ['pi', 'oh-my-pi'] as const) {
-      expect(buildSourceLaunch(agent, sized, 'sk-1')?.file?.entry.models).toEqual([
+      expect(piProvider(buildSourceLaunch(agent, sized, 'sk-1')).models).toEqual([
         { id: 'moonshotai/kimi-k3', contextWindow: 1_000_000 },
         { id: 'z-ai/glm-5.3-flash' },
       ]);
@@ -292,7 +308,7 @@ describe('buildSourceLaunch', () => {
   });
 });
 
-describe('ensureAgentProviderFile', () => {
+describe('removeLegacyProviderEntries', () => {
   let home: string;
   beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'emdash-providers-'));
@@ -301,33 +317,53 @@ describe('ensureAgentProviderFile', () => {
     await rm(home, { recursive: true, force: true });
   });
   const env = () => ({ home, env: {} });
+  const ours = { baseUrl: 'http://h/v1', api: 'openai-completions', models: [] };
 
-  it("upserts Emdash's entry in Pi's models.json and keeps the user's providers", async () => {
+  it("drops only Emdash's entries from Pi's models.json", async () => {
     const file = agentProviderFilePath('pi', env());
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, JSON.stringify({ providers: { ollama: { baseUrl: 'x' } } }));
-    const launch = buildSourceLaunch('pi', provider, 'sk-1')!;
+    await writeFile(
+      file,
+      JSON.stringify({
+        providers: {
+          ollama: { baseUrl: 'x' },
+          'emdash-newapi': { ...ours, apiKey: `$${PROVIDER_KEY_ENV}` },
+          'emdash-mine': { baseUrl: 'y', apiKey: 'MY_KEY' },
+        },
+      })
+    );
 
-    await ensureAgentProviderFile(launch.file!, env());
-    await ensureAgentProviderFile(launch.file!, env());
+    await removeLegacyProviderEntries('pi', env());
 
     const written = JSON.parse(await readFile(file, 'utf8'));
-    expect(Object.keys(written.providers)).toEqual(['ollama', 'emdash-newapi']);
-    expect(await readFile(file, 'utf8')).not.toContain('sk-1');
+    expect(Object.keys(written.providers)).toEqual(['ollama', 'emdash-mine']);
   });
 
-  it("keeps comments in Oh My Pi's models.yml", async () => {
+  it("keeps comments in Oh My Pi's models.yml, and removes a file only Emdash wrote", async () => {
     const file = agentProviderFilePath('oh-my-pi', env());
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, '# my providers\nproviders:\n  zenmux:\n    baseUrl: https://z\n');
-
-    await ensureAgentProviderFile(buildSourceLaunch('oh-my-pi', provider, 'sk-1')!.file!, env());
-
+    await writeFile(
+      file,
+      `# my providers\nproviders:\n  zenmux:\n    baseUrl: https://z\n  emdash-newapi:\n    baseUrl: http://h/v1\n    apiKey: ${PROVIDER_KEY_ENV}\n`
+    );
+    await removeLegacyProviderEntries('oh-my-pi', env());
     const written = await readFile(file, 'utf8');
     expect(written).toContain('# my providers');
     expect(written).toContain('zenmux:');
-    expect(written).toContain('emdash-newapi:');
-    expect(written).not.toContain('sk-1');
+    expect(written).not.toContain('emdash-newapi');
+
+    await writeFile(file, `providers:\n  emdash-newapi:\n    apiKey: $${PROVIDER_KEY_ENV}\n`);
+    await removeLegacyProviderEntries('oh-my-pi', env());
+    await expect(readFile(file, 'utf8')).rejects.toThrow();
+  });
+
+  it('leaves files without Emdash entries untouched', async () => {
+    const file = agentProviderFilePath('pi', env());
+    await mkdir(path.dirname(file), { recursive: true });
+    const content = '{"providers":{"ollama":{"baseUrl":"x"}}}';
+    await writeFile(file, content);
+    await removeLegacyProviderEntries('pi', env());
+    expect(await readFile(file, 'utf8')).toBe(content);
   });
 });
 
@@ -337,7 +373,7 @@ describe('createEffectiveAgentConfig', () => {
       getAgentConfig: async () => ({ extraArgs: '--verbose', modelSource: 'NewAPI' }),
       getProviders: async () => [provider],
       getApiKey: async () => 'sk-1',
-      ensureProviderFile: vi.fn(async () => {}),
+      prepareAgentProvider: vi.fn(async () => {}),
       ...overrides,
     });
   }

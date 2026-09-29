@@ -6,13 +6,13 @@ import {
   type ModelSourceOverride,
 } from '../api';
 import type { CodexModelCatalog } from './codex-model-catalog';
-import { buildSourceLaunch, type AgentProviderFile } from './source-launch';
+import { buildSourceLaunch, type ExtensionProviderAgent } from './source-launch';
 
 export type EffectiveAgentConfigDeps = {
   getAgentConfig: (agentId: string) => Promise<ProviderCustomConfig | undefined>;
   getProviders: () => Promise<ModelProvider[]>;
   getApiKey: (providerId: string) => Promise<string | null>;
-  ensureProviderFile: (file: AgentProviderFile) => Promise<void>;
+  prepareAgentProvider: (agent: ExtensionProviderAgent) => Promise<void>;
   ensureCodexModelCatalog?: (catalog: CodexModelCatalog) => Promise<void>;
   warn?: (message: string, details: Record<string, unknown>) => void;
 };
@@ -55,7 +55,7 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
         `The provider “${provider.name}” speaks a protocol this agent cannot use.`
       );
     }
-    if (launch.file) await deps.ensureProviderFile(launch.file);
+    if (launch.extensionAgent) await deps.prepareAgentProvider(launch.extensionAgent);
     if (launch.codexCatalog) await deps.ensureCodexModelCatalog?.(launch.codexCatalog);
     return {
       ...config,

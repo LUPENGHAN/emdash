@@ -78,7 +78,7 @@ import type {
   ModelSourceOverride,
   UsageLimitsService,
 } from '@core/features/model-providers/api';
-import { ensureAgentProviderFile } from '@core/features/model-providers/node/agent-provider-files';
+import { prepareAgentProvider } from '@core/features/model-providers/node/agent-provider-files';
 import { ensureCodexModelCatalog } from '@core/features/model-providers/node/codex-model-catalog';
 import {
   createEffectiveAgentConfig,
@@ -358,7 +358,7 @@ export async function bootServices(
     getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
     getApiKey: modelProviderKeys.read,
-    ensureProviderFile: (file) => ensureAgentProviderFile(file),
+    prepareAgentProvider: (agent) => prepareAgentProvider(agent),
     ensureCodexModelCatalog: (catalog) => ensureCodexModelCatalog(catalog),
     warn: (message, details) => log.warn(message, details),
   });

@@ -1,3 +1,5 @@
+import { EMDASH_PROVIDER_EXTENSION_SOURCE } from '../../helpers/provider-extension';
+
 export const OH_MY_PI_EXTENSION_CONTENT = `\
 import type { ExtensionAPI } from '@oh-my-pi/pi-coding-agent';
 
@@ -42,8 +44,12 @@ async function notifyStopOnce(message: string) {
   await notifyEmdash('stop', { message });
 }
 
+${EMDASH_PROVIDER_EXTENSION_SOURCE}
 export default function (pi: ExtensionAPI) {
+  registerEmdashProvider(pi);
+
   pi.on('session_start', async (_event, ctx) => {
+    await selectEmdashModel(pi, ctx);
     stopNotified = false;
     const sessionFile = ctx.sessionManager?.getSessionFile?.();
     if (!sessionFile) return;

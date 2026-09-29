@@ -18,31 +18,31 @@ import {
  */
 export const PROVIDER_KEY_ENV = 'EMDASH_MODEL_PROVIDER_KEY';
 
-/** A provider entry an agent only reads from its own config file (Pi, Oh My Pi). */
-export type AgentProviderFile = {
-  agent: 'pi' | 'oh-my-pi';
-  providerKey: string;
-  entry: {
-    baseUrl: string;
-    api: 'openai-completions' | 'openai-responses' | 'anthropic-messages';
-    apiKey: string;
-    models: { id: string; contextWindow?: number }[];
-  };
-};
+/**
+ * The provider Emdash's Pi / Oh My Pi extension registers in the launched process
+ * (EMDASH_AGENT_PROVIDER), and the model it selects when no `--model` is passed
+ * (EMDASH_AGENT_MODEL). Names shared with packages/plugins/src/agents/helpers/provider-extension.ts.
+ */
+export const AGENT_PROVIDER_ENV = 'EMDASH_AGENT_PROVIDER';
+export const AGENT_MODEL_ENV = 'EMDASH_AGENT_MODEL';
+
+/** Agents that take a provider through Emdash's extension (Pi, Oh My Pi). */
+export type ExtensionProviderAgent = 'pi' | 'oh-my-pi';
 
 export type SourceLaunch = {
   env: Record<string, string>;
   /** Extra CLI arguments; each must be whitespace-free (extraArgs is split on spaces). */
   args: string[];
-  file?: AgentProviderFile;
+  /** The agent needs Emdash's extension current (and old model-file entries gone). */
+  extensionAgent?: ExtensionProviderAgent;
   /** Model metadata Codex reads (model_catalog_json), written before the launch. */
   codexCatalog?: CodexModelCatalog;
 };
 
 /**
  * How an agent runs on a model provider. Everything is injected per launch, so agents
- * started outside Emdash keep their own login and config; only Pi and Oh My Pi, which
- * read providers solely from their model files, get an entry added there (key by env).
+ * started outside Emdash keep their own login and config (Pi and Oh My Pi get the
+ * provider from Emdash's extension, which reads it from the launch env).
  * Claude Code needs Anthropic Messages and Codex OpenAI Responses; the others speak any
  * of the protocols. Null when the provider's protocol does not suit the agent.
  */
@@ -174,27 +174,30 @@ export function buildSourceLaunch(
     case 'pi':
     case 'oh-my-pi': {
       if (!openai && !anthropic) return null;
+      const config = {
+        key,
+        name: provider.name,
+        baseUrl: openai ? openai.url : anthropic!.url,
+        api: openai
+          ? openai.api === 'responses'
+            ? 'openai-responses'
+            : 'openai-completions'
+          : 'anthropic-messages',
+        // Pi interpolates $NAME; Oh My Pi resolves a bare env var name.
+        apiKey: agent === 'pi' ? `$${PROVIDER_KEY_ENV}` : PROVIDER_KEY_ENV,
+        models: provider.models.map((id) => {
+          const contextWindow = provider.contextWindows?.[id];
+          return { id, ...(contextWindow && { contextWindow }) };
+        }),
+      };
       return {
-        env: { [PROVIDER_KEY_ENV]: apiKey },
-        args: model ? ['--model', `${key}/${model}`] : ['--provider', key],
-        file: {
-          agent,
-          providerKey: key,
-          entry: {
-            baseUrl: openai ? openai.url : anthropic!.url,
-            api: openai
-              ? openai.api === 'responses'
-                ? 'openai-responses'
-                : 'openai-completions'
-              : 'anthropic-messages',
-            // Pi interpolates $NAME; Oh My Pi resolves a bare env var name.
-            apiKey: agent === 'pi' ? `$${PROVIDER_KEY_ENV}` : PROVIDER_KEY_ENV,
-            models: provider.models.map((id) => {
-              const contextWindow = provider.contextWindows?.[id];
-              return { id, ...(contextWindow && { contextWindow }) };
-            }),
-          },
+        env: {
+          [PROVIDER_KEY_ENV]: apiKey,
+          [AGENT_PROVIDER_ENV]: JSON.stringify(config),
+          ...(model && { [AGENT_MODEL_ENV]: `${key}/${model}` }),
         },
+        args: model ? ['--model', `${key}/${model}`] : ['--provider', key],
+        extensionAgent: agent,
       };
     }
   }

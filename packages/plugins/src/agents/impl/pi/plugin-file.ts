@@ -1,3 +1,5 @@
+import { EMDASH_PROVIDER_EXTENSION_SOURCE } from '../../helpers/provider-extension';
+
 // Verbatim source of the Pi emdash extension, embedded as a string constant.
 export const PI_EXTENSION_CONTENT = `\
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -35,8 +37,12 @@ function errorMessage(error: unknown): string {
   return 'Pi exited with an error';
 }
 
+${EMDASH_PROVIDER_EXTENSION_SOURCE}
 export default function (pi: ExtensionAPI) {
+  registerEmdashProvider(pi);
+
   pi.on('session_start', async (_event, ctx) => {
+    await selectEmdashModel(pi, ctx);
     const sessionFile = ctx.sessionManager.getSessionFile();
     if (!sessionFile) return;
     await notifyEmdash('session', { providerSessionId: sessionFile });
