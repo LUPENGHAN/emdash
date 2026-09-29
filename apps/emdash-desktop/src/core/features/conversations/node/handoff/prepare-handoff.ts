@@ -78,13 +78,30 @@ export async function prepareHandoff(
     deps.git(source.cwd, ['log', '--oneline', '-5']),
   ]);
 
+  // A session drifts: later asks change the goal, so the recent turns lead and the first
+  // ask is only background.
   const firstAsk = turns.find((turn) => turn.role === 'user')?.text;
-  const lastReply = [...turns].reverse().find((turn) => turn.role === 'assistant')?.text;
+  const recent = recentTurns(turns);
   const sections = [
     `你在接手另一个 AI 编码助手（${agent}）没做完的工作。项目目录和代码改动是同一份，已经在你的工作目录里。`,
   ];
-  if (firstAsk) sections.push(`## 最初的需求\n\n${clip(firstAsk, 1500)}`);
-  if (lastReply) sections.push(`## 它最后的回复\n\n${clip(lastReply, 1500)}`);
+  if (recent.length > 0) {
+    sections.push(
+      [
+        '## 最近的对话（当前在做什么以这里为准）',
+        '',
+        '任务在过程中可能已经换了方向，最后几条用户消息才是现在的目标。',
+        '',
+        ...recent.map(
+          (turn) =>
+            `### ${turn.role === 'user' ? '用户' : agent}\n\n${clip(turn.text, turn.role === 'user' ? RECENT_USER_CHARS : RECENT_REPLY_CHARS)}`
+        ),
+      ].join('\n')
+    );
+  }
+  if (firstAsk && !recent.some((turn) => turn.role === 'user' && turn.text === firstAsk)) {
+    sections.push(`## 最初的需求（仅作背景，之后可能已经改变）\n\n${clip(firstAsk, 600)}`);
+  }
   sections.push(
     [
       '## 当前代码状态',
@@ -107,9 +124,34 @@ export async function prepareHandoff(
       : '## 完整对话记录\n\n原会话没有可读取的对话记录，请以代码和 git 历史为准。'
   );
   sections.push(
-    '先用 git diff 核对实际改动，再用几句话说明你理解的目标、当前进度和下一步，然后继续完成任务。'
+    '先用 git diff 核对实际改动，再用几句话说明你理解的当前目标（以最近的对话为准）、进度和下一步，然后继续完成任务。拿不准当前目标时，先读对话记录的末尾几段，还不清楚就先问用户。'
   );
   return { prompt: sections.join('\n\n'), transcriptPath };
+}
+
+/** How many of the last user messages (with the replies between them) lead the handoff. */
+const RECENT_USER_TURNS = 4;
+const RECENT_USER_CHARS = 1200;
+const RECENT_REPLY_CHARS = 1500;
+
+/**
+ * The tail of the conversation from the last few user messages on. Replies before the
+ * last one are only a line of context each, so the handoff message stays short.
+ */
+function recentTurns(turns: TranscriptTurn[]): TranscriptTurn[] {
+  let users = 0;
+  let start = turns.length;
+  while (start > 0 && users < RECENT_USER_TURNS) {
+    start -= 1;
+    if (turns[start]!.role === 'user') users += 1;
+  }
+  const tail = turns.slice(start);
+  const lastReply = tail.map((turn) => turn.role).lastIndexOf('assistant');
+  return tail.map((turn, index) =>
+    turn.role === 'assistant' && index !== lastReply
+      ? { ...turn, text: clip(turn.text, 400) }
+      : turn
+  );
 }
 
 function renderTranscript(agent: string, turns: TranscriptTurn[]): string {

@@ -137,6 +137,42 @@ describe('prepareHandoff', () => {
     expect(result.prompt).toContain(result.transcriptPath!);
   });
 
+  it('leads with the recent turns when the session moved on from its first ask', async () => {
+    const turns = [
+      { role: 'user' as const, text: 'Build the export page' },
+      { role: 'assistant' as const, text: 'Export page done.' },
+      { role: 'user' as const, text: 'Now fix the login bug' },
+      { role: 'assistant' as const, text: 'Login fixed.' },
+      { role: 'user' as const, text: 'Add tests for the importer' },
+      { role: 'assistant' as const, text: 'x'.repeat(2000) },
+      { role: 'user' as const, text: 'Then migrate the importer to streams' },
+      { role: 'assistant' as const, text: 'Streams: reader done, writer left.' },
+      { role: 'user' as const, text: 'continue' },
+      { role: 'assistant' as const, text: 'Writer half done, tests failing on EOF.' },
+    ];
+    const { prompt } = await prepareHandoff(
+      { providerId: 'claude', sessionId: 's1', cwd },
+      deps({ readTranscript: vi.fn(async () => turns) })
+    );
+    const recent = prompt.indexOf('## 最近的对话');
+    const first = prompt.indexOf('## 最初的需求（仅作背景');
+    expect(recent).toBeGreaterThan(-1);
+    expect(first).toBeGreaterThan(recent);
+    // The last four asks, in order, with the latest reply in full.
+    const order = [
+      'Now fix the login bug',
+      'Add tests for the importer',
+      'Then migrate',
+      'continue',
+    ];
+    const at = order.map((text) => prompt.indexOf(text, recent));
+    expect(at.every((index, i) => index > recent && (i === 0 || index > at[i - 1]!))).toBe(true);
+    expect(prompt).toContain('Writer half done, tests failing on EOF.');
+    // Earlier replies are only a line of context.
+    expect(prompt).not.toContain('x'.repeat(500));
+    expect(prompt.slice(first)).toContain('Build the export page');
+  });
+
   it('adds the handoff directory to the local git exclude file once', async () => {
     await mkdir(path.join(cwd, '.git', 'info'), { recursive: true });
     await writeFile(path.join(cwd, '.git', 'info', 'exclude'), '# local\n.idea/');
