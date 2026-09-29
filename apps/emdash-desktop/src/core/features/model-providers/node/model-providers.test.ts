@@ -215,10 +215,9 @@ describe('buildSourceLaunch', () => {
       apiKey: `$${PROVIDER_KEY_ENV}`,
       models: [{ id: 'moonshotai/kimi-k3' }, { id: 'z-ai/glm-5.3-flash' }],
     });
-    expect(buildSourceLaunch('oh-my-pi', provider, 'sk-1')?.args).toEqual([
-      '--provider',
-      'emdash-newapi',
-    ]);
+    const ompLaunch = buildSourceLaunch('oh-my-pi', provider, 'sk-1')!;
+    expect(ompLaunch.args).toEqual(['--provider', 'emdash-newapi']);
+    expect(ompLaunch.file?.entry.apiKey).toBe(PROVIDER_KEY_ENV);
   });
 });
 

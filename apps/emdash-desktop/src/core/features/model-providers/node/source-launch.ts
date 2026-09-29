@@ -187,7 +187,8 @@ export function buildSourceLaunch(
                 ? 'openai-responses'
                 : 'openai-completions'
               : 'anthropic-messages',
-            apiKey: `$${PROVIDER_KEY_ENV}`,
+            // Pi interpolates $NAME; Oh My Pi resolves a bare env var name.
+            apiKey: agent === 'pi' ? `$${PROVIDER_KEY_ENV}` : PROVIDER_KEY_ENV,
             models: provider.models.map((id) => ({ id })),
           },
         },
