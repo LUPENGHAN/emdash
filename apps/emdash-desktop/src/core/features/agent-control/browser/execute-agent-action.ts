@@ -17,10 +17,12 @@ import {
   handOffConversationTo,
 } from '@core/features/conversations/contributions/browser/agent-actions';
 import { openFileInTaskEditor } from '@core/features/editor/api/browser/open-file-in-file-editor';
+import { taskViewDef } from '@core/features/tasks/contributions/views';
 import { getTerminalsForTask } from '@core/features/terminals/api/browser/terminal-selectors';
 import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
 import { openModal } from '@core/manifests/browser/modal-api';
 import { commitRef } from '@core/primitives/git/api';
+import { getNavigation } from '@core/primitives/navigation/browser/navigation-selectors';
 import type { AgentCaller, AgentControlAction, AgentControlResult, OpenTarget } from '../api';
 import { runBrowserOp, type AutomatableBrowser } from './browser-automation';
 import { readableTerminals, renderTerminalTail } from './terminal-reader';
@@ -150,7 +152,10 @@ export async function executeAgentAction(
     }
 
     case 'browser': {
-      const browser = await taskBrowser(caller);
+      const browser = await taskBrowser(
+        caller,
+        action.browser.op === 'open' ? action.browser.url : undefined
+      );
       return runBrowserOp(browser, action.browser);
     }
   }
@@ -241,7 +246,7 @@ async function openTarget(caller: AgentCaller, target: OpenTarget): Promise<Agen
       return { text: `Showing the diff of ${target.path}.` };
     }
     case 'url': {
-      const browser = await taskBrowser(caller);
+      const browser = await taskBrowser(caller, target.url);
       await browser.loadUrl(target.url);
       return { text: `Showing ${target.url} in the built-in browser.` };
     }
@@ -283,7 +288,11 @@ async function readTerminal(
 
 // ── Built-in browser ─────────────────────────────────────────────────────────────
 
-async function taskBrowser(caller: AgentCaller): Promise<AutomatableBrowser> {
+/**
+ * The task's browser, ready to drive. `openUrl` is the page about to be opened: a browser
+ * on its start page has no page (no webview) to drive, so that page is what brings one up.
+ */
+async function taskBrowser(caller: AgentCaller, openUrl?: string): Promise<AutomatableBrowser> {
   const composition = getTaskComposition(caller.projectId, caller.taskId);
   if (!composition) throw new Error('Open the task in Emdash to use its browser');
   const findBrowserId = () => {
@@ -303,10 +312,27 @@ async function taskBrowser(caller: AgentCaller): Promise<AutomatableBrowser> {
   }
   if (!browserId) throw new Error('Could not open the built-in browser');
   const id = browserId;
+  // A browser runs only while its task is on screen: the task's panes (and every tab in
+  // them, hidden ones included) are not mounted while another view is showing. The agent
+  // asked to use it, so bring its task to the front rather than fail.
+  if (!browserControlsRegistry.get(id)) {
+    getNavigation().navigate(taskViewDef({ projectId: caller.projectId, taskId: caller.taskId }));
+  }
+  const controls = await waitFor(
+    () => browserControlsRegistry.get(id) ?? null,
+    BROWSER_READY_TIMEOUT_MS,
+    'The built-in browser did not come up; open its task in Emdash and try again'
+  );
+  let opened: string | null = null;
+  if (!controls.adapter && browserSessionStore.getSession(id)?.currentUrl === 'about:blank') {
+    if (!openUrl) throw new Error('No page is open in the built-in browser; use browser_open');
+    controls.loadUrl(openUrl);
+    opened = openUrl;
+  }
   const adapter = await waitFor(
     () => browserControlsRegistry.get(id)?.adapter ?? null,
     BROWSER_READY_TIMEOUT_MS,
-    'The built-in browser is not showing; bring the task to the front in Emdash'
+    'The built-in browser did not come up; open its task in Emdash and try again'
   );
   const waitForLoad = () =>
     waitFor(
@@ -320,7 +346,9 @@ async function taskBrowser(caller: AgentCaller): Promise<AutomatableBrowser> {
     sendInputEvent: (event) => adapter.sendInputEvent(event),
     insertText: (text) => adapter.insertText(text),
     loadUrl: async (url) => {
-      await adapter.loadUrl(url);
+      // Already on its way: the start page just loaded it to bring the page up.
+      if (opened !== url) await adapter.loadUrl(url);
+      opened = null;
       await waitForLoad().catch(() => {});
     },
     currentUrl: () => adapter.currentUrl(),

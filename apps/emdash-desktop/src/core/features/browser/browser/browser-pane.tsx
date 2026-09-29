@@ -265,8 +265,9 @@ export const BrowserPane = observer(function BrowserPane({
     return browserControlsRegistry.register(sessionBrowserId, {
       adapter,
       focusUrl: () => focusUrlRef.current(),
+      loadUrl,
     });
-  }, [adapter, sessionBrowserId]);
+  }, [adapter, loadUrl, sessionBrowserId]);
 
   if (!session) {
     return (
