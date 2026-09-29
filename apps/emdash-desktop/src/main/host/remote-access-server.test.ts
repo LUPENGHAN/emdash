@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import type { WireMessage, WireTransport } from '@emdash/wire/rpc';
 import { webSocketTransport, type WebSocketLike } from '@emdash/wire/rpc';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -98,6 +99,47 @@ describe('createRemoteAccessServer', () => {
     // Unknown routes fall back to the app shell; traversal never leaves the root.
     expect((await get(port, '/tasks/123', cookie)).body).toBe('<html>app</html>');
     expect((await get(port, '/..%2f..%2fetc%2fpasswd', cookie)).status).toBe(403);
+  });
+
+  it('compresses built files and caches hashed assets for good', async () => {
+    const script = `console.log(${JSON.stringify('x'.repeat(50_000))});`;
+    await mkdir(path.join(root, 'assets'));
+    await writeFile(path.join(root, 'assets', 'index-abc123.js'), script);
+    const cookie = `emdash_remote=${TOKEN}`;
+    const raw = (pathname: string, encoding: string) =>
+      new Promise<{ headers: Record<string, unknown>; body: Buffer }>((resolve, reject) => {
+        const req = request(
+          {
+            host: '127.0.0.1',
+            port,
+            path: pathname,
+            headers: { cookie, 'accept-encoding': encoding },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (chunk: Buffer) => chunks.push(chunk));
+            res.on('end', () => resolve({ headers: res.headers, body: Buffer.concat(chunks) }));
+          }
+        );
+        req.on('error', reject);
+        req.end();
+      });
+
+    const br = await raw('/assets/index-abc123.js', 'gzip, deflate, br');
+    expect(br.headers['content-encoding']).toBe('br');
+    expect(br.headers['cache-control']).toContain('immutable');
+    expect(br.body.length).toBeLessThan(script.length / 10);
+    expect(brotliDecompressSync(br.body).toString()).toBe(script);
+
+    const gz = await raw('/assets/index-abc123.js', 'gzip');
+    expect(gz.headers['content-encoding']).toBe('gzip');
+    expect(gunzipSync(gz.body).toString()).toBe(script);
+
+    const plain = await raw('/assets/index-abc123.js', 'identity');
+    expect(plain.headers['content-encoding']).toBeUndefined();
+    expect(plain.body.toString()).toBe(script);
+    // The app shell is never cached, so a new build is picked up on the next load.
+    expect((await raw('/', 'br')).headers['cache-control']).toBe('no-store');
   });
 
   it('opens a wire session only for a signed-in, same-origin socket', async () => {

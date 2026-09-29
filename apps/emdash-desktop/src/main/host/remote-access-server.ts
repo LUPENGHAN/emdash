@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { connect as connectTcp } from 'node:net';
 import { extname, join, normalize, sep } from 'node:path';
+import { promisify } from 'node:util';
+import { brotliCompress, constants as zlibConstants, gzip } from 'node:zlib';
 import type { WireTransport } from '@emdash/wire/rpc';
 import { webSocketTransport, type WebSocketLike } from '@emdash/wire/rpc';
 import { createWebSocketStream, WebSocketServer, type WebSocket } from 'ws';
@@ -35,6 +37,38 @@ const CONTENT_TYPES: Record<string, string> = {
   '.map': 'application/json',
 };
 
+const brotliAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+
+/** Types worth compressing: text and uncompressed binaries (woff/woff2/images already are). */
+const COMPRESSIBLE = /^(text\/|application\/(json|wasm)|image\/svg|font\/ttf)/;
+
+type Encoding = 'br' | 'gzip';
+
+/** The encoding to answer with, from the request's Accept-Encoding (brotli first). */
+function pickEncoding(header: string | string[] | undefined): Encoding | null {
+  const accepted = String(header ?? '')
+    .split(',')
+    .map((part) => part.trim().split(';'))
+    .filter(([, q]) => !q || !/^q=0(\.0*)?$/.test(q.trim()))
+    .map(([name]) => name!.toLowerCase());
+  if (accepted.includes('br')) return 'br';
+  if (accepted.includes('gzip')) return 'gzip';
+  return null;
+}
+
+function compress(body: Buffer, encoding: Encoding): Promise<Buffer> {
+  // Fast settings: the app bundle is ~20 MB, compressed once per build on first request.
+  return encoding === 'br'
+    ? brotliAsync(body, {
+        params: {
+          [zlibConstants.BROTLI_PARAM_QUALITY]: 5,
+          [zlibConstants.BROTLI_PARAM_SIZE_HINT]: body.length,
+        },
+      })
+    : gzipAsync(body, { level: 6 });
+}
+
 export type RemoteAccessServerDeps = {
   /** The built renderer (`out/renderer`), served as the browser app. */
   rendererRoot: string;
@@ -58,6 +92,8 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
   let sockets: WebSocketServer | null = null;
   const sessions = new Map<WebSocket, () => void>();
   const tunnels = new Set<WebSocket>();
+  // Built files never change while the app runs, so each is compressed once.
+  const compressed = new Map<string, Promise<Buffer>>();
 
   const closeAll = (): void => {
     for (const [socket, dispose] of sessions) {
@@ -90,6 +126,7 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
           token,
           authorized,
           info: deps.info,
+          compressed,
         }).catch(() => {
           if (!response.headersSent) response.writeHead(500);
           response.end();
@@ -158,6 +195,7 @@ async function handleRequest(
     token: string;
     authorized: (request: IncomingMessage) => boolean;
     info: () => RemoteServerInfo;
+    compressed: Map<string, Promise<Buffer>>;
   }
 ): Promise<void> {
   const url = new URL(request.url ?? '/', 'http://local');
@@ -205,10 +243,34 @@ async function handleRequest(
     body = await readFile(file);
   }
   const type = CONTENT_TYPES[extname(file)] ?? 'application/octet-stream';
-  response.writeHead(200, {
+  const html = type.startsWith('text/html');
+  const headers: Record<string, string> = {
     'Content-Type': type,
-    'Cache-Control': type.startsWith('text/html') ? 'no-store' : 'private, max-age=3600',
-  });
+    // Built assets carry a content hash in their name, so a new build is a new URL.
+    'Cache-Control': html
+      ? 'no-store'
+      : relPath.startsWith('assets/')
+        ? 'private, max-age=31536000, immutable'
+        : 'private, max-age=3600',
+  };
+  const encoding =
+    COMPRESSIBLE.test(type) && body.length > 1024
+      ? pickEncoding(request.headers['accept-encoding'])
+      : null;
+  if (encoding) {
+    const key = `${file}\0${encoding}`;
+    let pending = html ? undefined : context.compressed.get(key);
+    if (!pending) {
+      pending = compress(body, encoding);
+      if (!html) context.compressed.set(key, pending);
+      pending.catch(() => context.compressed.delete(key));
+    }
+    body = await pending;
+    headers['Content-Encoding'] = encoding;
+  }
+  if (COMPRESSIBLE.test(type)) headers.Vary = 'Accept-Encoding';
+  headers['Content-Length'] = String(body.length);
+  response.writeHead(200, headers);
   response.end(request.method === 'HEAD' ? undefined : body);
 }
 
