@@ -1,9 +1,16 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { access, mkdir, open, readdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { AgentUsage, UsageLimits, UsageLimitsService, UsageWindow } from '../api';
+import type {
+  AgentUsage,
+  OfficialAccount,
+  UsageLimits,
+  UsageLimitsService,
+  UsageWindow,
+} from '../api';
+import { ACCOUNT_HOME_ENV } from './official-accounts';
 
 const execFileAsync = promisify(execFile);
 const PROBE_TTL_MS = 5 * 60_000;
@@ -18,12 +25,19 @@ export type UsageLimitsDeps = {
   runClaudeUsage?: () => Promise<string>;
   /** Runs `cursor-agent about --format json`; returns its stdout. */
   runCursorAbout?: () => Promise<string>;
+  /** Asks Codex for the signed-in account's rate limits (`account/rateLimits/read`). */
+  readCodexRateLimits?: (env: Env) => Promise<Record<string, unknown>>;
+  /** The official accounts, and each one's (readied) config dir. */
+  listAccounts?: () => Promise<OfficialAccount[]>;
+  accountHome?: (account: OfficialAccount) => Promise<string>;
 };
 
 /**
  * Subscription limit usage for the agents whose vendors expose it:
- * - Codex records its rate limits (5h and weekly windows) in every turn's `token_count`
- *   event, so the newest session file has the latest numbers, no network needed.
+ * - Codex reports the signed-in account's rate limits (5h and weekly windows) through
+ *   its app server, as its own `/status` does; this calls no model. When that fails,
+ *   the newest session file's `token_count` event still has the last numbers (they may
+ *   be another account's, since accounts share sessions).
  * - Claude Code prints them for the local `/usage` command, which calls no model; it is
  *   probed with `claude -p /usage --no-session-persistence` and cached for a while.
  */
@@ -32,9 +46,10 @@ export function createUsageLimitsService(deps: UsageLimitsDeps = {}): UsageLimit
   const now = deps.now ?? Date.now;
   const runClaudeUsage = deps.runClaudeUsage ?? (() => runClaudeUsageCommand(env));
   const runCursorAbout = deps.runCursorAbout ?? (() => runCursorAboutCommand(env));
+  const readCodexRateLimits = deps.readCodexRateLimits ?? readCodexRateLimitsCommand;
 
-  // Both probes spawn a CLI (and Claude's asks the vendor), so their results are cached.
-  const cached = (agent: 'claude' | 'cursor', read: () => Promise<AgentUsage>) => {
+  // The probes spawn a CLI (and ask the vendor), so their results are cached.
+  const cached = (agent: AgentUsage['agent'], read: () => Promise<AgentUsage>) => {
     let cache: { value: AgentUsage; at: number } | null = null;
     let inFlight: Promise<AgentUsage> | null = null;
     return async (refresh: boolean): Promise<AgentUsage> => {
@@ -51,18 +66,52 @@ export function createUsageLimitsService(deps: UsageLimitsDeps = {}): UsageLimit
   };
   const claude = cached('claude', async () => parseClaudeUsage(await runClaudeUsage(), now()));
   const cursor = cached('cursor', async () => parseCursorAbout(await runCursorAbout(), now()));
+  const codex = cached('codex', async () => {
+    try {
+      return parseCodexRateLimits(await readCodexRateLimits(env), now());
+    } catch {
+      return readCodexUsage(env, now());
+    }
+  });
+  const accountProbes = new Map<string, (refresh: boolean) => Promise<AgentUsage>>();
+  const accountProbe = (account: OfficialAccount) => {
+    const agent = account.account.agent;
+    let probe = accountProbes.get(`${agent}:${account.id}`);
+    if (!probe) {
+      probe = cached(agent, async () => {
+        const home = await deps.accountHome!(account);
+        const accountEnv = {
+          home: env.home,
+          env: { ...env.env, [ACCOUNT_HOME_ENV[agent]]: home },
+        };
+        return agent === 'claude'
+          ? parseClaudeUsage(await runClaudeUsageCommand(accountEnv), now())
+          : parseCodexRateLimits(await readCodexRateLimits(accountEnv), now());
+      });
+      accountProbes.set(`${agent}:${account.id}`, probe);
+    }
+    return probe;
+  };
 
   return {
     async get(options = {}): Promise<UsageLimits> {
       const refresh = options.refresh === true;
       const [claudeUsage, codexUsage, cursorUsage] = await Promise.all([
         claude(refresh),
-        readCodexUsage(env, now()).catch((error) =>
-          unavailable('codex', now(), errorMessage(error))
-        ),
+        codex(refresh),
         cursor(refresh),
       ]);
       return { agents: [claudeUsage, codexUsage, cursorUsage] };
+    },
+    async accounts(options = {}): Promise<AgentUsage[]> {
+      if (!deps.listAccounts || !deps.accountHome) return [];
+      const accounts = await deps.listAccounts();
+      return Promise.all(
+        accounts.map(async (account) => ({
+          ...(await accountProbe(account)(options.refresh === true)),
+          account: { id: account.id, name: account.name },
+        }))
+      );
     },
   };
 }
@@ -89,7 +138,11 @@ export function parseClaudeUsage(text: string, observedAt: number): AgentUsage {
         .split('\n')
         .find((line) => line.trim())
         ?.trim() ?? '';
-    return unavailable('claude', observedAt, firstLine || 'No subscription limits reported');
+    // Without a subscription sign-in, /usage only prints the session's cost.
+    const reason = /^Total cost/i.test(firstLine)
+      ? 'Not signed in with a Claude subscription'
+      : firstLine || 'No subscription limits reported';
+    return unavailable('claude', observedAt, reason);
   }
   const plan = /subscription/i.test(text) ? 'subscription' : null;
   return { agent: 'claude', plan, windows, observedAt };
@@ -202,6 +255,86 @@ function codexWindow(window: CodexWindow | undefined, now: number): UsageWindow 
     usedPercent: reset ? 0 : window.used_percent,
     resets: resetsAtMs === null || reset ? null : formatResetTime(resetsAtMs, now),
   };
+}
+
+/** The app server's `account/rateLimits/read` result, as usage. */
+export function parseCodexRateLimits(result: Record<string, unknown>, now: number): AgentUsage {
+  const limits = (result.rateLimits ?? {}) as Record<string, unknown>;
+  const window = (value: unknown): UsageWindow | null => {
+    const w = value as { usedPercent?: unknown; windowDurationMins?: unknown; resetsAt?: unknown };
+    return w
+      ? codexWindow(
+          {
+            used_percent: w.usedPercent,
+            window_minutes: w.windowDurationMins,
+            resets_at: w.resetsAt,
+          },
+          now
+        )
+      : null;
+  };
+  const windows = [limits.primary, limits.secondary]
+    .map(window)
+    .filter((w): w is UsageWindow => w !== null);
+  if (windows.length === 0) return unavailable('codex', now, 'No rate limits reported');
+  return {
+    agent: 'codex',
+    plan: typeof limits.planType === 'string' ? limits.planType : null,
+    windows,
+    observedAt: now,
+  };
+}
+
+/**
+ * Starts `codex app-server` (the same server the chat adapter runs), initializes, and
+ * reads the signed-in account's rate limits; the server exits when stdin closes.
+ */
+async function readCodexRateLimitsCommand(env: Env): Promise<Record<string, unknown>> {
+  const codexPath = await findExecutable('codex', env);
+  if (!codexPath) throw new Error('Codex CLI not found');
+  return new Promise((resolve, reject) => {
+    const child = spawn(codexPath, ['app-server'], {
+      env: env.env,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    let done = false;
+    const finish = (error: Error | null, value?: Record<string, unknown>) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      child.stdin.end();
+      child.kill();
+      if (error) reject(error);
+      else resolve(value!);
+    };
+    const timer = setTimeout(() => finish(new Error('Codex did not answer')), 20_000);
+    const send = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
+    let buffer = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      buffer += chunk;
+      for (let at = buffer.indexOf('\n'); at >= 0; at = buffer.indexOf('\n')) {
+        const line = buffer.slice(0, at);
+        buffer = buffer.slice(at + 1);
+        let message: { id?: unknown; result?: unknown; error?: { message?: unknown } };
+        try {
+          message = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (message.id === 1) {
+          send({ method: 'initialized' });
+          send({ id: 2, method: 'account/rateLimits/read' });
+        } else if (message.id === 2) {
+          if (message.error) finish(new Error(String(message.error.message ?? 'Codex error')));
+          else finish(null, (message.result ?? {}) as Record<string, unknown>);
+        }
+      }
+    });
+    child.once('error', (error) => finish(error));
+    child.once('exit', () => finish(new Error('Codex exited before answering')));
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'emdash', version: '1' } } });
+  });
 }
 
 async function lastRateLimits(file: string): Promise<Record<string, unknown> | null> {

@@ -314,12 +314,16 @@ export type AgentUsage = {
   unavailable?: string;
   /** The vendor's own usage page, where numbers are not available locally (Cursor). */
   detailsUrl?: string;
+  /** Set for an official account's usage (otherwise the agent's usual login). */
+  account?: { id: string; name: string };
 };
 
 export type UsageLimits = { agents: AgentUsage[] };
 
 export type UsageLimitsService = {
   get(options?: { refresh?: boolean }): Promise<UsageLimits>;
+  /** Each official account's usage; read only when asked (each read runs the agent's CLI). */
+  accounts(options?: { refresh?: boolean }): Promise<AgentUsage[]>;
 };
 
 /** A context window as typed: `1000000`, `1m`, `256k`, `1.5M`. Null when not a size. */

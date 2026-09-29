@@ -1,3 +1,4 @@
+import { Popover, Spinner } from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
@@ -23,7 +24,8 @@ function tone(percent: number): string {
 /**
  * Always-visible subscription usage (5h / weekly for Claude Code and Codex; plan and a
  * link for Cursor, whose monthly numbers only live on its dashboard), so it is obvious
- * when to hand work to another agent.
+ * when to hand work to another agent. Clicking it opens every account's windows (see
+ * {@link AllUsagePopover}).
  */
 export function UsageLimitsPanel() {
   const queryClient = useQueryClient();
@@ -49,22 +51,158 @@ export function UsageLimitsPanel() {
   if (agents.length === 0) return null;
 
   return (
-    <div className="group relative mx-2 mb-1 flex flex-col gap-1 rounded-md px-2 py-1.5">
-      {agents.map((agent) => (
-        <AgentUsageRow key={agent.agent} usage={agent} />
+    <Popover.Root>
+      <Popover.Trigger
+        render={
+          <div
+            role="button"
+            tabIndex={0}
+            title="Show every account's usage"
+            className="group relative mx-2 mb-1 flex cursor-pointer flex-col gap-1 rounded-md px-2 py-1.5 hover:bg-background-1"
+          >
+            {agents.map((agent) => (
+              <AgentUsageRow key={agent.agent} usage={agent} />
+            ))}
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                void refresh();
+              }}
+              title="Refresh usage"
+              aria-label="Refresh usage"
+              className={cn(
+                'absolute top-1 right-1 rounded p-0.5 text-foreground-muted opacity-0 group-hover:opacity-100 hover:text-foreground',
+                refreshing && 'opacity-100'
+              )}
+            >
+              <RefreshCw className={cn('size-3', refreshing && 'animate-spin')} />
+            </button>
+          </div>
+        }
+      />
+      <Popover.Content align="start" side="top" className="w-96">
+        <AllUsagePopover agents={agents} />
+      </Popover.Content>
+    </Popover.Root>
+  );
+}
+
+const ACCOUNT_QUERY_KEY = ['accountUsage'];
+
+/**
+ * Every login's limit windows with their resets: each agent's usual login, then the
+ * official accounts added in Settings → Providers. Accounts are probed only while this
+ * is open (each probe runs the agent's CLI), then cached for a few minutes.
+ */
+function AllUsagePopover({ agents }: { agents: AgentUsage[] }) {
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  const { data: accounts, isLoading } = useQuery<AgentUsage[]>({
+    queryKey: ACCOUNT_QUERY_KEY,
+    queryFn: async () => (await getAgentsClient()).getAccountUsage({}),
+    staleTime: 60_000,
+  });
+
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      const client = await getAgentsClient();
+      const [fresh, freshAccounts] = await Promise.all([
+        client.getUsageLimits({ refresh: true }),
+        client.getAccountUsage({ refresh: true }),
+      ]);
+      queryClient.setQueryData(QUERY_KEY, fresh);
+      queryClient.setQueryData(ACCOUNT_QUERY_KEY, freshAccounts);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const groups = (['claude', 'codex', 'cursor'] as const)
+    .map((agent) => ({
+      agent,
+      rows: [
+        ...agents.filter((usage) => usage.agent === agent),
+        ...(accounts ?? []).filter((usage) => usage.agent === agent),
+      ],
+    }))
+    .filter((group) => group.rows.length > 0);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-foreground">Usage</span>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          aria-label="Refresh usage"
+          title="Refresh usage"
+          className="rounded p-1 text-foreground-muted hover:bg-background-1 hover:text-foreground"
+        >
+          <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
+        </button>
+      </div>
+      {groups.map((group) => (
+        <div key={group.agent} className="flex flex-col gap-2">
+          <span className="text-xs font-medium text-foreground-passive">
+            {AGENT_LABELS[group.agent]}
+          </span>
+          {group.rows.map((usage) => (
+            <AccountUsageDetails key={usage.account?.id ?? 'default'} usage={usage} />
+          ))}
+        </div>
       ))}
-      <button
-        type="button"
-        onClick={() => void refresh()}
-        title="Refresh usage"
-        aria-label="Refresh usage"
-        className={cn(
-          'absolute top-1 right-1 rounded p-0.5 text-foreground-muted opacity-0 group-hover:opacity-100 hover:text-foreground',
-          refreshing && 'opacity-100'
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-xs text-foreground-muted">
+          <Spinner className="size-3" />
+          <span>Checking accounts…</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AccountUsageDetails({ usage }: { usage: AgentUsage }) {
+  return (
+    <div className="flex flex-col gap-1 rounded-md border border-border px-2.5 py-2">
+      <div className="flex items-center gap-2 text-xs">
+        {usage.account ? (
+          <span translate="no" className="truncate text-foreground">
+            {usage.account.name}
+          </span>
+        ) : (
+          <span className="truncate text-foreground">Default login</span>
         )}
-      >
-        <RefreshCw className={cn('size-3', refreshing && 'animate-spin')} />
-      </button>
+        {usage.plan ? (
+          <span translate="no" className="ml-auto shrink-0 text-foreground-passive">
+            {usage.plan}
+          </span>
+        ) : null}
+      </div>
+      {usage.detailsUrl ? (
+        <button
+          type="button"
+          onClick={() => void openExternal(usage.detailsUrl!)}
+          className="flex items-center gap-0.5 self-start text-xs text-foreground-muted hover:text-foreground"
+        >
+          Open the usage dashboard
+          <ExternalLink className="size-3" />
+        </button>
+      ) : usage.unavailable || usage.windows.length === 0 ? (
+        <span className="text-xs text-foreground-passive">{usage.unavailable ?? '—'}</span>
+      ) : (
+        usage.windows.map((window) => (
+          <div key={window.label} className="flex items-center gap-2 text-xs">
+            <span className="w-24 shrink-0">
+              <UsageMeter window={window} />
+            </span>
+            <span className="truncate text-foreground-passive">
+              {window.resets ? `resets ${window.resets}` : ''}
+            </span>
+          </div>
+        ))
+      )}
     </div>
   );
 }
@@ -78,7 +216,10 @@ function AgentUsageRow({ usage }: { usage: AgentUsage }) {
         <span className="truncate">{usage.plan ?? '—'}</span>
         <button
           type="button"
-          onClick={() => void openExternal(usage.detailsUrl!)}
+          onClick={(event) => {
+            event.stopPropagation();
+            void openExternal(usage.detailsUrl!);
+          }}
           title="Open the usage dashboard"
           className="ml-auto flex shrink-0 items-center gap-0.5 hover:text-foreground"
         >

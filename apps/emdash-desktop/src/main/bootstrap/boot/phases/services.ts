@@ -73,10 +73,11 @@ import {
   type PromptLibraryKV,
 } from '@core/features/library/node/prompt-library-service';
 import { LocalSettingsSync } from '@core/features/machines/node/local-settings-sync';
-import type {
-  ModelProviderKeys,
-  ModelSourceOverride,
-  UsageLimitsService,
+import {
+  isOfficialAccount,
+  type ModelProviderKeys,
+  type ModelSourceOverride,
+  type UsageLimitsService,
 } from '@core/features/model-providers/api';
 import { prepareAgentProvider } from '@core/features/model-providers/node/agent-provider-files';
 import { ensureCodexModelCatalog } from '@core/features/model-providers/node/codex-model-catalog';
@@ -300,7 +301,11 @@ export async function bootServices(
   const providerOverrideSettings = createProviderOverrideSettings(db);
   const modelProviderKeys = createModelProviderKeys(encryptedAppSecretsStore);
   // Reads process.env lazily, so it sees the PATH the login-shell probe fills in.
-  const usageLimits = createUsageLimitsService();
+  const usageLimits = createUsageLimitsService({
+    listAccounts: async () =>
+      (await appSettingsService.get('modelProviders')).providers.filter(isOfficialAccount),
+    accountHome: (account) => prepareAccountHome(account),
+  });
   const REMOTE_ACCESS_TOKEN_KEY = 'remote-access-token';
   const remoteAccess = createRemoteAccessService({
     getSettings: () => appSettingsService.get('remoteAccess'),

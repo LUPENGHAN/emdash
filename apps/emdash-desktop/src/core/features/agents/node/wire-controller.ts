@@ -146,6 +146,8 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
       ),
     getUsageLimits: async ({ refresh }) =>
       (await options.usageLimits?.get({ refresh })) ?? { agents: [] },
+    getAccountUsage: async ({ refresh }) =>
+      (await options.usageLimits?.accounts({ refresh })) ?? [],
     modelProviderKeyStatus: async ({ providerId }) => ({
       hasKey: (await options.modelProviderKeys?.hasKey(providerId)) ?? false,
     }),

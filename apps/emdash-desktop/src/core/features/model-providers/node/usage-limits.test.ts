@@ -6,6 +6,7 @@ import {
   createUsageLimitsService,
   CURSOR_USAGE_URL,
   parseClaudeUsage,
+  parseCodexRateLimits,
   parseCursorAbout,
   readCodexUsage,
 } from './usage-limits';
@@ -103,6 +104,9 @@ describe('createUsageLimitsService', () => {
       now: () => now,
       runClaudeUsage,
       runCursorAbout: async () => '{"subscriptionTier":"Pro"}',
+      readCodexRateLimits: async () => {
+        throw new Error('not signed in');
+      },
     });
 
     await service.get();
@@ -124,9 +128,62 @@ describe('createUsageLimitsService', () => {
       runCursorAbout: async () => {
         throw new Error('Cursor CLI not found');
       },
+      readCodexRateLimits: async () => {
+        throw new Error('not signed in');
+      },
     });
     const [claude] = (await service.get()).agents;
     expect(claude?.unavailable).toBe('Claude Code CLI not found');
+  });
+});
+
+describe('Codex rate limits and official accounts', () => {
+  const RATE_LIMITS = {
+    rateLimits: {
+      primary: { usedPercent: 3, windowDurationMins: 300, resetsAt: 7_200 },
+      secondary: { usedPercent: 42, windowDurationMins: 10080, resetsAt: 700_000 },
+      planType: 'plus',
+    },
+  };
+
+  it("reads Codex's usage from its app server", () => {
+    expect(parseCodexRateLimits(RATE_LIMITS, 3_600_000)).toMatchObject({
+      agent: 'codex',
+      plan: 'plus',
+      windows: [
+        { label: '5h', usedPercent: 3 },
+        { label: 'Week', usedPercent: 42 },
+      ],
+    });
+  });
+
+  it('probes each account in its own config dir, only when asked', async () => {
+    const runClaude = vi.fn();
+    const readCodexRateLimits = vi.fn(async (env: { env: NodeJS.ProcessEnv }) => {
+      if (env.env.CODEX_HOME !== '/accounts/codex-alt') throw new Error('not signed in');
+      return RATE_LIMITS;
+    });
+    const service = createUsageLimitsService({
+      env: { home: '/nonexistent', env: {} },
+      now: () => 3_600_000,
+      runClaudeUsage: runClaude,
+      runCursorAbout: async () => '{}',
+      readCodexRateLimits,
+      listAccounts: async () => [
+        { id: 'alt', name: 'Alt', baseUrl: '', models: [], account: { agent: 'codex' } },
+      ],
+      accountHome: async (account) => `/accounts/codex-${account.id}`,
+    });
+
+    const [alt] = await service.accounts();
+    expect(alt).toMatchObject({
+      agent: 'codex',
+      plan: 'plus',
+      account: { id: 'alt', name: 'Alt' },
+    });
+    expect(readCodexRateLimits).toHaveBeenCalledTimes(1);
+    await service.accounts();
+    expect(readCodexRateLimits).toHaveBeenCalledTimes(1);
   });
 });
 

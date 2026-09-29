@@ -525,35 +525,39 @@ function OfficialAccounts({
       ) : null}
       {adding ? (
         <div className="flex items-end gap-2 rounded-md border border-border p-3">
-          <Field.Root className="w-40 shrink-0">
-            <Field.Label>Agent</Field.Label>
-            <Select.Root
-              value={agent}
-              onValueChange={(next) => next && setAgent(next as OfficialAccountAgent)}
-            >
-              <Select.Trigger appearance="input" className="w-full">
-                <Select.Value>{AGENT_NAMES[agent]}</Select.Value>
-              </Select.Trigger>
-              <Select.Content align="start" width="trigger">
-                {OFFICIAL_ACCOUNT_AGENTS.map((candidate) => (
-                  <Select.Item key={candidate} value={candidate}>
-                    {AGENT_NAMES[candidate]}
-                  </Select.Item>
-                ))}
-              </Select.Content>
-            </Select.Root>
-          </Field.Root>
-          <Field.Root className="min-w-0 flex-1">
-            <Field.Label>Name</Field.Label>
-            <Input
-              value={name}
-              placeholder="Work account"
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') add();
-              }}
-            />
-          </Field.Root>
+          <div className="w-40 shrink-0">
+            <Field.Root>
+              <Field.Label>Agent</Field.Label>
+              <Select.Root
+                value={agent}
+                onValueChange={(next) => next && setAgent(next as OfficialAccountAgent)}
+              >
+                <Select.Trigger appearance="input" className="w-full">
+                  <Select.Value>{AGENT_NAMES[agent]}</Select.Value>
+                </Select.Trigger>
+                <Select.Content align="start" width="trigger">
+                  {OFFICIAL_ACCOUNT_AGENTS.map((candidate) => (
+                    <Select.Item key={candidate} value={candidate}>
+                      {AGENT_NAMES[candidate]}
+                    </Select.Item>
+                  ))}
+                </Select.Content>
+              </Select.Root>
+            </Field.Root>
+          </div>
+          <div className="min-w-0 flex-1">
+            <Field.Root>
+              <Field.Label>Name</Field.Label>
+              <Input
+                value={name}
+                placeholder="Work account"
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') add();
+                }}
+              />
+            </Field.Root>
+          </div>
           <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
             Cancel
           </Button>
