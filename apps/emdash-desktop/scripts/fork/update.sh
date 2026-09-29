@@ -23,6 +23,28 @@ main() {
 
   local script repo_root
   script="$(readlink -f "${BASH_SOURCE[0]}")"
+
+  # Emdash's terminals (and the agents it runs) die when the install quits Emdash,
+  # which could stop this between removing the old app and copying the new one. So
+  # from inside Emdash, carry on in a Terminal window of its own.
+  if [ "${TERM_PROGRAM:-}" = emdash ] && [ -z "${EMDASH_UPDATE_HANDOFF:-}" ]; then
+    local base launcher
+    base="$(mktemp -t emdash-update)"
+    launcher="$base.command"
+    rm -f "$base"
+    {
+      echo '#!/bin/bash'
+      echo "rm -f $(printf '%q' "$launcher")"
+      echo "export EMDASH_UPDATE_HANDOFF=1"
+      echo "unset TERM_PROGRAM"
+      printf '%q ' "$script" "$@"
+      echo
+    } >"$launcher"
+    chmod +x "$launcher"
+    open -a Terminal "$launcher"
+    echo "Running inside Emdash, which the install quits: continuing in a Terminal window."
+    return 0
+  fi
   repo_root="$(cd "$(dirname "$script")/../../../.." && pwd)"
   cd "$repo_root"
 
