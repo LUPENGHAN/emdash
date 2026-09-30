@@ -30,7 +30,11 @@ import {
   listLocalWorkspaces,
   type AgentLibraryService,
 } from '@core/features/agent-library/node/agent-library-service';
-import { acpMcpServers, terminalLaunchForMcp } from '@core/features/agent-library/node/mcp-launch';
+import {
+  acpMcpServers,
+  launchableMcpServers,
+  terminalLaunchForMcp,
+} from '@core/features/agent-library/node/mcp-launch';
 import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registry';
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
@@ -453,7 +457,10 @@ export async function bootServices(
     projectId: string
   ): Promise<LaunchMcpServer[]> => {
     const url = await agentControlUrl(conversationId);
-    const library = await agentLibrary.launchMcpServers(projectId);
+    const library = await launchableMcpServers(
+      await agentLibrary.launchMcpServers(projectId),
+      (message, details) => log.warn(message, details)
+    );
     return [
       ...(url ? [{ name: 'emdash', transport: 'http' as const, url }] : []),
       ...library.filter((server) => server.name !== 'emdash'),

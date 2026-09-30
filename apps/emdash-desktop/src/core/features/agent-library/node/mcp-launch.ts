@@ -1,3 +1,6 @@
+import { constants } from 'node:fs';
+import { access } from 'node:fs/promises';
+import path from 'node:path';
 import type { LaunchMcpServer } from '../api';
 
 export type McpLaunch = { args: string[]; env: Record<string, string> };
@@ -55,6 +58,43 @@ export function terminalLaunchForMcp(
     default:
       return null;
   }
+}
+
+/**
+ * Why a stdio server's command cannot start in an agent session, or null when it can:
+ * a relative path (it would resolve against each session's workspace; one copied from
+ * a plugin or another agent's config lost the directory it was relative to) or an
+ * absolute path that is not an executable file. Bare names are looked up on PATH.
+ */
+export async function unlaunchableReason(server: LaunchMcpServer): Promise<string | null> {
+  if (server.transport !== 'stdio') return null;
+  const command = server.command?.trim() ?? '';
+  if (!command) return 'has no command';
+  if (!command.includes('/') && !command.includes('\\')) return null;
+  if (!path.isAbsolute(command)) return `runs a relative path (${command})`;
+  try {
+    await access(command, constants.X_OK);
+    return null;
+  } catch {
+    return `runs a missing file (${command})`;
+  }
+}
+
+/**
+ * The servers a launch can start. An agent may refuse a whole session over one server
+ * it cannot spawn (Oh My Pi does when restoring one), so those are left out.
+ */
+export async function launchableMcpServers(
+  servers: readonly LaunchMcpServer[],
+  warn?: (message: string, details: Record<string, unknown>) => void
+): Promise<LaunchMcpServer[]> {
+  const reasons = await Promise.all(servers.map(unlaunchableReason));
+  return servers.filter((server, index) => {
+    const reason = reasons[index];
+    if (reason)
+      warn?.('Leaving out an MCP server that cannot start', { name: server.name, reason });
+    return !reason;
+  });
 }
 
 /** ACP session MCP entries (the runtime keeps http ones only for agents that support it). */
