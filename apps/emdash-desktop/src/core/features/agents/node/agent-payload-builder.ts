@@ -16,6 +16,7 @@ import type {
   SelectedSource,
 } from '@core/primitives/agents/api';
 import type { ProviderOverrideSettings } from '@core/services/settings/node/provider-settings-service';
+import { claudeModelOptions } from './claude-models';
 import { codexModelOptions } from './codex-models';
 
 function buildMetadata(provider: CLIAgentPluginProvider): AgentMetadata {
@@ -55,13 +56,22 @@ function buildMetadata(provider: CLIAgentPluginProvider): AgentMetadata {
   };
 }
 
-/** Codex's models follow the list it keeps from OpenAI, so new ones appear without a release. */
+/**
+ * Claude Code's and Codex's models follow the lists they keep from their vendors, so new
+ * ones appear without an Emdash release.
+ */
 function modelsFor(
   id: string,
   models: CLIAgentPluginProvider['capabilities']['models']
 ): AgentMetadata['capabilities']['models'] {
-  if (id !== 'codex' || models.kind !== 'selectable') return models;
-  return { kind: 'selectable', modelOptions: codexModelOptions(models.modelOptions) };
+  if (models.kind !== 'selectable') return models;
+  if (id === 'codex') {
+    return { kind: 'selectable', modelOptions: codexModelOptions(models.modelOptions) };
+  }
+  if (id === 'claude') {
+    return { kind: 'selectable', modelOptions: claudeModelOptions(models.modelOptions) };
+  }
+  return models;
 }
 
 function buildAuthDescriptor(provider: CLIAgentPluginProvider): AgentAuthDescriptor {
