@@ -108,6 +108,27 @@ describe('readTranscript for Pi-family sessions', () => {
       { role: 'assistant', text: 'Hello' },
     ]);
   });
+
+  it('finds a session whose header id differs from its name, or by its recorded path', async () => {
+    const dir = path.join(home, '.omp', 'agent', 'sessions', '-repo');
+    await mkdir(dir, { recursive: true });
+    // A terminal resume rewrote the header with a new id; the name keeps the first one.
+    const file = path.join(dir, '2026-09-30T00-36-37Z_first-id.jsonl');
+    await writeFile(
+      file,
+      jsonl(
+        { type: 'session', id: 'header-id', cwd },
+        { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'test' }] } }
+      )
+    );
+    const turns = [{ role: 'user', text: 'test' }];
+
+    expect(await readTranscript('oh-my-pi', 'header-id', cwd, { home, env: {} })).toEqual(turns);
+    expect(await readTranscript('oh-my-pi', file, cwd, { home, env: {} })).toEqual(turns);
+    expect(await readTranscript('oh-my-pi', '/etc/other.jsonl', cwd, { home, env: {} })).toEqual(
+      []
+    );
+  });
 });
 
 describe('prepareHandoff', () => {

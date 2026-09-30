@@ -2,6 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { cursorHome, readCursorTurns } from '../cursor-sessions';
+import { piSessionId } from '../delete-agent-session';
 import {
   asRecord,
   claudeProjectDirName,
@@ -117,9 +118,7 @@ async function readPiFamily(
   sessionId: string,
   turns: TurnCollector
 ): Promise<void> {
-  // Files are named `<timestamp>_<session id>.jsonl`.
-  const files = await listFilesRecursive(piSessionsDir(agent, env), '.jsonl');
-  const file = files.find((candidate) => candidate.endsWith(`_${sessionId}.jsonl`));
+  const file = await findPiFamilySessionFile(agent, env, sessionId);
   if (!file) return;
   for (const record of parseJsonLines(await readFile(file, 'utf8'))) {
     if (record.type !== 'message') continue;
@@ -128,6 +127,28 @@ async function readPiFamily(
       turns.add(message.role, claudeText(message.content));
     }
   }
+}
+
+/**
+ * A Pi-family session's file: the path itself when one was recorded (inside the agent's
+ * sessions), else the file whose header holds the id, which a resume can make differ
+ * from the `<timestamp>_<id>.jsonl` in its name, else the one named for it.
+ */
+async function findPiFamilySessionFile(
+  agent: 'pi' | 'oh-my-pi',
+  env: ExternalSessionEnv,
+  sessionId: string
+): Promise<string | null> {
+  const root = piSessionsDir(agent, env);
+  if (path.isAbsolute(sessionId)) {
+    const inside = path.relative(root, sessionId);
+    return inside && !inside.startsWith('..') && !path.isAbsolute(inside) ? sessionId : null;
+  }
+  const files = await listFilesRecursive(root, '.jsonl');
+  for (const file of files) {
+    if ((await piSessionId(file).catch(() => null)) === sessionId) return file;
+  }
+  return files.find((candidate) => candidate.endsWith(`_${sessionId}.jsonl`)) ?? null;
 }
 
 /** Cursor keeps chat sessions in acp-sessions/<id>/ and terminal ones in chats/<hash>/<id>/. */

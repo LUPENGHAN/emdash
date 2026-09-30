@@ -11,6 +11,7 @@ import type { ImportableSession } from '@core/primitives/conversations/api';
 import type { AppDb } from '@core/services/app-db/node/db';
 import { projects, tasks } from '@core/services/app-db/node/schema';
 import type { ConversationWorkspaceIdentityResolver } from './createConversation';
+import { piFamilySessionId } from './delete-agent-session';
 import { listExternalSessions } from './external-sessions';
 
 type ListDb = Pick<AppDb, 'select'>;
@@ -96,13 +97,21 @@ async function listForWorkspace(
 /** Session handles (and conversation ids) of live conversations that belong to a task. */
 async function sessionsInTasks(db: ListDb): Promise<Set<string>> {
   const known = await db
-    .select({ id: conversations.id, providerSessionId: conversations.providerSessionId })
+    .select({
+      id: conversations.id,
+      provider: conversations.provider,
+      providerSessionId: conversations.providerSessionId,
+    })
     .from(conversations)
     .where(and(liveConversations(), isNotNull(conversations.taskId)));
   const exclude = new Set<string>();
   for (const row of known) {
     exclude.add(row.id);
-    if (row.providerSessionId) exclude.add(row.providerSessionId);
+    if (!row.providerSessionId) continue;
+    exclude.add(row.providerSessionId);
+    // Pi-family sessions recorded by file path are listed by the id in the file.
+    const id = await piFamilySessionId(row.provider, row.providerSessionId);
+    if (id) exclude.add(id);
   }
   return exclude;
 }
