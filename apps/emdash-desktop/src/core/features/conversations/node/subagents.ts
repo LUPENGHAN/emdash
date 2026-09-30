@@ -62,7 +62,9 @@ export async function readSubagentTranscript(
     const entry = (await codexSubagents(sessionId, env)).find(
       ({ summary }) => summary.id === subagentId
     );
-    return entry ? codexTurns(await readFile(entry.file, 'utf8')) : [];
+    return entry
+      ? codexTurns(await readFile(entry.file, 'utf8')).map(({ role, text }) => ({ role, text }))
+      : [];
   }
   return [];
 }
@@ -157,9 +159,10 @@ async function codexSubagents(
     const records = [...parseJsonLines(await readFile(file, 'utf8'))];
     const start = Number(entry.meta.subagent_history_start_ordinal ?? 0);
     const own = records.filter((record) => Number(record.ordinal ?? Infinity) >= start);
-    const firstAsk = own
-      .map((record) => codexUserText(asRecord(record.payload) ?? {}))
-      .find((text) => text !== null);
+    const agentPath = str(spawn?.agent_path);
+    const firstAsk =
+      codexTurns(records).find((turn) => turn.role === 'user' && !turn.encrypted)?.text ??
+      (agentPath ? taskNameOf(agentPath) : null);
     const events = own.map((record) => asRecord(record.payload)?.type);
     const lastComplete = events.lastIndexOf('task_complete');
     const lastStart = events.lastIndexOf('task_started');
@@ -177,22 +180,84 @@ async function codexSubagents(
   return found;
 }
 
-function codexTurns(text: string): TranscriptTurn[] {
-  const records = [...parseJsonLines(text)];
+/**
+ * A Codex subagent's turns. Older rollouts record them as `user_message` /
+ * `agent_message` events; newer ones as the task the parent sent (an `agent_message`
+ * item to this agent, whose text Codex may keep only encrypted) and the agent's own
+ * assistant `message` items.
+ */
+function codexTurns(
+  source: string | Record<string, unknown>[]
+): (TranscriptTurn & { encrypted?: boolean })[] {
+  const records = typeof source === 'string' ? [...parseJsonLines(source)] : source;
   const meta = asRecord(records[0]?.payload);
   const start = Number(meta?.subagent_history_start_ordinal ?? 0);
-  const turns: TranscriptTurn[] = [];
-  for (const record of records) {
-    if (Number(record.ordinal ?? Infinity) < start) continue;
+  const spawn = asRecord(asRecord(asRecord(meta?.source)?.subagent)?.thread_spawn);
+  const agentPath = str(spawn?.agent_path);
+  const own = records.filter((record) => Number(record.ordinal ?? Infinity) >= start);
+  const hasReplyEvents = own.some(
+    (record) => record.type === 'event_msg' && asRecord(record.payload)?.type === 'agent_message'
+  );
+  const turns: (TranscriptTurn & { encrypted?: boolean })[] = [];
+  for (const record of own) {
     const payload = asRecord(record.payload);
     if (!payload) continue;
     const userText = codexUserText(payload);
-    if (userText !== null) pushTurn(turns, 'user', userText);
-    else if (payload.type === 'agent_message' && typeof payload.message === 'string') {
+    if (userText !== null) {
+      pushTurn(turns, 'user', userText);
+    } else if (payload.type === 'agent_message' && typeof payload.message === 'string') {
       pushTurn(turns, 'assistant', payload.message);
+    } else if (
+      record.type === 'response_item' &&
+      payload.type === 'agent_message' &&
+      (!agentPath || payload.recipient === agentPath)
+    ) {
+      const task = interAgentPayload(payload.content);
+      if (task.text) pushTurn(turns, 'user', task.text);
+      else if (task.encrypted) {
+        turns.push({
+          role: 'user',
+          text: `${agentPath ? `Task ${taskNameOf(agentPath)}: ` : ''}Codex keeps what it was asked encrypted, so it cannot be shown.`,
+          encrypted: true,
+        });
+      }
+    } else if (
+      !hasReplyEvents &&
+      record.type === 'response_item' &&
+      payload.type === 'message' &&
+      payload.role === 'assistant'
+    ) {
+      pushTurn(turns, 'assistant', outputText(payload.content));
     }
   }
   return turns;
+}
+
+/** The readable part of a message between Codex agents (a header, then `Payload:`). */
+function interAgentPayload(content: unknown): { text: string; encrypted: boolean } {
+  const parts = Array.isArray(content) ? content.map((part) => asRecord(part)) : [];
+  const text = parts
+    .map((part) => (part?.type === 'input_text' && typeof part.text === 'string' ? part.text : ''))
+    .join('\n');
+  const at = text.indexOf('Payload:\n');
+  return {
+    text: (at >= 0 ? text.slice(at + 'Payload:\n'.length) : text).trim(),
+    encrypted: parts.some((part) => part?.type === 'encrypted_content'),
+  };
+}
+
+function outputText(content: unknown): string {
+  return (Array.isArray(content) ? content : [])
+    .map((part) => {
+      const p = asRecord(part);
+      return p?.type === 'output_text' && typeof p.text === 'string' ? p.text : '';
+    })
+    .join('\n');
+}
+
+/** "/root/review_windows_audit" → "review windows audit". */
+function taskNameOf(agentPath: string): string {
+  return (agentPath.split('/').pop() ?? agentPath).replace(/_/g, ' ');
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────────

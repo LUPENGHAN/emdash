@@ -165,6 +165,98 @@ describe('subagents', () => {
     ]);
   });
 
+  it("reads newer Codex rollouts: the parent's task (maybe encrypted) and the agent's messages", async () => {
+    const parent = '01a0e1a8-5fa8-7701-8a25-271bce853a05';
+    const agentPath = '/root/review_windows_audit';
+    await file(
+      '.codex/sessions/2026/09/27/rollout-x-01a0e1a8-fc00-7071-b9ac-de312eb33062.jsonl',
+      lines([
+        {
+          ordinal: 0,
+          type: 'session_meta',
+          payload: {
+            id: 'child',
+            parent_thread_id: parent,
+            source: {
+              subagent: {
+                thread_spawn: { agent_path: agentPath, agent_nickname: 'Mendel', agent_role: null },
+              },
+            },
+            subagent_history_start_ordinal: 2,
+          },
+        },
+        {
+          ordinal: 1,
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'parent history' }],
+          },
+        },
+        {
+          ordinal: 2,
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'mode' }],
+          },
+        },
+        {
+          ordinal: 3,
+          type: 'response_item',
+          payload: {
+            type: 'agent_message',
+            author: '/root',
+            recipient: agentPath,
+            content: [
+              {
+                type: 'input_text',
+                text: 'Message Type: NEW_TASK\nTask name: x\nSender: /root\nPayload:\n',
+              },
+              { type: 'encrypted_content', encrypted_content: 'gAAAA' },
+            ],
+          },
+        },
+        {
+          ordinal: 4,
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'Looking.' }],
+          },
+        },
+        {
+          ordinal: 5,
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '## Findings' }],
+          },
+        },
+        { ordinal: 6, type: 'event_msg', payload: { type: 'task_complete' } },
+      ])
+    );
+
+    expect(await listSubagents('codex', parent, '/', env())).toEqual([
+      expect.objectContaining({
+        kind: 'Mendel',
+        description: 'review windows audit',
+        status: 'done',
+      }),
+    ]);
+    expect(await readSubagentTranscript('codex', parent, '/', 'child', env())).toEqual([
+      {
+        role: 'user',
+        text: 'Task review windows audit: Codex keeps what it was asked encrypted, so it cannot be shown.',
+      },
+      { role: 'assistant', text: 'Looking.\n\n## Findings' },
+    ]);
+  });
+
   it('knows no subagents for other agents', async () => {
     expect(await listSubagents('opencode', 'x', '/', env())).toEqual([]);
   });
