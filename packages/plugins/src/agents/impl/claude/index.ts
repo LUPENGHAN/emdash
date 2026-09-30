@@ -64,7 +64,7 @@ export const plugin = definePlugin(
           modelFeatures: { intelligence: 4, speed: 3 },
         },
         sonnet: {
-          name: 'Sonnet 5',
+          name: 'Sonnet 5.5',
           description: 'Efficient for routine tasks',
           modelFeatures: { intelligence: 4, speed: 4 },
         },
