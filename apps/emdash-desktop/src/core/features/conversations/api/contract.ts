@@ -37,6 +37,7 @@ import type {
   HandoffPreparation,
   HostConversationRow,
   ImportableSession,
+  SessionCost,
   SubagentSummary,
 } from '@core/primitives/conversations/api';
 import {
@@ -264,6 +265,11 @@ export const conversationsContract = defineContract({
   listSubagents: procedure({
     input: z.object({ conversationId: z.string() }),
     output: z.custom<SubagentSummary[]>(),
+  }),
+  /** The session's token usage and its cost at API list prices; null when unknown. */
+  sessionCost: procedure({
+    input: z.object({ conversationId: z.string() }),
+    output: z.custom<SessionCost | null>(),
   }),
   /** What one of those subagents was asked and answered. */
   readSubagentTranscript: procedure({

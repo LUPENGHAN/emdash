@@ -27,6 +27,7 @@ import type {
 } from '@core/features/conversations/api/browser/chat/chat-transcript';
 import { useProviderSettings } from '@core/features/conversations/api/browser/provider-preferences';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
+import { useConversationCost } from '@core/features/conversations/browser/conversation-cost';
 import {
   providerComposerOptions,
   selectCachedProviderOptions,
@@ -508,9 +509,13 @@ const ComposerForStore = observer(function ComposerForStore({
     [agents]
   );
 
-  const providerId =
-    conversationRegistry.get(store.taskId)?.conversations.get(store.conversationId)?.data
-      .providerId ?? null;
+  const conversationData = conversationRegistry
+    .get(store.taskId)
+    ?.conversations.get(store.conversationId)?.data;
+  const providerId = conversationData?.providerId ?? null;
+  // The session's cost at API list prices, computed alike for every agent; the agent's
+  // own figure only where Emdash cannot compute one.
+  const { data: sessionCost } = useConversationCost(conversationData);
   const providerOptions = store.providerOptions;
   const { settings } = useProviderSettings(
     providerOptions === undefined && providerId
@@ -623,7 +628,10 @@ const ComposerForStore = observer(function ComposerForStore({
               ? {
                   used: store.usage.contextUsed,
                   size: store.usage.contextSize,
-                  cost: store.usage.cost,
+                  cost:
+                    sessionCost?.amount != null
+                      ? { amount: sessionCost.amount, currency: sessionCost.currency }
+                      : store.usage.cost,
                 }
               : null
           }

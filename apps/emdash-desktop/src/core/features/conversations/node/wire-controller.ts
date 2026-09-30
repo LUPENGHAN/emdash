@@ -20,6 +20,8 @@ import {
   deleteAgentSession,
   piFamilySessionId,
 } from '@core/features/conversations/node/delete-agent-session';
+import { localConversation } from '@core/features/conversations/node/handoff/prepare-conversation-handoff';
+import { sessionCost, type PriceCatalog } from '@core/features/conversations/node/session-cost';
 import { sourceOverrideOf, type ModelSourceOverride } from '@core/features/model-providers/api';
 import type { ProjectAttachmentError } from '@core/features/projects/api';
 import {
@@ -97,6 +99,8 @@ export type CreateConversationsWireControllerOptions = Readonly<{
   taskSessions: Pick<TaskSessionManager, 'getTask'>;
   withCompensation: CompensationRunner;
   hostIsReachable: (hostRef: SerializedHostRef) => boolean;
+  /** API list prices, for sessions' equivalent cost. */
+  priceCatalog?: () => Promise<PriceCatalog>;
 }>;
 
 export function createConversationsWireController(
@@ -222,6 +226,16 @@ export function createConversationsWireController(
     requestHandoffSummary: ({ conversationId }) =>
       conversationOperations.requestHandoffSummary(conversationId),
     listSubagents: ({ conversationId }) => conversationOperations.listSubagents(conversationId),
+    sessionCost: async ({ conversationId }) => {
+      const row = await localConversation(options.db, conversationId).catch(() => null);
+      if (!row?.providerSessionId || !options.priceCatalog) return null;
+      return sessionCost(
+        row.provider,
+        row.providerSessionId,
+        row.cwd,
+        await options.priceCatalog()
+      ).catch(() => null);
+    },
     readSubagentTranscript: ({ conversationId, subagentId }) =>
       conversationOperations.readSubagentTranscript(conversationId, subagentId),
     readHandoffSummary: ({ conversationId, summaryPath }) =>

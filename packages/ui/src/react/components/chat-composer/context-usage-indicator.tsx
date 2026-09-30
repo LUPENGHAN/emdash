@@ -102,7 +102,7 @@ export function ContextUsageIndicator({
             />
           </div>
           {usage.cost ? (
-            <div className={styles.usageCostRow}>Cost: {formatCost(usage.cost)}</div>
+            <div className={styles.usageCostRow}>Equivalent API cost: {formatCost(usage.cost)}</div>
           ) : null}
         </div>
       </Popover.Content>

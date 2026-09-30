@@ -39,6 +39,10 @@ import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registr
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
 import { getProviderSettingsService } from '@core/features/conversations/node/provider-settings-service';
+import {
+  createPriceCatalog,
+  type PriceCatalog,
+} from '@core/features/conversations/node/session-cost';
 import { createConversationDeletionSweepKind } from '@core/features/conversations/node/sweep/conversation-deletion-sweep';
 import { ConversationBackfillService } from '@core/features/conversations/node/sync/conversation-backfill';
 import { ConversationSyncService } from '@core/features/conversations/node/sync/conversation-sync-service';
@@ -222,6 +226,8 @@ export type ServicesBundle = {
   readonly providerSettings: ReturnType<typeof createProviderOverrideSettings>;
   /** Agent config for a launch, including its model provider source (both UIs). */
   readonly effectiveAgentConfig: EffectiveAgentConfig;
+  /** API list prices of models, for conversations' equivalent cost. */
+  readonly priceCatalog: () => Promise<PriceCatalog>;
   readonly modelProviderKeys: ModelProviderKeys;
   readonly usageLimits: UsageLimitsService;
   readonly agentControl: AgentControlDispatcher;
@@ -364,6 +370,9 @@ export async function bootServices(
   // Before the gateway registers controllers: window traffic waits for the choice.
   void remoteClient.start();
   appScope.add(() => remoteClient.dispose());
+  const priceCatalog = createPriceCatalog({
+    cacheFile: join(app.getPath('userData'), 'model-prices.json'),
+  });
   const effectiveAgentConfig = createEffectiveAgentConfig({
     getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
@@ -1082,6 +1091,7 @@ export async function bootServices(
     projectSettings: projectSettingsService,
     providerSettings: providerOverrideSettings,
     effectiveAgentConfig,
+    priceCatalog,
     modelProviderKeys,
     usageLimits,
     agentControl,

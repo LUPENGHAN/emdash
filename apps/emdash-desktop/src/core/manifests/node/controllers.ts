@@ -25,6 +25,7 @@ import {
 } from '@core/features/browser/node/wire-controller';
 import { createCatalogWireController } from '@core/features/catalog/node/wire-controller';
 import type { CompensationRunner } from '@core/features/conversations/node/createConversation';
+import type { PriceCatalog } from '@core/features/conversations/node/session-cost';
 import {
   createConversationsWireController,
   type CreateConversationsWireControllerOptions,
@@ -160,6 +161,7 @@ export type DesktopControllerContext = {
   readonly projectSettings: ProjectSettingsService;
   readonly providerSettings: ProviderOverrideSettings;
   readonly effectiveAgentConfig: EffectiveAgentConfig;
+  readonly priceCatalog: () => Promise<PriceCatalog>;
   readonly modelProviderKeys: ModelProviderKeys;
   readonly usageLimits: UsageLimitsService;
   readonly remoteAccess: RemoteAccessService;
@@ -455,6 +457,7 @@ export const desktopNodeControllers = {
       logger,
       projects,
       effectiveAgentConfig,
+      priceCatalog,
       runtimes,
       sessionLaunchContexts,
       taskSessions,
@@ -470,6 +473,7 @@ export const desktopNodeControllers = {
         projects,
         getProviderEnv: async (providerId, override) =>
           (await effectiveAgentConfig(providerId, override))?.env,
+        priceCatalog,
         sessionLaunchContexts,
         runtimes,
         taskSessions,

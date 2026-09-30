@@ -159,6 +159,18 @@ export type ImportableSession = {
 export const HANDOFF_PROMPT_OPENER = '你在接手另一个 AI 编码助手';
 
 /** A subagent an agent session started inside its own process (e.g. a Claude Task agent). */
+/**
+ * A session's token usage, and what it would cost at the vendors' API list prices
+ * (the equivalent of a subscription's usage). `amount` is null when no model it used
+ * has a known price; `unpricedModels` names those left out of it.
+ */
+export type SessionCost = {
+  amount: number | null;
+  currency: 'USD';
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  unpricedModels: string[];
+};
+
 export type SubagentSummary = {
   id: string;
   /** The agent's type, e.g. "Explore", or "agent" when it names none. */
