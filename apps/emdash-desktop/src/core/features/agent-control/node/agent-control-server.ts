@@ -60,7 +60,13 @@ export async function startAgentControlServer(
       return;
     }
 
-    const server = new McpServer({ name: 'emdash', version: deps.version });
+    const server = new McpServer(
+      { name: 'emdash', version: deps.version },
+      {
+        instructions:
+          'You run inside Emdash, which manages git worktrees as tasks the user can see and review. When you need a separate git worktree (parallel work, an alternative approach, isolating a change), create it with the create_task tool instead of `git worktree add` or a worktree feature of your own.',
+      }
+    );
     registerAgentControlTools(server, {
       caller,
       dispatch: (action) => deps.dispatch(caller, action),

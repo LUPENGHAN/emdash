@@ -154,6 +154,35 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     ({ title, prompt }) => dispatch({ kind: 'suggest_task', title, prompt })
   );
 
+  server.registerTool(
+    'create_task',
+    {
+      description:
+        "Create a git worktree through Emdash, as a new task in this project: use this instead of `git worktree add` (or a worktree tool of your own), so the worktree lands where Emdash keeps them and the user can see and review its code in Emdash. Returns the worktree's path and branch; work there yourself, or pass `prompt` to start an agent in it. The user confirms in Emdash.",
+      inputSchema: {
+        name: z.string().min(1).max(80).describe('Task name, e.g. "fix-login-timeout"'),
+        base_branch: z
+          .string()
+          .optional()
+          .describe("Branch to start from; omit for this task's current branch"),
+        prompt: z
+          .string()
+          .optional()
+          .describe('Start an agent in the new task with this first message'),
+        agent: agentSchema.optional().describe('Agent for `prompt`; omit for yourself'),
+        ui: z.enum(['terminal', 'chat']).optional(),
+      },
+    },
+    ({ name, base_branch, prompt, agent, ui }) =>
+      dispatch({
+        kind: 'create_task',
+        name,
+        ...(base_branch && { baseBranch: base_branch }),
+        ...(prompt && { prompt, providerId: agent ?? caller.providerId }),
+        ...(ui && { ui }),
+      })
+  );
+
   // ── The user's screen ──────────────────────────────────────────────────────────
   server.registerTool(
     'open_file',

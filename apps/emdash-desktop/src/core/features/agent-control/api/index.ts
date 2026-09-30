@@ -46,6 +46,16 @@ export type AgentControlAction =
   | { kind: 'send_message'; conversationId: string; text: string }
   | { kind: 'handoff'; providerId: string; model?: string; note?: string }
   | { kind: 'suggest_task'; title: string; prompt: string }
+  | {
+      kind: 'create_task';
+      name: string;
+      /** The branch the new worktree starts from; the caller's own branch when absent. */
+      baseBranch?: string;
+      /** An agent to start in the new task with this first message. */
+      prompt?: string;
+      providerId?: string;
+      ui?: 'terminal' | 'chat';
+    }
   | { kind: 'open'; target: OpenTarget }
   | { kind: 'read_terminal'; name?: string; lines: number }
   | { kind: 'run_in_terminal'; command: string }

@@ -2,6 +2,7 @@ import {
   tryParsePortableRelativePath,
   type PortableRelativePath,
 } from '@emdash/core/primitives/path/api';
+import { shortName } from '@emdash/core/runtimes/git/api';
 import type { AgentProviderId } from '@emdash/plugins/agents/types';
 import { toast } from '@emdash/ui/react/primitives';
 import { browserControlsRegistry } from '@core/features/browser/api/browser/browser-controls-registry';
@@ -17,12 +18,20 @@ import {
   handOffConversationTo,
 } from '@core/features/conversations/contributions/browser/agent-actions';
 import { openFileInTaskEditor } from '@core/features/editor/api/browser/open-file-in-file-editor';
+import { fetchAppSettingsMeta } from '@core/features/settings/api/browser/app-settings-client';
+import { readCheckoutHead } from '@core/features/source-control/api/browser/client';
+import { getGitRepositoryStore } from '@core/features/source-control/api/browser/stores/source-control-selectors';
+import { getTaskManagerStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
 import { getTerminalsForTask } from '@core/features/terminals/api/browser/terminal-selectors';
-import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
+import {
+  getTaskComposition,
+  getTaskWorkspace,
+} from '@core/features/workbench/api/browser/task-composition-selectors';
 import { openModal } from '@core/manifests/browser/modal-api';
 import { commitRef } from '@core/primitives/git/api';
 import { getNavigation } from '@core/primitives/navigation/browser/navigation-selectors';
+import { resolveTaskBranchName } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult, OpenTarget } from '../api';
 import { runBrowserOp, type AutomatableBrowser } from './browser-automation';
 import { readableTerminals, renderTerminalTail } from './terminal-reader';
@@ -118,6 +127,9 @@ export async function executeAgentAction(
       return { text: 'Suggested to the user; they can start it from the notification.' };
     }
 
+    case 'create_task':
+      return createTaskForAgent(caller, action, who);
+
     case 'open':
       return openTarget(caller, action.target);
 
@@ -162,6 +174,108 @@ export async function executeAgentAction(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────────
+
+/**
+ * A task with its own worktree, created the way the new-task dialog does (the project's
+ * branch prefix and worktree location), so the agent's worktree is one the user sees.
+ */
+async function createTaskForAgent(
+  caller: AgentCaller,
+  action: Extract<AgentControlAction, { kind: 'create_task' }>,
+  who: string
+): Promise<AgentControlResult> {
+  const taskManager = getTaskManagerStore(caller.projectId);
+  if (!taskManager) throw new Error('This project is not open in Emdash.');
+  const callerWorkspace = getTaskWorkspace(caller.projectId, caller.taskId);
+  const callerBranch = callerWorkspace
+    ? await readCheckoutHead(callerWorkspace.workspaceId)
+        .then((head) => (head.kind === 'detached' ? null : shortName(head.ref)))
+        .catch(() => null)
+    : null;
+  const baseBranch =
+    action.baseBranch?.trim() ||
+    callerBranch ||
+    getGitRepositoryStore(caller.projectId)?.defaultBranchRef?.branch;
+  if (!baseBranch) throw new Error('Name the branch to start from (base_branch).');
+
+  const project = (await fetchAppSettingsMeta('project').catch(() => undefined))?.value;
+  const name = action.name.trim();
+  const slug =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'task';
+  const branchName = resolveTaskBranchName({
+    rawBranch: slug,
+    branchPrefix: project?.branchPrefix ?? '',
+    suffix: Math.random().toString(36).slice(2, 7),
+    appendRandomSuffix: project?.appendRandomBranchSuffix ?? true,
+  });
+
+  const detail = [
+    `Branch ${branchName} from ${baseBranch}, in a new worktree.`,
+    action.prompt
+      ? `Then starts ${agentDisplayName(action.providerId ?? caller.providerId)} there with:\n${action.prompt}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+  await confirm(`${who} wants to create the task “${name}”`, detail, 'Create');
+
+  const id = crypto.randomUUID();
+  const providerId = action.providerId ?? caller.providerId;
+  const type = action.ui === 'chat' && CHAT_CAPABLE_AGENTS.has(providerId) ? 'acp' : 'pty';
+  await taskManager.createTask({
+    id,
+    projectId: caller.projectId,
+    taskConfig: {
+      version: '1',
+      name,
+      ...(action.prompt && {
+        initialConversation: {
+          id: crypto.randomUUID(),
+          provider: providerId as AgentProviderId,
+          title: nextDefaultConversationTitle(providerId, []),
+          type,
+          ...(type === 'acp'
+            ? { initialQueue: [{ text: action.prompt }] }
+            : { initialPrompt: action.prompt }),
+        },
+      }),
+    },
+    workspaceConfig: {
+      version: '2',
+      git: {
+        kind: 'create-branch',
+        branchName,
+        fromBranch: { type: 'local', branch: baseBranch },
+      },
+      workspace: { kind: 'new-worktree' },
+    },
+  });
+  // The workspace reaches this window's registry shortly after provisioning.
+  let path = getTaskWorkspace(caller.projectId, id)?.path;
+  for (let waited = 0; !path && waited < 10_000; waited += 250) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    path = getTaskWorkspace(caller.projectId, id)?.path;
+  }
+  toast.success(`${agentDisplayName(caller.providerId)} created the task “${name}”`, {
+    action: {
+      label: 'Open',
+      onClick: () =>
+        getNavigation().navigate(taskViewDef({ projectId: caller.projectId, taskId: id })),
+    },
+  });
+  return {
+    text: [
+      `Created the task "${name}" (${id}) on branch ${branchName}, from ${baseBranch}.`,
+      path ? `Worktree: ${path}` : 'Its worktree is still being prepared.',
+      action.prompt ? `${providerId} is starting there with your message.` : null,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  };
+}
 
 async function confirm(title: string, detail: string, confirmLabel: string): Promise<void> {
   const outcome = await openModal('confirmActionModal', {
