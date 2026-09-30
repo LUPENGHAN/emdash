@@ -1,5 +1,5 @@
 ---
-name: split-pr
+name: emdash-split-pr
 description: Split a finished feature branch into a series of small, reviewable pull requests (about 500-800 changed lines each), each built in its own git worktree created through Emdash. Use when the user asks to split, break up, or slice a branch, feature, or large diff into smaller or stacked PRs, or to extract part of a change into its own PR.
 ---
 

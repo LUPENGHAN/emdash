@@ -58,6 +58,12 @@ ditto "$bundle" "/Applications/Emdash Fork.app"
 # checkout, so pulling updates them. A skill of the user's own by that name is kept.
 library="$HOME/.agentskills"
 mkdir -p "$library"
+# Links to fork skills since renamed or removed.
+for link in "$library"/*; do
+  if [ -L "$link" ] && [ ! -e "$link" ]; then
+    case "$(readlink "$link")" in "$app_dir/scripts/fork/skills/"*) rm "$link" ;; esac
+  fi
+done
 for skill in "$app_dir"/scripts/fork/skills/*/; do
   name="$(basename "$skill")"
   target="$library/$name"
