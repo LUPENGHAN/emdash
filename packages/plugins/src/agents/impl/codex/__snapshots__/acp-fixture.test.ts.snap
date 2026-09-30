@@ -246,6 +246,42 @@ exports[`Codex ACP fixture parsing > transcript 1`] = `
           "command": "sed -n '/^## Repository Structure$/,/^## Build & Development Commands$/p' AGENTS.md",
           "id": "019f259a-9386-7e20-9af4-b4fdcd67bdac:turn:1:tool:call_dMOHUTSuSmcFB4JThBpPj5nZ",
           "kind": "execute-tool-call",
+          "outputText": "## Repository Structure
+
+This is a pnpm workspace monorepo. The Electron app lives in
+\`apps/emdash-desktop/\` as \`@emdash/emdash-desktop\`; shared packages live under
+\`packages/\`. Unless a path is prefixed with \`packages/\` or another app, app paths
+such as \`src/...\`, \`drizzle/\`, \`scripts/\`, and \`build/\` are relative to
+\`apps/emdash-desktop/\`.
+
+Repo root:
+
+- \`.claude/\` - Local Claude agent settings for this checkout.
+- \`.github/\` - GitHub issue templates, reusable actions, CI, and release workflows.
+- \`agents/\` - Agent-facing architecture, workflow, convention, integration, and risk docs.
+- \`apps/emdash-desktop/\` - The Electron desktop app.
+- \`packages/chat-ui/\` - Shared transcript and ACP chat renderer with Storybook coverage.
+- \`packages/core/\` - Transport-agnostic runtime primitives, including ACP session logic.
+- \`packages/plugins/\` - Agent provider plugin definitions, hooks, and ACP adapters.
+- \`packages/shared/\` - Shared primitives such as result types, logging, and markdown helpers.
+- \`packages/ui/\` - Shared React UI components, theme tokens, recipes, and primitives.
+- \`pnpm-workspace.yaml\` - Workspace package globs for \`apps/*\` and \`packages/**\`.
+- Root config files - \`package.json\`, \`nx.json\`, \`.nvmrc\`, \`.oxfmtrc.json\`,
+  \`.oxlintrc.json\`, and lockfile/configuration owned at the workspace root.
+
+Inside \`apps/emdash-desktop/\`:
+
+- \`build/\` - Electron packaging assets; avoid edits unless working on packaging/signing.
+- \`drizzle/\` - Generated Drizzle SQL migrations and metadata.
+- \`scripts/\` - Release, verification, and build support scripts.
+- \`src/main/\` - Electron main process, RPC controllers, services, DB, ACP, PTY, and SSH.
+- \`src/preload/\` - Typed Electron preload bridge exposed to the renderer.
+- \`src/renderer/\` - React app organized around \`app/\`, \`features/\`, \`lib/\`, and tests.
+- \`src/shared/\` - App IPC primitives, provider metadata, events, ACP, MCP, skills, and types.
+- \`src/types/\` - Ambient and cross-cutting TypeScript declarations.
+- \`tooling/\` - App-level development and test infrastructure not bundled into production.
+
+## Build & Development Commands",
           "seq": 2,
           "status": "done",
           "title": "sed -n '/^## Repository Structure$/,/^## Build & Development Commands$/p' AGENTS.md",
@@ -524,6 +560,7 @@ I need to respond with just a plan since the user is asking for a checklist or t
           "command": "git rev-parse --abbrev-ref HEAD",
           "id": "019f259a-9386-7e20-9af4-b4fdcd67bdac:turn:5:tool:call_dTkKdvmjAKbcGOqxLos2Hl3A",
           "kind": "execute-tool-call",
+          "outputText": "HEAD",
           "seq": 2,
           "status": "done",
           "title": "git rev-parse --abbrev-ref HEAD",
