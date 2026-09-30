@@ -187,7 +187,11 @@ export function buildSourceLaunch(
         apiKey: agent === 'pi' ? `$${PROVIDER_KEY_ENV}` : PROVIDER_KEY_ENV,
         models: provider.models.map((id) => {
           const contextWindow = provider.contextWindows?.[id];
-          return { id, ...(contextWindow && { contextWindow }) };
+          return {
+            id,
+            reasoning: !provider.nonReasoningModels?.includes(id),
+            ...(contextWindow && { contextWindow }),
+          };
         }),
       };
       return {

@@ -288,7 +288,10 @@ describe('buildSourceLaunch', () => {
       baseUrl: 'http://127.0.0.1:3000/v1',
       api: 'openai-completions',
       apiKey: `$${PROVIDER_KEY_ENV}`,
-      models: [{ id: 'moonshotai/kimi-k3' }, { id: 'z-ai/glm-5.3-flash' }],
+      models: [
+        { id: 'moonshotai/kimi-k3', reasoning: true },
+        { id: 'z-ai/glm-5.3-flash', reasoning: true },
+      ],
     });
     expect(launch.env[AGENT_PROVIDER_ENV]).not.toContain('sk-1');
     const ompLaunch = buildSourceLaunch('oh-my-pi', provider, 'sk-1')!;
@@ -296,13 +299,17 @@ describe('buildSourceLaunch', () => {
     expect(piProvider(ompLaunch).apiKey).toBe(PROVIDER_KEY_ENV);
   });
 
-  it('passes configured context windows to Pi and Oh My Pi models', () => {
-    const sized = { ...provider, contextWindows: { 'moonshotai/kimi-k3': 1_000_000 } };
+  it('passes context windows and reasoning (on unless turned off) to Pi and Oh My Pi models', () => {
+    const sized = {
+      ...provider,
+      contextWindows: { 'moonshotai/kimi-k3': 1_000_000 },
+      nonReasoningModels: ['z-ai/glm-5.3-flash'],
+    };
 
     for (const agent of ['pi', 'oh-my-pi'] as const) {
       expect(piProvider(buildSourceLaunch(agent, sized, 'sk-1')).models).toEqual([
-        { id: 'moonshotai/kimi-k3', contextWindow: 1_000_000 },
-        { id: 'z-ai/glm-5.3-flash' },
+        { id: 'moonshotai/kimi-k3', reasoning: true, contextWindow: 1_000_000 },
+        { id: 'z-ai/glm-5.3-flash', reasoning: false },
       ]);
     }
   });

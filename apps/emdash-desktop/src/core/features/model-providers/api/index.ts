@@ -39,6 +39,11 @@ export const modelProviderSchema = z.object({
    * Context window in tokens, per model, where an agent would otherwise guess it.
    */
   contextWindows: z.record(z.string(), z.number().int().positive()).optional(),
+  /**
+   * Models that do not reason; the others are offered with thinking levels (Pi, Oh My
+   * Pi), which send reasoning settings some non-reasoning models reject.
+   */
+  nonReasoningModels: z.array(z.string()).optional(),
   /** Which of the models Claude Code uses for what (Anthropic Messages providers). */
   claude: z
     .object({

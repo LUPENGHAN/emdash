@@ -181,6 +181,7 @@ function ProviderForm({
       ])
     )
   );
+  const [nonReasoning, setNonReasoning] = useState<string[]>(initial?.nonReasoningModels ?? []);
   const [claudeRoles, setClaudeRoles] = useState<ClaudeModelRoles>(initial?.claude ?? {});
   const [filter, setFilter] = useState('');
   const [manualModel, setManualModel] = useState('');
@@ -207,6 +208,8 @@ function ProviderForm({
     })
   );
   if (Object.keys(contextWindows).length > 0) draft.contextWindows = contextWindows;
+  const nonReasoningModels = nonReasoning.filter((model) => selected.includes(model));
+  if (nonReasoningModels.length > 0) draft.nonReasoningModels = nonReasoningModels;
   const speaksAnthropic = protocol === 'anthropic' || protocol === 'gateway';
   const claude = speaksAnthropic ? cleanClaudeRoles(claudeRoles, selected) : undefined;
   if (claude) draft.claude = claude;
@@ -380,6 +383,24 @@ function ProviderForm({
                     <span className="truncate font-mono text-xs">{model}</span>
                   </label>
                   {selected.includes(model) ? (
+                    <label
+                      className="flex shrink-0 items-center gap-1 text-xs text-foreground-muted"
+                      title="Offer thinking levels for this model (Pi, Oh My Pi). Turn off for models that reject reasoning settings."
+                    >
+                      <Checkbox
+                        checked={!nonReasoning.includes(model)}
+                        onCheckedChange={(checked) =>
+                          setNonReasoning((current) =>
+                            checked === true
+                              ? current.filter((m) => m !== model)
+                              : [...new Set([...current, model])]
+                          )
+                        }
+                      />
+                      Reasoning
+                    </label>
+                  ) : null}
+                  {selected.includes(model) ? (
                     <div className="w-24 shrink-0">
                       <Input
                         value={contexts[model] ?? ''}
@@ -405,7 +426,8 @@ function ProviderForm({
         {selected.length > 0 ? (
           <Field.Description>
             Context: the model's context window, e.g. 1m or 256k. Codex, OpenCode, Pi, Oh My Pi and
-            Claude Code use it. Leave it blank to keep the default.
+            Claude Code use it. Leave it blank to keep the default. Reasoning: Pi and Oh My Pi offer
+            thinking levels (effort) for the model; turn it off for models that reject them.
           </Field.Description>
         ) : null}
         <div className="flex gap-2">
