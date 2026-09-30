@@ -92,7 +92,7 @@ export type RemoteAccessServerDeps = {
 
 /**
  * HTTP + WebSocket server for browser access. A browser signs in once through the
- * `/connect?token=…` link, which trades the token for an HttpOnly, SameSite=Strict
+ * `/connect?token=…` link, which trades the token for an HttpOnly, SameSite=Lax
  * cookie; every file and the `/wire` socket then require that cookie, and the socket
  * also requires a same-origin `Origin` so other sites cannot ride the cookie. Another
  * Emdash connects the same way (sending the cookie itself) and may open `/tunnel`
@@ -218,7 +218,10 @@ async function handleRequest(
       return sendText(response, 401, 'This link is no longer valid. Copy a new one from Emdash.');
     }
     response.writeHead(302, {
-      'Set-Cookie': `${COOKIE}=${context.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${COOKIE_MAX_AGE_S}`,
+      // Lax, not Strict: a phone opening Emdash from a home-screen shortcut or a link in
+      // another app is a cross-site navigation, which Strict would send without the
+      // cookie (looking signed out). Sockets still require a same-origin Origin.
+      'Set-Cookie': `${COOKIE}=${context.token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${COOKIE_MAX_AGE_S}`,
       Location: '/',
     });
     response.end();
