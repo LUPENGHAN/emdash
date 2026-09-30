@@ -2,6 +2,7 @@ import {
   awaitWirePort,
   connect,
   domPortTransport,
+  reconnectingTransport,
   webSocketTransport,
   type DomPortLike,
 } from '@emdash/wire/rpc';
@@ -9,8 +10,13 @@ import { DESKTOP_WIRE_CHANNEL } from '@core/manifests/shared/wire-channels';
 import { resetWireConnection, seedWireConnection } from '@core/primitives/wire/browser/connection';
 import { isBrowserHost } from './browser-host';
 
-/** After the socket drops, reload: the page reconnects and restores its state. */
-const BROWSER_RECONNECT_DELAY_MS = 2_000;
+/** Reconnect attempts after a drop before the page reloads (e.g. the sign-in was revoked). */
+const BROWSER_RECONNECT_ATTEMPTS = 20;
+/**
+ * After this long hidden, a page coming back reconnects at once: phones suspend
+ * background tabs and their sockets can look open while already dead.
+ */
+const RESUME_RECONNECT_AFTER_MS = 15_000;
 
 /**
  * The production seed: called once by the renderer bootstrap before React mounts.
@@ -20,11 +26,56 @@ const BROWSER_RECONNECT_DELAY_MS = 2_000;
  */
 export function seedDesktopWire(): void {
   seedWireConnection(async () => {
-    if (isBrowserHost) return connect(webSocketTransport(await openBrowserSocket()));
+    if (isBrowserHost) return connectBrowser();
     const portPromise = awaitWirePort(window, { channel: DESKTOP_WIRE_CHANNEL });
     await window.electronAPI.requestWirePort(DESKTOP_WIRE_CHANNEL);
     return connect(domPortTransport((await portPromise) as DomPortLike));
   });
+}
+
+/**
+ * Browser access keeps its page across dropped connections: the socket reconnects with
+ * backoff and the connection re-attaches every live model and replays held calls, so
+ * what is on screen (open conversations, drafts, scroll) survives a phone locking or
+ * switching apps. Only when reconnecting keeps failing does the page reload.
+ */
+async function connectBrowser() {
+  let current: WebSocket | null = null;
+  const transport = reconnectingTransport(
+    async () => {
+      current = await openBrowserSocket();
+      return webSocketTransport(current);
+    },
+    {
+      backoffMs: [250, 500, 1000, 2000, 5000],
+      shouldRetry: (_error, { attempt, isReconnect }) =>
+        isReconnect ? attempt < BROWSER_RECONNECT_ATTEMPTS : attempt < 3,
+    }
+  );
+  transport.onTerminalFailure(() => window.location.reload());
+  await transport.ready();
+
+  let hiddenAt: number | null = null;
+  const reconnectIfStale = () => {
+    const wasHiddenLong = hiddenAt !== null && Date.now() - hiddenAt > RESUME_RECONNECT_AFTER_MS;
+    hiddenAt = null;
+    // Closing the (possibly half-dead) socket makes the transport open a fresh one.
+    if (wasHiddenLong && current?.readyState === WebSocket.OPEN) current.close();
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') hiddenAt = Date.now();
+    else reconnectIfStale();
+  });
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) {
+      hiddenAt ??= 0;
+      reconnectIfStale();
+    }
+  });
+  window.addEventListener('online', () => {
+    if (current?.readyState === WebSocket.OPEN) current.close();
+  });
+  return connect(transport);
 }
 
 async function openBrowserSocket(): Promise<WebSocket> {
@@ -35,9 +86,6 @@ async function openBrowserSocket(): Promise<WebSocket> {
     socket.addEventListener('error', () => reject(new Error('Could not reach Emdash')), {
       once: true,
     });
-  });
-  socket.addEventListener('close', () => {
-    setTimeout(() => window.location.reload(), BROWSER_RECONNECT_DELAY_MS);
   });
   return socket;
 }

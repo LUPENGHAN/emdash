@@ -24,6 +24,7 @@ import { WorkspaceViewProvider } from './lib/layout/provider';
 import { ModalRenderer } from './lib/modal/modal-renderer';
 import { FeatureFlagProvider } from './lib/providers/feature-flag-override-context';
 import { ThemeProvider } from './lib/providers/theme-provider';
+import { isBrowserHost } from './lib/runtime/browser-host';
 
 export const HAS_SEEN_ONBOARDING = 'emdash:has-seen-onboarding:v1';
 
@@ -34,9 +35,11 @@ function AppContent() {
   useIntegrationAccountEvents();
   useGitHubAuthEvents();
   const [view, setView] = useState<AppView>(() =>
-    // A window opened for another computer runs on that computer's setup.
+    // A window opened for another computer, or a browser using this one remotely, runs
+    // on that computer's setup: onboarding belongs to the computer, not the viewer.
     localStorage.getItem(HAS_SEEN_ONBOARDING) === 'true' ||
-    new URLSearchParams(window.location.search).has('computer-window')
+    new URLSearchParams(window.location.search).has('computer-window') ||
+    isBrowserHost
       ? 'workspace'
       : 'onboarding'
   );

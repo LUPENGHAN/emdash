@@ -142,6 +142,15 @@ describe('createRemoteAccessServer', () => {
     expect((await raw('/', 'br')).headers['cache-control']).toBe('no-store');
   });
 
+  it('serves the web app manifest and icons without sign-in, and nothing else', async () => {
+    await writeFile(path.join(root, 'manifest.webmanifest'), '{"name":"Emdash"}');
+    const manifest = await get(port, '/manifest.webmanifest');
+    expect(manifest.status).toBe(200);
+    expect(manifest.headers['content-type']).toBe('application/manifest+json');
+    expect((await get(port, '/app.js')).status).toBe(401);
+    expect((await get(port, '/manifest.webmanifest/../app.js')).status).toBe(401);
+  });
+
   it('opens a wire session only for a signed-in, same-origin socket', async () => {
     const origin = `http://127.0.0.1:${port}`;
     const cookie = `emdash_remote=${TOKEN}`;

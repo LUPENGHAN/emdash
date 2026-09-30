@@ -35,7 +35,19 @@ const CONTENT_TYPES: Record<string, string> = {
   '.ttf': 'font/ttf',
   '.wasm': 'application/wasm',
   '.map': 'application/json',
+  '.webmanifest': 'application/manifest+json',
 };
+
+/**
+ * Served without sign-in: browsers fetch a web app's manifest and icons without the
+ * page's cookie (and these hold nothing private), so "Add to Home screen" works.
+ */
+const PUBLIC_PATHS = new Set([
+  '/manifest.webmanifest',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/apple-touch-icon.png',
+]);
 
 const brotliAsync = promisify(brotliCompress);
 const gzipAsync = promisify(gzip);
@@ -214,7 +226,7 @@ async function handleRequest(
     return;
   }
 
-  if (!context.authorized(request)) {
+  if (!PUBLIC_PATHS.has(url.pathname) && !context.authorized(request)) {
     return sendText(
       response,
       401,
