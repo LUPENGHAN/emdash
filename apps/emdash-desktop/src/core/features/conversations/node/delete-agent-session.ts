@@ -33,11 +33,20 @@ export async function deleteAgentSession(
   sessionId: string,
   deps: DeleteAgentSessionDeps
 ): Promise<number> {
+  const env = deps.env ?? { home: homedir(), env: process.env };
+  // Pi-family terminal sessions used to be recorded by their file's path: take the id
+  // from that file, when it is one of the agent's own session files.
+  if ((providerId === 'pi' || providerId === 'oh-my-pi') && path.isAbsolute(sessionId)) {
+    const root = piSessionsDir(providerId, env);
+    const inside = path.relative(root, sessionId);
+    if (inside && !inside.startsWith('..') && !path.isAbsolute(inside)) {
+      sessionId = (await piSessionId(sessionId)) ?? sessionId;
+    }
+  }
   // Ids name files below: never let one climb out of the agent's folders.
   if (!/^[\w.-]+$/.test(sessionId) || sessionId.startsWith('.')) {
     throw new Error(`Invalid session id: ${sessionId}`);
   }
-  const env = deps.env ?? { home: homedir(), env: process.env };
   const targets = await sessionPaths(providerId, sessionId, env, deps);
   for (const target of targets) await deps.trash(target);
   return targets.length;

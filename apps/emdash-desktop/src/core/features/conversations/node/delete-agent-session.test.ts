@@ -63,6 +63,21 @@ describe('deleteAgentSession', () => {
     expect(await deleteAgentSession('cursor', 'chat-1', deps())).toBe(2);
   });
 
+  it('deletes an Oh My Pi session recorded by its file path, by the id in its header', async () => {
+    const relative = '.omp/agent/sessions/-repo/2026-09-30T00-36-37-092Z_01a0efbd.jsonl';
+    await file(
+      relative,
+      `${JSON.stringify({ type: 'title', title: '' })}\n${JSON.stringify({ type: 'session', id: '01a0efbe' })}\n`
+    );
+    expect(await deleteAgentSession('oh-my-pi', path.join(home, relative), deps())).toBe(1);
+    expect(trashed).toEqual([relative]);
+    // A path outside the agent's sessions is still refused.
+    await file('elsewhere/x.jsonl', `${JSON.stringify({ type: 'session', id: 'x' })}\n`);
+    await expect(
+      deleteAgentSession('oh-my-pi', path.join(home, 'elsewhere/x.jsonl'), deps())
+    ).rejects.toThrow('Invalid');
+  });
+
   it('asks OpenCode to delete its own record', async () => {
     const runOpenCode = vi.fn(async () => {});
     await deleteAgentSession('opencode', 'ses_1', { ...deps(), runOpenCode });
