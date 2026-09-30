@@ -151,6 +151,26 @@ describe('createRemoteAccessServer', () => {
     expect((await get(port, '/manifest.webmanifest/../app.js')).status).toBe(401);
   });
 
+  it('accepts the page behind an HTTPS proxy on this computer, not other sites', async () => {
+    const cookie = `emdash_remote=${TOKEN}`;
+    const https = await openSocket(port, { cookie, origin: `https://127.0.0.1:${port}` });
+    https.close();
+    // Tailscale Serve and the like forward the browser's host name.
+    const proxied = await openSocket(port, {
+      cookie,
+      origin: 'https://studio-mac.tail1234.ts.net',
+      'x-forwarded-host': 'studio-mac.tail1234.ts.net',
+    });
+    proxied.close();
+    await expect(
+      openSocket(port, {
+        cookie,
+        origin: 'https://evil.example',
+        'x-forwarded-host': 'studio-mac.tail1234.ts.net',
+      })
+    ).rejects.toThrow();
+  });
+
   it('opens a wire session only for a signed-in, same-origin socket', async () => {
     const origin = `http://127.0.0.1:${port}`;
     const cookie = `emdash_remote=${TOKEN}`;

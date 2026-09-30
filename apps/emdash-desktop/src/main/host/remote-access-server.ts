@@ -146,8 +146,7 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
       });
       http.on('upgrade', (request, socket, head) => {
         const url = new URL(request.url ?? '/', 'http://local');
-        const sameOrigin = request.headers.origin === `http://${request.headers.host}`;
-        if (!authorized(request) || !sameOrigin) {
+        if (!authorized(request) || !isSameOrigin(request)) {
           socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
           return;
         }
@@ -284,6 +283,31 @@ async function handleRequest(
   headers['Content-Length'] = String(body.length);
   response.writeHead(200, headers);
   response.end(request.method === 'HEAD' ? undefined : body);
+}
+
+/**
+ * Whether a socket comes from the page this server serves: its Origin names this host,
+ * over http or https (behind an HTTPS proxy such as Tailscale Serve). A proxy on this
+ * computer forwards the name the browser used in X-Forwarded-Host.
+ */
+export function isSameOrigin(request: IncomingMessage): boolean {
+  const origin = request.headers.origin;
+  if (!origin) return false;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return false;
+  }
+  const hosts = [request.headers.host];
+  const remote = request.socket.remoteAddress ?? '';
+  if (remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1') {
+    const forwarded = request.headers['x-forwarded-host'];
+    hosts.push(...(Array.isArray(forwarded) ? forwarded : [forwarded]));
+  }
+  return hosts.some(
+    (host) => typeof host === 'string' && host.split(',')[0]!.trim() === originHost
+  );
 }
 
 function parseTarget(params: URLSearchParams): { host: string; port: number } | null {
