@@ -53,6 +53,23 @@ if fork_running; then
 fi
 rm -rf "/Applications/Emdash Fork.app"
 ditto "$bundle" "/Applications/Emdash Fork.app"
+
+# The fork's own skills join Emdash's skill library (~/.agentskills) as links into this
+# checkout, so pulling updates them. A skill of the user's own by that name is kept.
+library="$HOME/.agentskills"
+mkdir -p "$library"
+for skill in "$app_dir"/scripts/fork/skills/*/; do
+  name="$(basename "$skill")"
+  target="$library/$name"
+  if [ -L "$target" ] || [ ! -e "$target" ]; then
+    ln -sfn "${skill%/}" "$target"
+  elif cmp -s "$target/SKILL.md" "$skill/SKILL.md"; then
+    # A copy of this very skill (installed by hand before): replace it with the link.
+    rm -rf "$target" && ln -sfn "${skill%/}" "$target"
+  else
+    echo "Kept your own skill $target (the fork's $name was not installed)"
+  fi
+done
 # Leave a single registered copy so Launch Services opens the installed one.
 rm -rf "$app_dir/release/mac-arm64"
 # Launch with a clean environment, as the Dock would: `open` otherwise hands the
