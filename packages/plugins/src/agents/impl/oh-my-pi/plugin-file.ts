@@ -51,15 +51,15 @@ export default function (pi: ExtensionAPI) {
   pi.on('session_start', async (_event, ctx) => {
     await selectEmdashModel(pi, ctx);
     stopNotified = false;
-    const sessionFile = ctx.sessionManager?.getSessionFile?.();
-    if (!sessionFile) return;
-    await notifyEmdash('session', { providerSessionId: sessionFile });
+    // The session id (its file's header), which both --session and \`omp acp\` take.
+    const sessionId = ctx.sessionManager?.getSessionId?.();
+    if (!sessionId || !ctx.sessionManager?.getSessionFile?.()) return;
+    await notifyEmdash('session', { providerSessionId: sessionId });
   });
 
-  pi.on('session_stop', async (event) => {
-    if (typeof event.session_file === 'string' && event.session_file.trim()) {
-      await notifyEmdash('session', { providerSessionId: event.session_file });
-    }
+  pi.on('session_stop', async (_event, ctx) => {
+    const sessionId = ctx?.sessionManager?.getSessionId?.();
+    if (sessionId) await notifyEmdash('session', { providerSessionId: sessionId });
     await notifyStopOnce('Task completed');
   });
 

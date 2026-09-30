@@ -106,7 +106,8 @@ async function sessionPaths(
   }
 }
 
-async function piSessionId(file: string): Promise<string | null> {
+/** A Pi / Oh My Pi session file's id, from its `session` header record. */
+export async function piSessionId(file: string): Promise<string | null> {
   const handle = await open(file, 'r').catch(() => null);
   if (!handle) return null;
   try {
@@ -138,4 +139,21 @@ async function exists(target: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Pi and Oh My Pi terminal sessions used to be recorded by their session file's path;
+ * their chat adapters only take the session id (the file's header id, which can
+ * differ from the one in its name). A local path is read for its id; anything else
+ * is returned as stored.
+ */
+export async function piFamilySessionId(
+  providerId: string | null,
+  sessionId: string | null
+): Promise<string | null> {
+  if (providerId !== 'pi' && providerId !== 'oh-my-pi') return sessionId;
+  if (!sessionId || !path.isAbsolute(sessionId) || !sessionId.endsWith('.jsonl')) {
+    return sessionId;
+  }
+  return (await piSessionId(sessionId)) ?? sessionId;
 }

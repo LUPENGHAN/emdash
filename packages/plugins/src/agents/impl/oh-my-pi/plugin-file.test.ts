@@ -60,8 +60,24 @@ describe('oh-my-pi plugin hooks', () => {
     expect(written).toEqual(['extensions/emdash-hook.ts']);
     const content = await fs.read('extensions/emdash-hook.ts');
     expect(content).toContain("pi.on('session_stop'");
-    expect(content).toContain('event.session_file');
+    // The session id, which `omp acp` loads (not the file path).
+    expect(content).toContain('getSessionId?.()');
+    expect(content).not.toContain('providerSessionId: event.session_file');
     expect(content).toContain("notifyEmdash('stop'");
     expect(content).toContain("pi.on('session_shutdown', async ()");
+  });
+});
+
+describe('oh-my-pi chat sessions', () => {
+  it('recognizes the missing-session error of omp acp', () => {
+    const check = provider.behavior.acp?.isSessionNotFound;
+    const error = {
+      code: -32603,
+      message: 'Internal error',
+      data: { details: 'ACP session not found: 01a0efbd' },
+    };
+    expect(check?.(error, '01a0efbd')).toBe(true);
+    expect(check?.(error, 'other')).toBe(false);
+    expect(check?.({ code: -32603, message: 'Internal error' }, '01a0efbd')).toBe(false);
   });
 });

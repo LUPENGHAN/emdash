@@ -16,7 +16,10 @@ import { and, eq } from 'drizzle-orm';
 import { conversationRegistryTable as conversations } from '@core/features/conversations/api/node/registry';
 import { createConversationOperations } from '@core/features/conversations/node/controller';
 import type { CompensationRunner } from '@core/features/conversations/node/createConversation';
-import { deleteAgentSession } from '@core/features/conversations/node/delete-agent-session';
+import {
+  deleteAgentSession,
+  piFamilySessionId,
+} from '@core/features/conversations/node/delete-agent-session';
 import { sourceOverrideOf, type ModelSourceOverride } from '@core/features/model-providers/api';
 import type { ProjectAttachmentError } from '@core/features/projects/api';
 import {
@@ -529,7 +532,11 @@ async function resolveConversationRuntimeTarget(
           conversationId,
           providerId: row.providerId,
           cwd: workspacePath,
-          sessionId: row.sessionId,
+          // A Pi-family terminal session recorded by path loads in chat by its id.
+          sessionId:
+            !identity?.host || isLocalHostRef(identity.host)
+              ? await piFamilySessionId(row.providerId, row.sessionId)
+              : row.sessionId,
           options: acpConfig?.options,
           ...(initialQueue && { initialQueue }),
           ...(Object.keys(processEnv).length > 0 ? { env: processEnv } : {}),

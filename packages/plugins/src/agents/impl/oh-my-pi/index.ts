@@ -108,9 +108,20 @@ export const plugin = definePlugin(
 );
 
 export const provider = registerPluginBehavior(plugin, {
-  acp: createNativeAcpBehavior(() => ({
-    args: ['acp'],
-  })),
+  acp: {
+    ...createNativeAcpBehavior(() => ({
+      args: ['acp'],
+    })),
+    // `omp acp` reports a missing session as an internal error naming it (a terminal
+    // session nothing was sent in yet has no file), not ACP's resource-not-found.
+    isSessionNotFound: (error, sessionId) => {
+      const record = error as { code?: unknown; message?: unknown; data?: { details?: unknown } };
+      const text = [record.message, record.data?.details].filter(
+        (part): part is string => typeof part === 'string'
+      );
+      return text.includes(`ACP session not found: ${sessionId}`);
+    },
+  },
   prompt: {
     buildCommand: (ctx: CommandContext) =>
       buildStandardCommand(ctx, {

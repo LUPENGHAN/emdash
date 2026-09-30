@@ -43,9 +43,10 @@ export default function (pi: ExtensionAPI) {
 
   pi.on('session_start', async (_event, ctx) => {
     await selectEmdashModel(pi, ctx);
-    const sessionFile = ctx.sessionManager.getSessionFile();
-    if (!sessionFile) return;
-    await notifyEmdash('session', { providerSessionId: sessionFile });
+    // The session id (its file's header), which both --session and the chat adapter take.
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!sessionId || !ctx.sessionManager.getSessionFile()) return;
+    await notifyEmdash('session', { providerSessionId: sessionId });
   });
 
   pi.on('agent_end', async () => {

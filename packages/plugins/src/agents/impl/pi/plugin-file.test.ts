@@ -42,7 +42,7 @@ describe('pi plugin hooks', () => {
     ).toBe('/configs/pi-agent');
   });
 
-  it('installs a session hook that can report the active Pi session file', async () => {
+  it('installs a session hook that reports the active Pi session id', async () => {
     const fs = createMemoryFs();
 
     const written = await provider.behavior.plugins?.installPlugin(fs, { kind: 'global' });
@@ -51,7 +51,8 @@ describe('pi plugin hooks', () => {
     const content = await fs.read('extensions/emdash-hook.ts');
     expect(content).toContain("eventType: 'stop' | 'error' | 'notification' | 'session'");
     expect(content).toContain("pi.on('session_start'");
-    expect(content).toContain('ctx.sessionManager.getSessionFile()');
+    expect(content).toContain('ctx.sessionManager.getSessionId()');
+    expect(content).toContain('providerSessionId: sessionId');
     expect(content).toContain("notifyEmdash('session'");
   });
 });
