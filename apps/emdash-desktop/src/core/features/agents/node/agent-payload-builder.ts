@@ -16,6 +16,7 @@ import type {
   SelectedSource,
 } from '@core/primitives/agents/api';
 import type { ProviderOverrideSettings } from '@core/services/settings/node/provider-settings-service';
+import { codexModelOptions } from './codex-models';
 
 function buildMetadata(provider: CLIAgentPluginProvider): AgentMetadata {
   const { metadata, capabilities, assets } = provider;
@@ -40,7 +41,7 @@ function buildMetadata(provider: CLIAgentPluginProvider): AgentMetadata {
           : { kind: 'none' as const },
         uninstall: { kind: 'none' as const },
       },
-      models: capabilities.models,
+      models: modelsFor(metadata.id, capabilities.models),
       effort: capabilities.effort,
       prompt: capabilities.prompt,
       sessions: capabilities.sessions,
@@ -52,6 +53,15 @@ function buildMetadata(provider: CLIAgentPluginProvider): AgentMetadata {
     },
     installDocs: capabilities.hostDependency.installDocs ?? null,
   };
+}
+
+/** Codex's models follow the list it keeps from OpenAI, so new ones appear without a release. */
+function modelsFor(
+  id: string,
+  models: CLIAgentPluginProvider['capabilities']['models']
+): AgentMetadata['capabilities']['models'] {
+  if (id !== 'codex' || models.kind !== 'selectable') return models;
+  return { kind: 'selectable', modelOptions: codexModelOptions(models.modelOptions) };
 }
 
 function buildAuthDescriptor(provider: CLIAgentPluginProvider): AgentAuthDescriptor {

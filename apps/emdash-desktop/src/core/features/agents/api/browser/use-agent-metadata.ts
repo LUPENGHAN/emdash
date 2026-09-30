@@ -8,12 +8,13 @@ export const AGENT_STATIC_METADATA_QUERY_KEY = ['agents', 'static-metadata'] as 
  * Static plugin-registry metadata (icons, display names, capabilities schema).
  * Host-independent by construction — use this for display-only consumers so the
  * host-carrying hooks (`useAgents` et al.) can require a host without exceptions.
+ * Refreshed now and then: Codex's model list follows what OpenAI offers the account.
  */
 export function useAgentMetadata() {
   return useQuery<AgentMetadata[]>({
     queryKey: AGENT_STATIC_METADATA_QUERY_KEY,
     queryFn: async () => (await getAgentsClient()).listMetadata(undefined),
-    staleTime: Infinity,
+    staleTime: 5 * 60_000,
   });
 }
 
