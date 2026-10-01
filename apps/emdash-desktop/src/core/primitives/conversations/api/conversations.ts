@@ -169,6 +169,36 @@ export type SessionCost = {
   currency: 'USD';
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
   unpricedModels: string[];
+  /**
+   * Context compactions included in it. Their own requests are not recorded, so they
+   * are estimated from the context they read and the summary they wrote.
+   */
+  compactions: number;
+};
+
+/**
+ * A stretch of an agent session that ended in a context compaction. The agent kept only
+ * a summary of it, and a reopened chat starts after the last compaction, so these are
+ * read back from the agent's own session file.
+ */
+export type CompactedSegment = {
+  index: number;
+  startedAt: string | null;
+  endedAt: string | null;
+  /** The first thing the user asked in it. */
+  firstPrompt: string | null;
+  /** Spoken turns (user and agent) in it. */
+  turns: number;
+  trigger: 'auto' | 'manual' | null;
+  /** The context's size when it was compacted. */
+  contextTokens: number | null;
+};
+
+/** One compacted stretch, as said: turns (with the agent's tool calls in brief). */
+export type CompactedSegmentTranscript = {
+  turns: { role: 'user' | 'assistant'; text: string }[];
+  /** The summary the agent carried on with. */
+  summary: string | null;
 };
 
 export type SubagentSummary = {

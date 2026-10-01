@@ -31,6 +31,8 @@ import {
   type ProjectAttachmentError,
 } from '@core/features/projects/api/attachments';
 import type {
+  CompactedSegment,
+  CompactedSegmentTranscript,
   Conversation,
   ConversationEvent,
   CreateConversationParams,
@@ -270,6 +272,16 @@ export const conversationsContract = defineContract({
   sessionCost: procedure({
     input: z.object({ conversationId: z.string() }),
     output: z.custom<SessionCost | null>(),
+  }),
+  /** Stretches of the session that ended in a context compaction (a reopened chat starts after the last). */
+  listCompactedSegments: procedure({
+    input: z.object({ conversationId: z.string() }),
+    output: z.custom<CompactedSegment[]>(),
+  }),
+  /** What was said in one of those stretches; null when it is gone. */
+  readCompactedSegment: procedure({
+    input: z.object({ conversationId: z.string(), index: z.number().int().nonnegative() }),
+    output: z.custom<CompactedSegmentTranscript | null>(),
   }),
   /** What one of those subagents was asked and answered. */
   readSubagentTranscript: procedure({

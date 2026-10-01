@@ -123,6 +123,34 @@ describe('sessionCost', () => {
     });
   });
 
+  it("estimates Claude's context compactions, which it does not record", async () => {
+    const cwd = path.join(home, 'repo');
+    await mkdir(cwd);
+    const dir = `.claude/projects/${claudeProjectDirName(cwd)}`;
+    await file(
+      `${dir}/s2.jsonl`,
+      lines([
+        {
+          type: 'assistant',
+          message: { id: 'm1', model: 'claude-opus-5-5', usage: { output_tokens: 10 } },
+        },
+        { type: 'system', subtype: 'compact_boundary', compactMetadata: { preTokens: 100000 } },
+        // 400 Latin characters ≈ 100 tokens, plus 20 CJK characters ≈ 20.
+        {
+          type: 'user',
+          isCompactSummary: true,
+          message: { content: `${'a'.repeat(400)}${'摘'.repeat(20)}` },
+        },
+      ])
+    );
+
+    const cost = await sessionCost('claude', 's2', cwd, catalog, env());
+    expect(cost?.compactions).toBe(1);
+    expect(cost?.tokens).toEqual({ input: 0, output: 130, cacheRead: 100000, cacheWrite: 0 });
+    // 10*20 + (100000*0.2 + 120*20)
+    expect(cost?.amount).toBeCloseTo((200 + 20000 + 2400) / 1e6, 9);
+  });
+
   it("prices Codex's running totals per turn, long-context tier included, with spawned agents", async () => {
     const parent = '01a0e339-0000-7000-8000-000000000001';
     const tokenCount = (input: number, cached: number, output: number, context: number) => ({

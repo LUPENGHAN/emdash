@@ -236,6 +236,10 @@ export function createConversationsWireController(
         await options.priceCatalog()
       ).catch(() => null);
     },
+    listCompactedSegments: ({ conversationId }) =>
+      conversationOperations.listCompactedSegments(conversationId),
+    readCompactedSegment: ({ conversationId, index }) =>
+      conversationOperations.readCompactedSegment(conversationId, index),
     readSubagentTranscript: ({ conversationId, subagentId }) =>
       conversationOperations.readSubagentTranscript(conversationId, subagentId),
     readHandoffSummary: ({ conversationId, summaryPath }) =>

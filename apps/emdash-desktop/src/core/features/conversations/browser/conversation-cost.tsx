@@ -99,6 +99,11 @@ function CostDetails({ cost }: { cost: SessionCost }) {
           {`No list price for ${cost.unpricedModels.join(', ')}; their tokens are counted but not priced.`}
         </p>
       ) : null}
+      {cost.compactions > 0 ? (
+        <p className="text-foreground-passive">
+          {`Includes ${cost.compactions} context compactions, estimated from their size: the agent does not record their usage.`}
+        </p>
+      ) : null}
       <p className="text-foreground-passive">
         This session's tokens, including its subagents', at the vendors' API list prices
         (models.dev). A subscription is not billed this; a provider bills its own prices.

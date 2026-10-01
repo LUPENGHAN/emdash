@@ -17,6 +17,7 @@ import {
   GenericTabItem,
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
 import { TabTitle } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/tab-title';
+import { ConversationCompactedHistoryBadge } from './conversation-compacted-history';
 import { ConversationCostBadge } from './conversation-cost';
 import { ConversationSubagentsBadge } from './conversation-subagents';
 import type { ConversationTabResource } from './conversation-tab-resource';
@@ -47,6 +48,7 @@ export const ConversationTabBarItem = observer(function ConversationTabBarItem({
             {title}
             <ConversationSourceSuffix agentId={store.data.providerId} source={source} />
           </TabTitle>
+          <ConversationCompactedHistoryBadge conversation={store.data} />
           <ConversationSubagentsBadge conversation={store.data} />
           <ConversationCostBadge conversation={store.data} />
         </>

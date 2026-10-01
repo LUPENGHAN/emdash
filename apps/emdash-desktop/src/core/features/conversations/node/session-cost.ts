@@ -1,4 +1,4 @@
-import { open, readFile, writeFile } from 'node:fs/promises';
+import { open, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { SessionCost } from '@core/primitives/conversations/api';
@@ -6,6 +6,7 @@ import { piSessionId } from './delete-agent-session';
 import {
   asRecord,
   claudeProjectDirName,
+  claudeText,
   cwdVariants,
   listFilesRecursive,
   parseJsonLines,
@@ -44,6 +45,8 @@ type Usage = {
   cacheWrite1h: number;
   /** The request's context size, for long-context prices. */
   context?: number;
+  /** Estimated: a context compaction, whose request the agent does not record. */
+  compaction?: boolean;
 };
 
 // ── Prices ──────────────────────────────────────────────────────────────────────
@@ -177,7 +180,9 @@ export function priceUsage(usages: Usage[], catalog: PriceCatalog): SessionCost 
   let amount = 0;
   let priced = 0;
   const unpriced = new Set<string>();
+  let compactions = 0;
   for (const usage of usages) {
+    if (usage.compaction) compactions += 1;
     tokens.input += usage.input;
     tokens.output += usage.output;
     tokens.cacheRead += usage.cacheRead;
@@ -195,6 +200,7 @@ export function priceUsage(usages: Usage[], catalog: PriceCatalog): SessionCost 
     currency: 'USD',
     tokens,
     unpricedModels: [...unpriced],
+    compactions,
   };
 }
 
@@ -207,44 +213,99 @@ async function claudeUsage(sessionId: string, cwd: string, { home, env }: Env): 
   const projects = path.join(env.CLAUDE_CONFIG_DIR ?? path.join(home, '.claude'), 'projects');
   for (const variant of await cwdVariants(cwd)) {
     const dir = path.join(projects, claudeProjectDirName(variant));
-    const main = path.join(dir, `${sessionId}.jsonl`);
     const files = [
-      main,
+      path.join(dir, `${sessionId}.jsonl`),
       ...(await listFilesRecursive(path.join(dir, sessionId, 'subagents'), '.jsonl')),
     ];
-    const byMessage = new Map<string, Usage>();
+    const usages: Usage[] = [];
     let found = false;
     for (const file of files) {
-      let text: string;
-      try {
-        text = await readFile(file, 'utf8');
-      } catch {
-        continue;
-      }
+      const fileUsages = await claudeFileUsage(file);
+      if (!fileUsages) continue;
       found = true;
-      for (const record of parseJsonLines(text)) {
-        if (record.type !== 'assistant') continue;
-        const message = asRecord(record.message);
-        const usage = asRecord(message?.usage);
-        if (!message || !usage || typeof message.model !== 'string') continue;
-        if (message.model.startsWith('<')) continue; // "<synthetic>" local messages
-        const creation = asRecord(usage.cache_creation);
-        const oneHour = num(creation?.ephemeral_1h_input_tokens);
-        const written = num(usage.cache_creation_input_tokens);
-        // One API response spans several records sharing its id and usage.
-        byMessage.set(`${file}\0${String(message.id ?? record.uuid)}`, {
-          model: message.model,
-          input: num(usage.input_tokens),
-          output: num(usage.output_tokens),
-          cacheRead: num(usage.cache_read_input_tokens),
-          cacheWrite5m: creation ? num(creation.ephemeral_5m_input_tokens) : written - oneHour,
-          cacheWrite1h: oneHour,
-        });
-      }
+      usages.push(...fileUsages);
     }
-    if (found) return [...byMessage.values()];
+    if (found) return usages;
   }
   return [];
+}
+
+/** Usage per session file while unchanged: a long session's file runs to 100 MB. */
+const claudeFileCache = new Map<string, { key: string; usages: Usage[] }>();
+const CLAUDE_FILE_CACHE_SIZE = 32;
+
+async function claudeFileUsage(file: string): Promise<Usage[] | null> {
+  let key: string;
+  try {
+    const info = await stat(file);
+    key = `${info.mtimeMs}:${info.size}`;
+  } catch {
+    return null;
+  }
+  const cached = claudeFileCache.get(file);
+  if (cached?.key === key) return cached.usages;
+  const usages = claudeRecordsUsage(await readFile(file, 'utf8'));
+  claudeFileCache.delete(file);
+  claudeFileCache.set(file, { key, usages });
+  if (claudeFileCache.size > CLAUDE_FILE_CACHE_SIZE) {
+    claudeFileCache.delete(claudeFileCache.keys().next().value!);
+  }
+  return usages;
+}
+
+function claudeRecordsUsage(text: string): Usage[] {
+  const byMessage = new Map<string, Usage>();
+  const compactions: Usage[] = [];
+  let model: string | null = null;
+  let compaction: Usage | null = null;
+  for (const record of parseJsonLines(text)) {
+    // A compaction reads the whole context (mostly cached) and writes the summary that
+    // follows its boundary; Claude Code records neither, so both are estimated.
+    if (record.type === 'system' && record.subtype === 'compact_boundary') {
+      const context = num(asRecord(record.compactMetadata)?.preTokens);
+      if (!model || context === 0) continue;
+      compaction = { ...ZERO, model, cacheRead: context, compaction: true };
+      compactions.push(compaction);
+      continue;
+    }
+    if (record.isCompactSummary && compaction) {
+      compaction.output = estimateTokens(claudeText(asRecord(record.message)?.content));
+      compaction = null;
+      continue;
+    }
+    if (record.type !== 'assistant') continue;
+    const message = asRecord(record.message);
+    const usage = asRecord(message?.usage);
+    if (!message || !usage || typeof message.model !== 'string') continue;
+    if (message.model.startsWith('<')) continue; // "<synthetic>" local messages
+    model = message.model;
+    const creation = asRecord(usage.cache_creation);
+    const oneHour = num(creation?.ephemeral_1h_input_tokens);
+    const written = num(usage.cache_creation_input_tokens);
+    // One API response spans several records sharing its id and usage.
+    byMessage.set(String(message.id ?? record.uuid), {
+      model: message.model,
+      input: num(usage.input_tokens),
+      output: num(usage.output_tokens),
+      cacheRead: num(usage.cache_read_input_tokens),
+      cacheWrite5m: creation ? num(creation.ephemeral_5m_input_tokens) : written - oneHour,
+      cacheWrite1h: oneHour,
+    });
+  }
+  return [...byMessage.values(), ...compactions];
+}
+
+const ZERO = { input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 };
+
+/** Roughly a tokenizer's count: about four Latin characters a token, one per CJK character. */
+function estimateTokens(text: string): number {
+  let latin = 0;
+  let other = 0;
+  for (const char of text) {
+    if (char.charCodeAt(0) < 0x80) latin += 1;
+    else other += 1;
+  }
+  return Math.ceil(latin / 4) + other;
 }
 
 /** Codex: the thread's rollout and its spawned agents', from the running token totals. */

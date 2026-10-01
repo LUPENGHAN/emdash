@@ -24,6 +24,7 @@ import {
 } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/generic-tab-item';
 import { TabTitle } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/tab-title';
 import { ConversationAgentIcon } from '../conversation-agent-icon';
+import { ConversationCompactedHistoryBadge } from '../conversation-compacted-history';
 import { ConversationCostBadge } from '../conversation-cost';
 import { ConversationSubagentsBadge } from '../conversation-subagents';
 import { handoffCommands } from '../handoff';
@@ -75,6 +76,9 @@ export const AcpChatTabBarItem = observer(function AcpChatTabBarItem({
             {label}
             <ConversationSourceSuffix agentId={providerId} source={source} />
           </TabTitle>
+          {conversation ? (
+            <ConversationCompactedHistoryBadge conversation={conversation.data} />
+          ) : null}
           {conversation ? <ConversationSubagentsBadge conversation={conversation.data} /> : null}
           {conversation ? <ConversationCostBadge conversation={conversation.data} /> : null}
         </>

@@ -3,6 +3,10 @@ import type { ConversationsRuntimeBroker } from '@core/features/conversations/ap
 import type { TaskSessionManager } from '@core/features/tasks/api/node/task-session-manager';
 import type { TelemetryService } from '@core/primitives/telemetry/api/telemetry';
 import type { AppDb } from '@core/services/app-db/node/db';
+import {
+  listConversationCompactedSegments,
+  readConversationCompactedSegment,
+} from './compacted-history';
 import type {
   CompensationRunner,
   ConversationWorkspaceIdentityResolver,
@@ -90,6 +94,10 @@ export function createConversationOperations(dependencies: {
     readHandoffSummary: (conversationId: string, summaryPath: string) =>
       readConversationHandoffSummary(db, conversationId, summaryPath),
     listSubagents: (conversationId: string) => listConversationSubagents(db, conversationId),
+    listCompactedSegments: (conversationId: string) =>
+      listConversationCompactedSegments(db, conversationId),
+    readCompactedSegment: (conversationId: string, index: number) =>
+      readConversationCompactedSegment(db, conversationId, index),
     readSubagentTranscript: (conversationId: string, subagentId: string) =>
       readConversationSubagentTranscript(db, conversationId, subagentId),
     listProjectImportableSessions: (projectId: string) =>
