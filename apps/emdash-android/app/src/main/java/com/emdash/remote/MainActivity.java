@@ -6,8 +6,11 @@ import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Insets;
+import android.graphics.Rect;
+import android.graphics.drawable.GradientDrawable;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.Uri;
@@ -15,19 +18,23 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
+import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
-import android.webkit.WebSettings;
 import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.window.OnBackInvokedDispatcher;
 import java.io.ByteArrayOutputStream;
@@ -35,69 +42,108 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.json.JSONObject;
 
 /**
- * Emdash on a phone: the computer's web page in a full-screen WebView. Each start signs in
- * again with the saved connect link, so being signed out by cleared cookies can't happen;
- * Back on the page's first screen opens the list of computers.
+ * Emdash on a phone. A list of the user's computers, each opening its Emdash page full
+ * screen (a {@link Session} kept loaded, so switching back picks up where it was). A small
+ * floating button on the page, or Back on its first screen, returns to the list.
  */
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements Session.Listener {
     private static final int FILE_CHOOSER = 1;
     private static final long RETRY_MS = 10_000;
+    private static final long PROBE_MS = 10_000;
 
-    private enum Panel {
-        NONE,
-        ADD,
-        UNREACHABLE,
+    /** What a computer's card says about it, from a quick request to its `/info`. */
+    private enum Reachability {
+        CHECKING,
+        ONLINE,
+        OFFLINE,
         SIGNED_OUT
     }
 
     private Computers computers;
-    private Computers.Computer current;
-    private WebView web;
+    private SharedPreferences prefs;
+    private final Map<String, Session> sessions = new HashMap<>();
+    private final Map<String, Reachability> reachability = new HashMap<>();
+    private Session current;
+    /** Adding a computer (not a session's own error) is what the panel shows. */
+    private boolean adding;
+
+    private FrameLayout webContainer;
+    private View devices;
+    private LinearLayout deviceCards;
     private View panel;
     private TextView panelTitle;
     private TextView panelMessage;
     private EditText linkInput;
     private Button primaryButton;
     private Button secondaryButton;
-    private Panel shown = Panel.NONE;
+    private View bubble;
+
     private ValueCallback<Uri[]> pendingFiles;
     private ConnectivityManager.NetworkCallback networkCallback;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService probes = Executors.newCachedThreadPool();
     private boolean resumed;
-    /** While a computer can't be reached and the app is open, it is tried again every few seconds. */
-    private final Runnable retry = () -> {
-        if (resumed && shown == Panel.UNREACHABLE) reconnect();
-    };
+
+    /** While the open computer can't be reached and the app is open, it is tried again. */
+    private final Runnable retry =
+            () -> {
+                if (resumed && current != null && current.status == Session.Status.UNREACHABLE) {
+                    current.connect();
+                    render();
+                }
+            };
+
+    /** While the list shows, each computer's state is checked again now and then. */
+    private final Runnable probeAgain =
+            () -> {
+                if (resumed && devices.getVisibility() == View.VISIBLE) probeAll();
+            };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         drawBehindSystemBars();
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
+        CookieManager.getInstance().setAcceptCookie(true);
 
         computers = new Computers(this);
-        web = findViewById(R.id.web);
+        prefs = getSharedPreferences("ui", MODE_PRIVATE);
+        webContainer = findViewById(R.id.web_container);
+        devices = findViewById(R.id.devices);
+        deviceCards = findViewById(R.id.device_cards);
         panel = findViewById(R.id.panel);
         panelTitle = findViewById(R.id.panel_title);
         panelMessage = findViewById(R.id.panel_message);
         linkInput = findViewById(R.id.link_input);
         primaryButton = findViewById(R.id.primary_button);
         secondaryButton = findViewById(R.id.secondary_button);
-        setUpWebView();
+        bubble = findViewById(R.id.bubble);
+        findViewById(R.id.add_device).setOnClickListener(v -> showAdd());
+        setUpBubble();
         setUpBack();
         watchNetwork();
 
         Computers.Computer shared = linkFrom(getIntent());
+        List<Computers.Computer> all = computers.all();
         if (shared != null) {
             open(computers.save(shared));
-        } else if (computers.current() != null) {
-            open(computers.current());
+        } else if (all.isEmpty()) {
+            showAdd();
+        } else if (all.size() == 1) {
+            open(all.get(0));
         } else {
-            showPanel(Panel.ADD);
+            showDevices();
         }
     }
 
@@ -112,7 +158,8 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         resumed = true;
-        if (shown == Panel.UNREACHABLE) reconnect();
+        if (current != null && current.status == Session.Status.UNREACHABLE) retry.run();
+        if (devices.getVisibility() == View.VISIBLE) probeAll();
     }
 
     @Override
@@ -120,16 +167,18 @@ public class MainActivity extends Activity {
         super.onPause();
         resumed = false;
         handler.removeCallbacks(retry);
+        handler.removeCallbacks(probeAgain);
         CookieManager.getInstance().flush();
     }
 
     @Override
     protected void onDestroy() {
-        handler.removeCallbacks(retry);
+        handler.removeCallbacksAndMessages(null);
+        probes.shutdownNow();
         if (networkCallback != null) {
             getSystemService(ConnectivityManager.class).unregisterNetworkCallback(networkCallback);
         }
-        web.destroy();
+        for (Session session : sessions.values()) session.destroy();
         super.onDestroy();
     }
 
@@ -154,206 +203,220 @@ public class MainActivity extends Activity {
         pendingFiles = null;
     }
 
+    // ── Screens ──────────────────────────────────────────────────────────────
+
+    /** Opens a computer's page, loading it the first time and keeping it after. */
     private void open(Computers.Computer computer) {
-        current = computer;
         computers.select(computer);
-        showPanel(Panel.NONE);
-        web.clearHistory();
-        web.loadUrl(computer.connectUrl());
-    }
-
-    private void reconnect() {
-        if (current == null) return;
-        showPanel(Panel.NONE);
-        web.loadUrl(current.connectUrl());
-    }
-
-    private void setUpWebView() {
-        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
-            WebView.setWebContentsDebuggingEnabled(true);
+        Session session = sessions.get(computer.baseUrl);
+        if (session == null) {
+            session = new Session(this, computer, " EmdashAndroid/" + version(), this);
+            sessions.put(computer.baseUrl, session);
+            // Under the floating button, which is the container's last child.
+            webContainer.addView(
+                    session.web,
+                    0,
+                    new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT));
+        } else {
+            // A new link for a computer already open: sign in with it.
+            boolean newToken = !session.computer.token.equals(computer.token);
+            session.computer = computer;
+            if (newToken || session.status == Session.Status.UNREACHABLE) session.connect();
         }
-        WebSettings settings = web.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setUserAgentString(settings.getUserAgentString() + " EmdashAndroid/" + version());
-        CookieManager.getInstance().setAcceptCookie(true);
-
-        web.setWebViewClient(
-                new WebViewClient() {
-                    @Override
-                    public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                        if (current != null && sameOrigin(request.getUrl(), current.baseUrl)) {
-                            return false;
-                        }
-                        // Links out of Emdash (docs, PRs, issues) open in the phone's browser.
-                        try {
-                            startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl()));
-                        } catch (ActivityNotFoundException ignored) {
-                            // Nothing can open it; stay on the page.
-                        }
-                        return true;
-                    }
-
-                    @Override
-                    public void onPageFinished(WebView view, String url) {
-                        if (current != null && current.name == null && shown == Panel.NONE) {
-                            fetchName(current);
-                        }
-                    }
-
-                    @Override
-                    public void onReceivedError(
-                            WebView view, WebResourceRequest request, WebResourceError error) {
-                        if (request.isForMainFrame()) showPanel(Panel.UNREACHABLE);
-                    }
-
-                    @Override
-                    public void onReceivedHttpError(
-                            WebView view, WebResourceRequest request, WebResourceResponse response) {
-                        if (request.isForMainFrame() && response.getStatusCode() == 401) {
-                            showPanel(Panel.SIGNED_OUT);
-                        }
-                    }
-                });
-        web.setWebChromeClient(
-                new WebChromeClient() {
-                    @Override
-                    public boolean onShowFileChooser(
-                            WebView view,
-                            ValueCallback<Uri[]> callback,
-                            FileChooserParams params) {
-                        if (pendingFiles != null) pendingFiles.onReceiveValue(null);
-                        pendingFiles = callback;
-                        try {
-                            startActivityForResult(params.createIntent(), FILE_CHOOSER);
-                        } catch (ActivityNotFoundException e) {
-                            pendingFiles = null;
-                            return false;
-                        }
-                        return true;
-                    }
-                });
+        current = session;
+        adding = false;
+        render();
     }
 
-    /** The computer's own name, from its `/info`, to tell computers apart in the list. */
-    private void fetchName(Computers.Computer computer) {
-        new Thread(
-                        () -> {
-                            String name = null;
-                            try {
-                                HttpURLConnection connection =
-                                        (HttpURLConnection) new URL(computer.baseUrl + "/info")
-                                                .openConnection();
-                                connection.setConnectTimeout(10_000);
-                                connection.setReadTimeout(10_000);
-                                connection.setRequestProperty(
-                                        "Cookie", "emdash_remote=" + computer.token);
-                                if (connection.getResponseCode() == 200) {
-                                    name = new JSONObject(read(connection.getInputStream()))
-                                            .optString("name", null);
-                                }
-                                connection.disconnect();
-                            } catch (Exception ignored) {
-                                // Unnamed for now; it is asked again next time.
-                            }
-                            if (name == null || name.isEmpty()) return;
-                            Computers.Computer named =
-                                    new Computers.Computer(computer.baseUrl, computer.token, name);
-                            runOnUiThread(
-                                    () -> {
-                                        Computers.Computer saved = computers.save(named);
-                                        if (current != null
-                                                && current.baseUrl.equals(saved.baseUrl)) {
-                                            current = saved;
-                                        }
-                                    });
-                        })
-                .start();
+    private void showDevices() {
+        current = null;
+        adding = false;
+        render();
+        probeAll();
     }
 
-    private void showPanel(Panel kind) {
-        shown = kind;
+    private void showAdd() {
+        adding = true;
+        render();
+    }
+
+    /** Shows what the state calls for: the add panel, the list, or a computer's page. */
+    private void render() {
         handler.removeCallbacks(retry);
-        if (kind == Panel.UNREACHABLE) handler.postDelayed(retry, RETRY_MS);
-        if (kind == Panel.NONE) {
-            panel.setVisibility(View.GONE);
+        handler.removeCallbacks(probeAgain);
+        for (Session session : sessions.values()) {
+            session.web.setVisibility(session == current ? View.VISIBLE : View.GONE);
+        }
+        if (adding) {
+            showPanel(R.string.add_title, getString(R.string.add_message), true);
+            primaryButton.setText(R.string.connect);
+            primaryButton.setOnClickListener(v -> connectFromInput(null));
+            devices.setVisibility(View.GONE);
+            bubble.setVisibility(View.GONE);
             return;
         }
-        String name = current != null ? current.label() : "";
+        if (current == null) {
+            panel.setVisibility(View.GONE);
+            devices.setVisibility(View.VISIBLE);
+            bubble.setVisibility(View.GONE);
+            renderDevices();
+            return;
+        }
+        devices.setVisibility(View.GONE);
+        bubble.setVisibility(View.VISIBLE);
+        String name = current.computer.label();
+        switch (current.status) {
+            case UNREACHABLE:
+                showPanel(0, getString(R.string.unreachable_message), false);
+                panelTitle.setText(getString(R.string.unreachable_title, name));
+                primaryButton.setText(R.string.retry);
+                primaryButton.setOnClickListener(v -> retry.run());
+                handler.postDelayed(retry, RETRY_MS);
+                break;
+            case SIGNED_OUT:
+                showPanel(0, getString(R.string.signed_out_message), true);
+                panelTitle.setText(getString(R.string.signed_out_title, name));
+                primaryButton.setText(R.string.connect);
+                Session signedOut = current;
+                primaryButton.setOnClickListener(v -> connectFromInput(signedOut));
+                break;
+            default:
+                panel.setVisibility(View.GONE);
+                break;
+        }
+    }
+
+    private void showPanel(int title, String message, boolean needsLink) {
         panel.setVisibility(View.VISIBLE);
-        boolean needsLink = kind == Panel.ADD || kind == Panel.SIGNED_OUT;
+        if (title != 0) panelTitle.setText(title);
+        panelMessage.setText(message);
         linkInput.setVisibility(needsLink ? View.VISIBLE : View.GONE);
         linkInput.setError(null);
         if (needsLink) linkInput.setText("");
-
-        switch (kind) {
-            case ADD:
-                panelTitle.setText(R.string.add_title);
-                panelMessage.setText(R.string.add_message);
-                break;
-            case UNREACHABLE:
-                panelTitle.setText(getString(R.string.unreachable_title, name));
-                panelMessage.setText(R.string.unreachable_message);
-                break;
-            case SIGNED_OUT:
-                panelTitle.setText(getString(R.string.signed_out_title, name));
-                panelMessage.setText(R.string.signed_out_message);
-                break;
-            default:
-                break;
-        }
-        if (kind == Panel.UNREACHABLE) {
-            primaryButton.setText(R.string.retry);
-            primaryButton.setOnClickListener(v -> reconnect());
-        } else {
-            primaryButton.setText(R.string.connect);
-            primaryButton.setOnClickListener(v -> connectFromInput());
-        }
         boolean hasComputers = !computers.all().isEmpty();
         secondaryButton.setVisibility(hasComputers ? View.VISIBLE : View.GONE);
         secondaryButton.setText(R.string.computers);
-        secondaryButton.setOnClickListener(v -> showComputers());
+        secondaryButton.setOnClickListener(v -> showDevices());
     }
 
-    private void connectFromInput() {
+    /** Adds the pasted link's computer, or gives a signed-out one its new link. */
+    private void connectFromInput(Session signedOut) {
         Computers.Computer computer = Computers.parseLink(linkInput.getText().toString());
         if (computer == null) {
             linkInput.setError(getString(R.string.invalid_link));
             return;
         }
         open(computers.save(computer));
+        if (signedOut != null && current != null && current.status == Session.Status.SIGNED_OUT) {
+            current.connect();
+            render();
+        }
     }
 
-    private void showComputers() {
-        List<Computers.Computer> list = computers.all();
-        String[] items = new String[list.size() + (current != null ? 3 : 1)];
-        for (int i = 0; i < list.size(); i++) {
-            Computers.Computer computer = list.get(i);
-            boolean isCurrent = current != null && computer.baseUrl.equals(current.baseUrl);
-            items[i] = (isCurrent ? "✓  " : "     ") + computer.label();
+    // ── Computer list ────────────────────────────────────────────────────────
+
+    private void renderDevices() {
+        deviceCards.removeAllViews();
+        LayoutInflater inflater = getLayoutInflater();
+        String lastUsed = computers.current() != null ? computers.current().baseUrl : null;
+        for (Computers.Computer computer : computers.all()) {
+            View card = inflater.inflate(R.layout.device_card, deviceCards, false);
+            ((TextView) card.findViewById(R.id.device_name)).setText(computer.label());
+            Reachability state = reachability.getOrDefault(computer.baseUrl, Reachability.CHECKING);
+            String address = Uri.parse(computer.baseUrl).getAuthority();
+            String detail = getString(statusText(state)) + " · " + address;
+            if (sessions.containsKey(computer.baseUrl)) detail += " · " + getString(R.string.status_open);
+            ((TextView) card.findViewById(R.id.device_detail)).setText(detail);
+            GradientDrawable dot = new GradientDrawable();
+            dot.setShape(GradientDrawable.OVAL);
+            dot.setColor(getColor(statusColor(state)));
+            card.findViewById(R.id.device_dot).setBackground(dot);
+            card.setSelected(computer.baseUrl.equals(lastUsed));
+            card.setOnClickListener(v -> open(computer));
+            card.setOnLongClickListener(
+                    v -> {
+                        showDeviceMenu(computer);
+                        return true;
+                    });
+            deviceCards.addView(card);
         }
-        int add = list.size();
-        items[add] = getString(R.string.add_computer);
-        if (current != null) {
-            items[add + 1] = getString(R.string.reload);
-            items[add + 2] = getString(R.string.remove_computer, current.label());
+    }
+
+    private static int statusText(Reachability state) {
+        switch (state) {
+            case ONLINE:
+                return R.string.status_online;
+            case OFFLINE:
+                return R.string.status_offline;
+            case SIGNED_OUT:
+                return R.string.status_signed_out;
+            default:
+                return R.string.status_checking;
         }
+    }
+
+    private static int statusColor(Reachability state) {
+        switch (state) {
+            case ONLINE:
+                return R.color.online;
+            case OFFLINE:
+                return R.color.offline;
+            case SIGNED_OUT:
+                return R.color.warning;
+            default:
+                return R.color.muted;
+        }
+    }
+
+    private void showDeviceMenu(Computers.Computer computer) {
+        String[] items = {
+            getString(R.string.rename),
+            getString(R.string.reload),
+            getString(R.string.remove_computer, computer.label())
+        };
         new AlertDialog.Builder(this)
-                .setTitle(R.string.computers)
+                .setTitle(computer.label())
                 .setItems(
                         items,
                         (dialog, which) -> {
-                            if (which < add) {
-                                open(list.get(which));
-                            } else if (which == add) {
-                                showPanel(Panel.ADD);
-                            } else if (which == add + 1) {
-                                reconnect();
+                            if (which == 0) {
+                                showRename(computer);
+                            } else if (which == 1) {
+                                Session session = sessions.get(computer.baseUrl);
+                                if (session != null) session.connect();
+                                open(computer);
                             } else {
-                                confirmRemove(current);
+                                confirmRemove(computer);
                             }
                         })
-                .setNegativeButton(R.string.exit, (dialog, which) -> finish())
+                .show();
+    }
+
+    private void showRename(Computers.Computer computer) {
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        input.setText(computer.name);
+        input.setSelectAllOnFocus(true);
+        int padding = dp(20);
+        FrameLayout frame = new FrameLayout(this);
+        frame.setPadding(padding, dp(8), padding, 0);
+        frame.addView(input);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.rename)
+                .setView(frame)
+                .setPositiveButton(
+                        android.R.string.ok,
+                        (dialog, which) -> {
+                            Computers.Computer renamed =
+                                    computers.rename(computer, input.getText().toString());
+                            Session session = sessions.get(computer.baseUrl);
+                            if (session != null) session.computer = renamed;
+                            if (renamed.name == null) probe(renamed);
+                            renderDevices();
+                        })
+                .setNegativeButton(android.R.string.cancel, null)
                 .show();
     }
 
@@ -364,18 +427,198 @@ public class MainActivity extends Activity {
                         R.string.remove,
                         (dialog, which) -> {
                             computers.remove(computer);
-                            Computers.Computer next = computers.current();
-                            if (next != null) {
-                                open(next);
-                            } else {
-                                current = null;
-                                web.loadUrl("about:blank");
-                                showPanel(Panel.ADD);
+                            reachability.remove(computer.baseUrl);
+                            Session session = sessions.remove(computer.baseUrl);
+                            if (session != null) {
+                                webContainer.removeView(session.web);
+                                session.destroy();
                             }
+                            if (computers.all().isEmpty()) showAdd();
+                            else showDevices();
                         })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
     }
+
+    private void probeAll() {
+        for (Computers.Computer computer : computers.all()) probe(computer);
+        handler.removeCallbacks(probeAgain);
+        handler.postDelayed(probeAgain, PROBE_MS);
+    }
+
+    /** Asks a computer's `/info` whether it is up and the link still works; names it too. */
+    private void probe(Computers.Computer computer) {
+        probes.execute(
+                () -> {
+                    Reachability state;
+                    String name = null;
+                    try {
+                        HttpURLConnection connection =
+                                (HttpURLConnection) new URL(computer.baseUrl + "/info").openConnection();
+                        connection.setConnectTimeout(4_000);
+                        connection.setReadTimeout(4_000);
+                        connection.setRequestProperty("Cookie", "emdash_remote=" + computer.token);
+                        int code = connection.getResponseCode();
+                        if (code == 200) {
+                            state = Reachability.ONLINE;
+                            name = new JSONObject(read(connection.getInputStream())).optString("name", null);
+                        } else {
+                            state = code == 401 ? Reachability.SIGNED_OUT : Reachability.OFFLINE;
+                        }
+                        connection.disconnect();
+                    } catch (Exception e) {
+                        state = Reachability.OFFLINE;
+                    }
+                    Reachability result = state;
+                    String reported = name;
+                    runOnUiThread(() -> onProbed(computer, result, reported));
+                });
+    }
+
+    private void onProbed(Computers.Computer computer, Reachability state, String name) {
+        if (isDestroyed()) return;
+        reachability.put(computer.baseUrl, state);
+        // A computer keeps the name the user gave it; otherwise it takes its own.
+        Computers.Computer saved = null;
+        for (Computers.Computer known : computers.all()) {
+            if (known.baseUrl.equals(computer.baseUrl)) saved = known;
+        }
+        if (saved != null && saved.name == null && name != null && !name.isEmpty()) {
+            saved = computers.save(new Computers.Computer(saved.baseUrl, saved.token, name));
+            Session session = sessions.get(saved.baseUrl);
+            if (session != null) session.computer = saved;
+        }
+        if (devices.getVisibility() == View.VISIBLE) renderDevices();
+    }
+
+    // ── Session events ───────────────────────────────────────────────────────
+
+    @Override
+    public void onStatusChanged(Session session) {
+        if (session.status == Session.Status.READY && session.computer.name == null) {
+            probe(session.computer);
+        }
+        if (session == current) render();
+    }
+
+    @Override
+    public void onExternalLink(Uri url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, url));
+        } catch (ActivityNotFoundException ignored) {
+            // Nothing can open it; stay on the page.
+        }
+    }
+
+    @Override
+    public boolean onFileChooser(
+            ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+        if (pendingFiles != null) pendingFiles.onReceiveValue(null);
+        pendingFiles = callback;
+        try {
+            startActivityForResult(params.createIntent(), FILE_CHOOSER);
+        } catch (ActivityNotFoundException e) {
+            pendingFiles = null;
+            return false;
+        }
+        return true;
+    }
+
+    // ── Floating button ──────────────────────────────────────────────────────
+
+    /**
+     * A small button over the page that returns to the list. It can be dragged out of the
+     * way; it settles on the nearer side, and keeps its place.
+     */
+    private void setUpBubble() {
+        int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        bubble.post(this::placeBubble);
+        bubble.setOnTouchListener(
+                new View.OnTouchListener() {
+                    private float downX;
+                    private float downY;
+                    private float startX;
+                    private float startY;
+                    private boolean dragging;
+
+                    @Override
+                    public boolean onTouch(View view, MotionEvent event) {
+                        switch (event.getActionMasked()) {
+                            case MotionEvent.ACTION_DOWN:
+                                downX = event.getRawX();
+                                downY = event.getRawY();
+                                startX = view.getX();
+                                startY = view.getY();
+                                dragging = false;
+                                return true;
+                            case MotionEvent.ACTION_MOVE:
+                                float dx = event.getRawX() - downX;
+                                float dy = event.getRawY() - downY;
+                                if (!dragging && Math.hypot(dx, dy) > touchSlop) dragging = true;
+                                if (dragging) {
+                                    view.setX(clamp(startX + dx, 0, maxBubbleX()));
+                                    view.setY(clamp(startY + dy, 0, maxBubbleY()));
+                                }
+                                return true;
+                            case MotionEvent.ACTION_UP:
+                                if (dragging) settleBubble();
+                                else showDevices();
+                                return true;
+                            default:
+                                return false;
+                        }
+                    }
+                });
+        // It sits on the screen's edge, where a swipe is the system's Back: keep its drags.
+        if (Build.VERSION.SDK_INT >= 29) {
+            bubble.addOnLayoutChangeListener(
+                    (view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
+                            view.setSystemGestureExclusionRects(
+                                    List.of(new Rect(0, 0, right - left, bottom - top))));
+        }
+        webContainer.addOnLayoutChangeListener(
+                (view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                    if (bottom - top != oldBottom - oldTop || right - left != oldRight - oldLeft) {
+                        placeBubble();
+                    }
+                });
+    }
+
+    private void placeBubble() {
+        boolean left = prefs.getBoolean("bubble_left", false);
+        float share = prefs.getFloat("bubble_y", 0.3f);
+        bubble.setX(left ? dp(6) : maxBubbleX() - dp(6));
+        bubble.setY(clamp(share * maxBubbleY(), 0, maxBubbleY()));
+    }
+
+    private void settleBubble() {
+        boolean left =
+                bubble.getX() + bubble.getLayoutParams().width / 2f < webContainer.getWidth() / 2f;
+        float share = maxBubbleY() > 0 ? bubble.getY() / maxBubbleY() : 0.3f;
+        prefs.edit().putBoolean("bubble_left", left).putFloat("bubble_y", share).apply();
+        bubble.animate().x(left ? dp(6) : maxBubbleX() - dp(6)).setDuration(150).start();
+    }
+
+    // Its own size, not getWidth(): it measures 0 while hidden, which is when it is placed.
+    private float maxBubbleX() {
+        return Math.max(0, webContainer.getWidth() - bubble.getLayoutParams().width);
+    }
+
+    private float maxBubbleY() {
+        return Math.max(0, webContainer.getHeight() - bubble.getLayoutParams().height);
+    }
+
+    private static float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private int dp(int value) {
+        return (int)
+                TypedValue.applyDimension(
+                        TypedValue.COMPLEX_UNIT_DIP, value, getResources().getDisplayMetrics());
+    }
+
+    // ── Back, network, insets ────────────────────────────────────────────────
 
     private void setUpBack() {
         if (Build.VERSION.SDK_INT >= 33) {
@@ -392,18 +635,22 @@ public class MainActivity extends Activity {
     }
 
     private void back() {
-        if (shown == Panel.ADD && current != null) {
-            showPanel(Panel.NONE);
-        } else if (shown == Panel.NONE && web.canGoBack()) {
-            web.goBack();
-        } else if (computers.all().isEmpty()) {
-            finish();
+        if (adding && !computers.all().isEmpty()) {
+            if (current != null) open(current.computer);
+            else showDevices();
+        } else if (current != null
+                && current.status == Session.Status.READY
+                && current.web.canGoBack()) {
+            current.web.goBack();
+        } else if (current != null) {
+            showDevices();
         } else {
-            showComputers();
+            // Out of the way, with every computer's page still loaded for next time.
+            moveTaskToBack(true);
         }
     }
 
-    /** Back on the network (Wi-Fi ↔ mobile data, VPN up): try an unreachable computer again. */
+    /** Back on the network (Wi-Fi ↔ mobile data, VPN up): reconnect, and check the list. */
     private void watchNetwork() {
         networkCallback =
                 new ConnectivityManager.NetworkCallback() {
@@ -411,7 +658,9 @@ public class MainActivity extends Activity {
                     public void onAvailable(Network network) {
                         runOnUiThread(
                                 () -> {
-                                    if (shown == Panel.UNREACHABLE) reconnect();
+                                    if (isDestroyed()) return;
+                                    retry.run();
+                                    if (devices.getVisibility() == View.VISIBLE) probeAll();
                                 });
                     }
                 };
@@ -448,12 +697,6 @@ public class MainActivity extends Activity {
             return Computers.parseLink(intent.getStringExtra(Intent.EXTRA_TEXT));
         }
         return null;
-    }
-
-    private static boolean sameOrigin(Uri url, String baseUrl) {
-        Uri base = Uri.parse(baseUrl);
-        return base.getScheme().equals(url.getScheme())
-                && base.getAuthority().equals(url.getAuthority());
     }
 
     private String version() {

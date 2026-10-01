@@ -15,5 +15,11 @@
     <string name="remove_computer">移除 %1$s</string>
     <string name="remove_confirm">从这台手机移除 %1$s？之后需要再次使用它的链接才能连接。</string>
     <string name="remove">移除</string>
-    <string name="exit">退出</string>
+    <string name="devices_hint">点一台电脑进入；长按可以重命名、重新加载或移除。</string>
+    <string name="status_online">在线</string>
+    <string name="status_offline">连不上</string>
+    <string name="status_signed_out">需要新链接</string>
+    <string name="status_checking">检查中…</string>
+    <string name="status_open">已打开</string>
+    <string name="rename">重命名</string>
 </resources>

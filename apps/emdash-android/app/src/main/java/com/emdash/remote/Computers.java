@@ -112,6 +112,21 @@ final class Computers {
         return computer;
     }
 
+    /** Names a computer as the user likes; an empty name goes back to its own. */
+    Computer rename(Computer computer, String name) {
+        List<Computer> list = all();
+        String trimmed = name.trim();
+        for (int i = 0; i < list.size(); i++) {
+            if (!list.get(i).baseUrl.equals(computer.baseUrl)) continue;
+            Computer renamed =
+                    new Computer(computer.baseUrl, list.get(i).token, trimmed.isEmpty() ? null : trimmed);
+            list.set(i, renamed);
+            write(list);
+            return renamed;
+        }
+        return computer;
+    }
+
     void remove(Computer computer) {
         List<Computer> list = all();
         list.removeIf(saved -> saved.baseUrl.equals(computer.baseUrl));

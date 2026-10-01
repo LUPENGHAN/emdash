@@ -3,4 +3,10 @@
     <color name="background">#111111</color>
     <color name="foreground">#EDEDED</color>
     <color name="muted">#9A9A9A</color>
+    <color name="card">#1B1B1B</color>
+    <color name="border">#2E2E2E</color>
+    <color name="bubble">#E6262626</color>
+    <color name="online">#22C55E</color>
+    <color name="offline">#6B6B6B</color>
+    <color name="warning">#F59E0B</color>
 </resources>

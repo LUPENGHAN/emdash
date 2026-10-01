@@ -17,5 +17,11 @@
     <string name="remove_computer">Remove %1$s</string>
     <string name="remove_confirm">Remove %1$s from this phone? You\'ll need its link again to reconnect.</string>
     <string name="remove">Remove</string>
-    <string name="exit">Exit</string>
+    <string name="devices_hint">Tap a computer to open it. Long-press to rename, reload or remove it.</string>
+    <string name="status_online">Online</string>
+    <string name="status_offline">Can\'t reach</string>
+    <string name="status_signed_out">Needs a new link</string>
+    <string name="status_checking">Checking…</string>
+    <string name="status_open">Open</string>
+    <string name="rename">Rename</string>
 </resources>

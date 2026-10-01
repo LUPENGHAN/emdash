@@ -8,8 +8,10 @@ screen, without a browser.
 - **Stays signed in.** The app keeps each computer's connect link in its own storage and
   signs in again on every start, so a browser clearing cookies can't sign you out. Only
   replacing the link in Emdash does.
-- **Several computers.** Press Back on Emdash's first screen to switch, add, reload or remove
-  computers.
+- **Several computers.** With more than one, the app opens on a list showing whether each is
+  online; tap one to open it, long-press to rename, reload or remove it. A small floating
+  button on the page (drag it out of the way) or Back on Emdash's first screen returns to the
+  list. Each computer's page stays loaded, so switching back picks up where it was.
 - **Plain HTTP over a private network.** Computers are reached by address on EasyTier,
   Tailscale or the LAN, so HTTP is allowed (no certificate needed).
 - **Reconnects by itself.** If a computer can't be reached, the app retries every 10 seconds
