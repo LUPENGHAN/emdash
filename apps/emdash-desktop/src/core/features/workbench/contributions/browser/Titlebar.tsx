@@ -10,7 +10,12 @@ const platform = detectPlatformContext().os;
 // where an iPad also reports itself as a Mac) has none to clear room for.
 const hasTrafficLights =
   platform === 'mac' && typeof navigator !== 'undefined' && /Electron\//.test(navigator.userAgent);
-const isLinux = platform === 'linux';
+// Window controls drive the computer's own window: never from a browser (an Android
+// phone reports itself as Linux), where they would close Emdash on the computer.
+const isLinux =
+  platform === 'linux' &&
+  typeof navigator !== 'undefined' &&
+  /Electron\//.test(navigator.userAgent);
 
 export function Titlebar({ leftSlot, rightSlot }: { leftSlot?: ReactNode; rightSlot?: ReactNode }) {
   const { toggleLeftSidebar, isLeftOpen } = useWorkspaceLayoutContext();

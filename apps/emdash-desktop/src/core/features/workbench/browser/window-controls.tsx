@@ -4,7 +4,11 @@ import { getHostClient } from '@core/primitives/desktop-host/browser/host-client
 import { detectPlatformContext } from '@core/primitives/keybindings/api';
 import { cn } from '@core/primitives/styling/browser/cn';
 
-const isLinux = detectPlatformContext().os === 'linux';
+// The Linux desktop window only: an Android browser also reports Linux (see Titlebar).
+const isLinux =
+  detectPlatformContext().os === 'linux' &&
+  typeof navigator !== 'undefined' &&
+  /Electron\//.test(navigator.userAgent);
 
 /**
  * Linux-only top overlay providing a draggable strip and window controls for

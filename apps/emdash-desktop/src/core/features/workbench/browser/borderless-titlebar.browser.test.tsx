@@ -7,6 +7,14 @@ const layoutState = vi.hoisted(() => ({
   toggleLeftSidebar: vi.fn(),
 }));
 
+// The Linux desktop window (window controls are only drawn inside Electron).
+vi.hoisted(() => {
+  Object.defineProperty(navigator, 'userAgent', {
+    configurable: true,
+    value: `${navigator.userAgent} Electron/40.0.0`,
+  });
+});
+
 const historyState = vi.hoisted(() => ({
   canGoBack: true,
   canGoForward: false,
