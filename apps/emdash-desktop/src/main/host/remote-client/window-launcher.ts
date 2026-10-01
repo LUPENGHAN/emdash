@@ -35,7 +35,8 @@ export function takeWindowServer(): WindowServer | null {
 }
 
 /** The main window's profile: this one, unless this window was opened for a computer. */
-function mainProfile(): string {
+/** The main window's profile, also from another computer's window (its own profile). */
+export function mainProfile(): string {
   return process.env[MAIN_PROFILE_ENV] ?? app.getPath('userData');
 }
 

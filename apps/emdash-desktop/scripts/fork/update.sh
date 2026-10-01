@@ -91,7 +91,8 @@ main() {
   fi
 
   echo "==> Building and installing Emdash Fork"
-  bash "$repo_root/apps/emdash-desktop/scripts/fork/install-local.sh"
+  # Agreed above (or -y): the app quits for the install without asking again.
+  EMDASH_FORK_QUIT_CONFIRMED=1 bash "$repo_root/apps/emdash-desktop/scripts/fork/install-local.sh"
 }
 
 main "$@"

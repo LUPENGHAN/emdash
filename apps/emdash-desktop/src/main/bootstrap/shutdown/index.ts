@@ -1,7 +1,10 @@
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
 import type { HostRef } from '@emdash/core/primitives/host/api';
 import type { RuntimeBroker } from '@emdash/core/services/runtime-broker/api';
 import { app, type BrowserWindow } from 'electron';
 import { desktopHostEvents } from '@core/features/workbench/node';
+import { mainProfile } from '@main/host/remote-client/window-launcher';
 import { getActiveSessionSummary } from '@main/host/sessions/active-session-summary';
 import { updateService } from '@main/host/updates/update-service';
 import { createShutdownCoordinator } from './coordinator';
@@ -22,10 +25,31 @@ const shutdownCoordinator = createShutdownCoordinator({
       sessionSummarySource.attachedHosts()
     );
   },
-  isInstallRequested: () => updateService.isInstallRequested,
+  isInstallRequested: () => updateService.isInstallRequested || installScriptRequested(),
   runCleanup: runQuitCleanup,
   exit: (code) => app.exit(code),
 });
+
+/**
+ * A local install script (the fork's scripts/fork/install-local.sh) leaves this file in the
+ * main profile just before quitting the app to replace it, once the user has agreed to
+ * stop what runs in it. The quit then skips the confirmation, as an update install does;
+ * every instance (other computers' windows too) reads the main profile's file.
+ */
+const INSTALL_QUIT_MARKER = 'quit-for-install';
+const INSTALL_QUIT_MARKER_MAX_AGE_MS = 2 * 60_000;
+let installScriptQuit = false;
+
+function installScriptRequested(): boolean {
+  if (installScriptQuit) return true;
+  try {
+    const { mtimeMs } = statSync(join(mainProfile(), INSTALL_QUIT_MARKER));
+    installScriptQuit = Date.now() - mtimeMs < INSTALL_QUIT_MARKER_MAX_AGE_MS;
+  } catch {
+    // No install is waiting on this quit.
+  }
+  return installScriptQuit;
+}
 
 let registered = false;
 

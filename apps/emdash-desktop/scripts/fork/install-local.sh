@@ -77,8 +77,18 @@ fork_running() {
   [ "$(osascript -e 'application id "com.emdash.fork" is running' 2>/dev/null)" = true ]
 }
 if fork_running; then
-  osascript -e 'tell application id "com.emdash.fork" to quit' || true
-  while fork_running; do sleep 1; done
+  # emdash-update sets this once the user agreed to stop what runs in the app (its
+  # question, or -y): the marker makes the app quit without asking again.
+  marker="$HOME/Library/Application Support/emdash-fork/quit-for-install"
+  if [ "${EMDASH_FORK_QUIT_CONFIRMED:-}" = 1 ]; then
+    touch "$marker"
+  fi
+  # Asked again each second: a window opened on another computer is an instance of its own.
+  while fork_running; do
+    osascript -e 'tell application id "com.emdash.fork" to quit' >/dev/null 2>&1 || true
+    sleep 1
+  done
+  rm -f "$marker"
 fi
 rm -rf "/Applications/Emdash Fork.app"
 ditto "$bundle" "/Applications/Emdash Fork.app"
