@@ -268,7 +268,13 @@ function UsageMeter({ window }: { window: UsageWindow }) {
   const percent = Math.max(0, Math.min(100, window.usedPercent));
   return (
     <span className={cn('flex min-w-0 flex-1 items-center gap-1', tone(percent))}>
-      <span className="shrink-0 text-[10px] opacity-70">{window.label}</span>
+      {/* Cursor's "Auto" names its own-models pool, not the word "automatic". */}
+      <span
+        translate={window.label === 'Auto' ? 'no' : undefined}
+        className="shrink-0 text-[10px] opacity-70"
+      >
+        {window.label}
+      </span>
       <span className="relative h-1 min-w-4 flex-1 overflow-hidden rounded-full bg-border">
         <span
           className="absolute inset-y-0 left-0 rounded-full bg-current"
