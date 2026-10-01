@@ -8,6 +8,7 @@ import {
   parseClaudeUsage,
   parseCodexRateLimits,
   parseCursorAbout,
+  parseCursorUsage,
   readCodexUsage,
 } from './usage-limits';
 
@@ -184,6 +185,64 @@ describe('Codex rate limits and official accounts', () => {
     expect(readCodexRateLimits).toHaveBeenCalledTimes(1);
     await service.accounts();
     expect(readCodexRateLimits).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Cursor usage', () => {
+  // As drawn by Cursor's terminal UI: colors, cursor moves, a redraw of the panel.
+  const SCREEN = [
+    '\x1b[2K  Loading usage data...',
+    '\x1b[1m Usage • Pro+\x1b[0m                              Resets Nov 1',
+    ' Included        0% used             ░░░░',
+    '\x1b[2K\x1b[1m Usage • Pro+\x1b[0m                              Resets Nov 1',
+    ' Monthly plan and on-demand usage',
+    ' Category        Current             Usage',
+    ' Included        \x1b[33m12% used\x1b[0m            ░░░░',
+    '   Auto          20.5% used          ░░░░',
+    '   API           3% used             ░░░░',
+    ' On-Demand       Disabled            ————',
+    ' Esc to close',
+  ].join('\r\n');
+
+  it("reads the month's pools from the last drawing of Cursor's /usage", () => {
+    expect(parseCursorUsage(SCREEN, 5)).toEqual({
+      agent: 'cursor',
+      plan: 'Pro+',
+      windows: [
+        { label: 'Auto', usedPercent: 20.5, resets: 'Nov 1' },
+        { label: 'API', usedPercent: 3, resets: 'Nov 1' },
+        { label: 'Month', usedPercent: 12, resets: 'Nov 1' },
+      ],
+      observedAt: 5,
+      detailsUrl: CURSOR_USAGE_URL,
+    });
+    expect(() => parseCursorUsage('Loading usage data...', 5)).toThrow();
+  });
+
+  it('falls back to the plan when the usage probe fails, and skips it when signed out', async () => {
+    const runCursorUsage = vi.fn(async () => {
+      throw new Error('timed out');
+    });
+    const service = (about: string) =>
+      createUsageLimitsService({
+        env: { home: '/nonexistent', env: {} },
+        runClaudeUsage: async () => CLAUDE_TEXT,
+        runCursorAbout: async () => about,
+        runCursorUsage,
+        readCodexRateLimits: async () => {
+          throw new Error('not signed in');
+        },
+      });
+    const cursorOf = async (about: string) => (await service(about).get()).agents[2];
+
+    expect(await cursorOf('{"subscriptionTier":"Pro+"}')).toMatchObject({
+      plan: 'Pro+',
+      windows: [],
+      detailsUrl: CURSOR_USAGE_URL,
+    });
+    expect(runCursorUsage).toHaveBeenCalledTimes(1);
+    expect(await cursorOf('{}')).toMatchObject({ plan: null });
+    expect(runCursorUsage).toHaveBeenCalledTimes(1);
   });
 });
 

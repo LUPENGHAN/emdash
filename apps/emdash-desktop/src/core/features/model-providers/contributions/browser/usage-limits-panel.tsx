@@ -22,8 +22,8 @@ function tone(percent: number): string {
 }
 
 /**
- * Always-visible subscription usage (5h / weekly for Claude Code and Codex; plan and a
- * link for Cursor, whose monthly numbers only live on its dashboard), so it is obvious
+ * Always-visible subscription usage (5h / weekly for Claude Code and Codex; the month's
+ * Auto and API pools for Cursor, or its plan and dashboard link), so it is obvious
  * when to hand work to another agent. Clicking it opens every account's windows (see
  * {@link AllUsagePopover}).
  */
@@ -180,17 +180,10 @@ function AccountUsageDetails({ usage }: { usage: AgentUsage }) {
           </span>
         ) : null}
       </div>
-      {usage.detailsUrl ? (
-        <button
-          type="button"
-          onClick={() => void openExternal(usage.detailsUrl!)}
-          className="flex items-center gap-0.5 self-start text-xs text-foreground-muted hover:text-foreground"
-        >
-          Open the usage dashboard
-          <ExternalLink className="size-3" />
-        </button>
-      ) : usage.unavailable || usage.windows.length === 0 ? (
-        <span className="text-xs text-foreground-passive">{usage.unavailable ?? '—'}</span>
+      {usage.windows.length === 0 ? (
+        usage.detailsUrl ? null : (
+          <span className="text-xs text-foreground-passive">{usage.unavailable ?? '—'}</span>
+        )
       ) : (
         usage.windows.map((window) => (
           <div key={window.label} className="flex items-center gap-2 text-xs">
@@ -203,13 +196,23 @@ function AccountUsageDetails({ usage }: { usage: AgentUsage }) {
           </div>
         ))
       )}
+      {usage.detailsUrl ? (
+        <button
+          type="button"
+          onClick={() => void openExternal(usage.detailsUrl!)}
+          className="flex items-center gap-0.5 self-start text-xs text-foreground-muted hover:text-foreground"
+        >
+          Open the usage dashboard
+          <ExternalLink className="size-3" />
+        </button>
+      ) : null}
     </div>
   );
 }
 
 function AgentUsageRow({ usage }: { usage: AgentUsage }) {
   const name = AGENT_LABELS[usage.agent];
-  if (usage.detailsUrl) {
+  if (usage.detailsUrl && usage.windows.length === 0) {
     return (
       <div className="flex items-center gap-2 text-xs text-foreground-muted">
         <span className="w-11 shrink-0">{name}</span>

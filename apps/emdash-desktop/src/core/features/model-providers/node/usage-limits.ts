@@ -1,8 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
-import { access, mkdir, open, readdir, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, mkdir, open, readdir, realpath, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { buildTerminalEnv } from '@emdash/core/services/pty/api';
+import * as nodePty from 'node-pty';
 import type {
   AgentUsage,
   OfficialAccount,
@@ -14,6 +17,8 @@ import { ACCOUNT_HOME_ENV } from './official-accounts';
 
 const execFileAsync = promisify(execFile);
 const PROBE_TTL_MS = 5 * 60_000;
+/** Cursor's pools are monthly and its probe opens its whole terminal UI: read less often. */
+const CURSOR_PROBE_TTL_MS = 15 * 60_000;
 const CODEX_TAIL_BYTES = 2 * 1024 * 1024;
 
 type Env = { home: string; env: NodeJS.ProcessEnv };
@@ -25,6 +30,8 @@ export type UsageLimitsDeps = {
   runClaudeUsage?: () => Promise<string>;
   /** Runs `cursor-agent about --format json`; returns its stdout. */
   runCursorAbout?: () => Promise<string>;
+  /** Shows `/usage` in Cursor's terminal UI; returns the screen text. */
+  runCursorUsage?: () => Promise<string>;
   /** Asks Codex for the signed-in account's rate limits (`account/rateLimits/read`). */
   readCodexRateLimits?: (env: Env) => Promise<Record<string, unknown>>;
   /** The official accounts, and each one's (readied) config dir. */
@@ -40,20 +47,28 @@ export type UsageLimitsDeps = {
  *   be another account's, since accounts share sessions).
  * - Claude Code prints them for the local `/usage` command, which calls no model; it is
  *   probed with `claude -p /usage --no-session-persistence` and cached for a while.
+ * - Cursor shows its monthly Auto and API pools only in its terminal UI's `/usage`
+ *   (no model call); that is opened hidden now and then. `about` gives the plan when
+ *   that fails.
  */
 export function createUsageLimitsService(deps: UsageLimitsDeps = {}): UsageLimitsService {
   const env = deps.env ?? { home: os.homedir(), env: process.env };
   const now = deps.now ?? Date.now;
   const runClaudeUsage = deps.runClaudeUsage ?? (() => runClaudeUsageCommand(env));
   const runCursorAbout = deps.runCursorAbout ?? (() => runCursorAboutCommand(env));
+  const runCursorUsage = deps.runCursorUsage ?? (() => runCursorUsageCommand(env));
   const readCodexRateLimits = deps.readCodexRateLimits ?? readCodexRateLimitsCommand;
 
   // The probes spawn a CLI (and ask the vendor), so their results are cached.
-  const cached = (agent: AgentUsage['agent'], read: () => Promise<AgentUsage>) => {
+  const cached = (
+    agent: AgentUsage['agent'],
+    read: () => Promise<AgentUsage>,
+    ttl = PROBE_TTL_MS
+  ) => {
     let cache: { value: AgentUsage; at: number } | null = null;
     let inFlight: Promise<AgentUsage> | null = null;
     return async (refresh: boolean): Promise<AgentUsage> => {
-      if (!refresh && cache && now() - cache.at < PROBE_TTL_MS) return cache.value;
+      if (!refresh && cache && now() - cache.at < ttl) return cache.value;
       inFlight ??= read()
         .catch((error) => unavailable(agent, now(), errorMessage(error)))
         .finally(() => {
@@ -65,7 +80,21 @@ export function createUsageLimitsService(deps: UsageLimitsDeps = {}): UsageLimit
     };
   };
   const claude = cached('claude', async () => parseClaudeUsage(await runClaudeUsage(), now()));
-  const cursor = cached('cursor', async () => parseCursorAbout(await runCursorAbout(), now()));
+  const cursor = cached(
+    'cursor',
+    async () => {
+      // `about` is quick and shows the sign-in; the meters need the terminal UI.
+      const about = parseCursorAbout(await runCursorAbout(), now());
+      if (!about.plan) return about;
+      try {
+        const usage = parseCursorUsage(await runCursorUsage(), now());
+        return usage.windows.length > 0 ? usage : about;
+      } catch {
+        return about;
+      }
+    },
+    CURSOR_PROBE_TTL_MS
+  );
   const codex = cached('codex', async () => {
     try {
       return parseCodexRateLimits(await readCodexRateLimits(env), now());
@@ -189,15 +218,118 @@ async function findExecutable(name: string, { home, env }: Env): Promise<string 
 
 export const CURSOR_USAGE_URL = 'https://cursor.com/dashboard?tab=usage';
 
-/**
- * Cursor's CLI only shows usage in its interactive `/usage` (via a private dashboard
- * API), and its limits are monthly anyway; `about` gives the plan without a model call,
- * and the dashboard has the numbers.
- */
+/** The plan from `cursor-agent about`, with the usage dashboard for the numbers. */
 export function parseCursorAbout(stdout: string, observedAt: number): AgentUsage {
   const about = JSON.parse(stdout) as { subscriptionTier?: unknown };
   const plan = typeof about.subscriptionTier === 'string' ? about.subscriptionTier : null;
   return { agent: 'cursor', plan, windows: [], observedAt, detailsUrl: CURSOR_USAGE_URL };
+}
+
+const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[=>()][0-9A-Za-z]?/g;
+const CURSOR_METERS: Record<string, string> = { Auto: 'Auto', API: 'API', Included: 'Month' };
+
+/**
+ * The meters Cursor's `/usage` shows: the included usage of the month, split into Auto
+ * (Cursor's own models: Grok, Composer) and API (other vendors' models), and when they
+ * reset. Read from the last time the panel was drawn.
+ *
+ *   Usage • Pro+                                   Resets Nov 1
+ *   Included        12% used          ░░░░
+ *     Auto          20% used          ░░░░
+ *     API           3% used           ░░░░
+ */
+export function parseCursorUsage(screen: string, observedAt: number): AgentUsage {
+  const text = screen.replace(ANSI, '');
+  const start = text.lastIndexOf('Usage •');
+  if (start < 0) throw new Error('Cursor did not show its usage');
+  const panel = text.slice(start).split(/\r?\n/);
+  const header = /^Usage • (.+?)(?:\s{2,}Resets (.+?))?\s*$/.exec(panel[0]!.trim());
+  const plan = header?.[1]?.trim() || null;
+  const resets = header?.[2]?.trim() || null;
+  const windows: UsageWindow[] = [];
+  for (const line of panel) {
+    const match = /^\s*(Auto|API|Included)\s+(\d+(?:\.\d+)?)% used/.exec(line);
+    const label = match && CURSOR_METERS[match[1]!];
+    if (!label || windows.some((window) => window.label === label)) continue;
+    windows.push({ label, usedPercent: Number(match[2]), resets });
+  }
+  // Auto and API first: they are the two pools, and the sidebar shows the first two.
+  windows.sort((a, b) => Number(a.label === 'Month') - Number(b.label === 'Month'));
+  return { agent: 'cursor', plan, windows, observedAt, detailsUrl: CURSOR_USAGE_URL };
+}
+
+/**
+ * Opens Cursor's terminal UI in a hidden terminal, runs its `/usage` (which calls no
+ * model) and returns what it drew. Cursor offers its usage nowhere else but a private
+ * API; this reads it the way the user would. The empty chat Cursor records for the
+ * scratch folder is removed afterwards.
+ */
+async function runCursorUsageCommand(env: Env): Promise<string> {
+  const cursorPath =
+    (await findExecutable('cursor-agent', env)) ?? (await findExecutable('agent', env));
+  if (!cursorPath) throw new Error('Cursor CLI not found');
+  const cwd = path.join(os.tmpdir(), 'emdash-usage-probe');
+  await mkdir(cwd, { recursive: true });
+  try {
+    return await driveCursorUsage(cursorPath, cwd, env);
+  } finally {
+    // Cursor keeps chats in ~/.cursor/chats/<md5 of the folder>.
+    const folder = await realpath(cwd).catch(() => cwd);
+    const chats = path.join(env.home, '.cursor', 'chats');
+    const hash = createHash('md5').update(folder).digest('hex');
+    await rm(path.join(chats, hash), { recursive: true, force: true });
+  }
+}
+
+const CURSOR_PROBE_TIMEOUT_MS = 30_000;
+
+function driveCursorUsage(cursorPath: string, cwd: string, env: Env): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const pty = nodePty.spawn(cursorPath, ['--trust'], {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 50,
+      cwd,
+      env: buildTerminalEnv({ baseEnv: env.env }),
+    });
+    let output = '';
+    let stage: 'starting' | 'asked' | 'done' = 'starting';
+    let quiet: NodeJS.Timeout | undefined;
+    const finish = (error: Error | null) => {
+      if (stage === 'done') return;
+      stage = 'done';
+      clearTimeout(quiet);
+      clearTimeout(deadline);
+      pty.kill();
+      if (error) reject(error);
+      else resolve(output);
+    };
+    const deadline = setTimeout(
+      () => finish(new Error('Cursor did not show its usage in time')),
+      CURSOR_PROBE_TIMEOUT_MS
+    );
+    pty.onData((data) => {
+      output += data;
+      // Answer what a terminal would, or the UI waits: cursor position, device
+      // attributes, colors.
+      if (data.includes('\x1b[6n')) pty.write('\x1b[1;1R');
+      if (data.includes('\x1b[c')) pty.write('\x1b[?1;2c');
+      if (data.includes('\x1b]11;?')) pty.write('\x1b]11;rgb:0000/0000/0000\x07');
+      if (data.includes('\x1b]10;?')) pty.write('\x1b]10;rgb:ffff/ffff/ffff\x07');
+      if (stage === 'starting') {
+        // Ready once it has drawn and gone quiet.
+        clearTimeout(quiet);
+        quiet = setTimeout(() => {
+          stage = 'asked';
+          pty.write('/usage');
+          setTimeout(() => pty.write('\r'), 500);
+        }, 1_500);
+      } else if (stage === 'asked' && /Usage •[\s\S]*Esc to close/.test(output.replace(ANSI, ''))) {
+        finish(null);
+      }
+    });
+    pty.onExit(() => finish(new Error('Cursor exited before showing its usage')));
+  });
 }
 
 async function runCursorAboutCommand(env: Env): Promise<string> {

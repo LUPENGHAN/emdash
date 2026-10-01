@@ -1127,6 +1127,7 @@
     "Model…": "模型…",
     "Modified": "已修改",
     "Monitor local host resources and required system dependencies.": "监控本地主机资源和所需的系统依赖。",
+    "Month": "月",
     "More Claude or ChatGPT accounts to run Claude Code or Codex on, picked like a provider. Each keeps its own sign-in; sessions, settings, skills and MCP servers stay shared, so a conversation can resume on another account. Your usual login stays the default.": "让 Claude Code 或 Codex 用上更多 Claude / ChatGPT 账号，选择方式和 Provider 一样。每个账号各自保存登录；会话、设置、技能和 MCP 服务器共享，所以对话可以换到另一个账号上继续。你平时的登录仍是默认。",
     "More accurate about where the work stands, but it spends that agent's quota and takes a minute or two. Leave it off when the agent is out of quota.": "对进度的描述更准确，但会花原 agent 的额度，大约要一两分钟。原 agent 额度用完时不要勾选。",
     "More info about auto-trust worktrees": "关于自动信任工作树的更多信息",
