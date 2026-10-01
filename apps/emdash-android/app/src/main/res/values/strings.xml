@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Emdash</string>
+    <string name="add_title">Add a computer</string>
+    <string name="add_message">In Emdash on your computer, open Settings → Remote access and copy the link. Paste it here, or share it to this app. You only do this once per computer.</string>
+    <string name="link_hint">http://…/connect?token=…</string>
+    <string name="invalid_link">Not an Emdash link. It looks like http://address:port/connect?token=…</string>
+    <string name="connect">Connect</string>
+    <string name="unreachable_title">Can\'t reach %1$s</string>
+    <string name="unreachable_message">Check that Emdash is running on it and that this phone is on the same network (EasyTier, Tailscale, Wi-Fi). It keeps trying while this app is open.</string>
+    <string name="signed_out_title">Signed out of %1$s</string>
+    <string name="signed_out_message">Its link was replaced in Emdash. Copy the new link from Settings → Remote access and paste it here.</string>
+    <string name="retry">Retry</string>
+    <string name="computers">Computers</string>
+    <string name="add_computer">Add a computer…</string>
+    <string name="reload">Reload</string>
+    <string name="remove_computer">Remove %1$s</string>
+    <string name="remove_confirm">Remove %1$s from this phone? You\'ll need its link again to reconnect.</string>
+    <string name="remove">Remove</string>
+    <string name="exit">Exit</string>
+</resources>

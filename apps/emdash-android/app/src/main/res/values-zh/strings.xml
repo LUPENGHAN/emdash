@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="add_title">添加电脑</string>
+    <string name="add_message">在电脑上的 Emdash 打开 设置 → 远程访问，复制链接，粘贴到这里，或者分享给本 App。每台电脑只需要做一次。</string>
+    <string name="invalid_link">不是 Emdash 链接。它应该像 http://地址:端口/connect?token=…</string>
+    <string name="connect">连接</string>
+    <string name="unreachable_title">连不上 %1$s</string>
+    <string name="unreachable_message">请确认那台电脑上的 Emdash 正在运行，且手机和它在同一个网络（EasyTier、Tailscale、Wi-Fi）。App 打开期间会一直自动重试。</string>
+    <string name="signed_out_title">已退出 %1$s</string>
+    <string name="signed_out_message">Emdash 里的链接已被更换。请到 设置 → 远程访问 复制新链接，粘贴到这里。</string>
+    <string name="retry">重试</string>
+    <string name="computers">电脑</string>
+    <string name="add_computer">添加电脑…</string>
+    <string name="reload">重新加载</string>
+    <string name="remove_computer">移除 %1$s</string>
+    <string name="remove_confirm">从这台手机移除 %1$s？之后需要再次使用它的链接才能连接。</string>
+    <string name="remove">移除</string>
+    <string name="exit">退出</string>
+</resources>
