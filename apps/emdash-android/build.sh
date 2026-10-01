@@ -2,10 +2,12 @@
 # Builds the Emdash Android app into apps/emdash-android/Emdash.apk.
 #   --install  also installs it on the phones adb sees (USB or wireless debugging)
 #   --serve    also serves it over HTTP, to download in the phone's browser
-# Needs the Android SDK (ANDROID_HOME, or Android Studio's default location) and JDK 17+.
+# Needs the Android SDK (ANDROID_HOME, or Android Studio's default location) and JDK 17+;
+# both can be set in ~/.config/emdash-fork/config.
 set -euo pipefail
 
-cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+script="$(readlink -f "${BASH_SOURCE[0]}")"
+cd "$(dirname "$script")"
 
 install=0
 serve=0
@@ -14,7 +16,7 @@ for arg in "$@"; do
     --install) install=1 ;;
     --serve) serve=1 ;;
     -h | --help)
-      sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,6p' "$script" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -24,6 +26,15 @@ for arg in "$@"; do
   esac
 done
 
+# Personal settings (ANDROID_HOME, JAVA_HOME), shared with emdash-update.
+config="$HOME/.config/emdash-fork/config"
+if [ -f "$config" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "$config"
+  set +a
+fi
+
 export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 if [ ! -d "$ANDROID_HOME/platforms" ]; then
   echo "No Android SDK at $ANDROID_HOME; set ANDROID_HOME." >&2
@@ -32,6 +43,11 @@ fi
 if [ -z "${JAVA_HOME:-}" ] && [ -x /usr/libexec/java_home ]; then
   JAVA_HOME="$(/usr/libexec/java_home -v 17+ 2>/dev/null || true)"
   export JAVA_HOME
+fi
+# Android Studio's own JDK, when no other is installed.
+studio_jdk="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+if [ -z "${JAVA_HOME:-}" ] && [ -x "$studio_jdk/bin/java" ]; then
+  export JAVA_HOME="$studio_jdk"
 fi
 
 ./gradlew --quiet assembleDebug

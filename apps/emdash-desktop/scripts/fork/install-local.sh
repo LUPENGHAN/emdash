@@ -6,9 +6,37 @@ set -euo pipefail
 
 app_dir="$(cd "$(dirname "$0")/../.." && pwd)"
 repo_root="$(cd "$app_dir/../.." && pwd)"
-bundle="$app_dir/release/mac-arm64/Emdash Fork.app"
+
+# Personal settings (e.g. the signing identity); see FORK-GUIDE.md.
+config="$HOME/.config/emdash-fork/config"
+if [ -f "$config" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "$config"
+  set +a
+fi
 
 cd "$repo_root"
+# The app is built for the architecture its native modules (better-sqlite3) were
+# compiled for by `pnpm install`: that of pnpm's pinned Node, arm64 on Apple silicon
+# and x64 on Intel (EMDASH_FORK_ARCH overrides it only for a checkout whose
+# dependencies were installed for that architecture). electron-builder names the folder
+# mac-arm64 or mac (x64).
+arch="${EMDASH_FORK_ARCH:-$(pnpm exec node -p process.arch)}"
+case "$arch" in
+  arm64) release_dir="$app_dir/release/mac-arm64" ;;
+  x64) release_dir="$app_dir/release/mac" ;;
+  *)
+    echo "Unsupported architecture: $arch (expected arm64 or x64)" >&2
+    exit 1
+    ;;
+esac
+if [ "$arch" = x64 ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+  echo "Note: building for Intel (x64) on Apple silicon, so it runs under Rosetta." >&2
+  echo "      A Terminal opened with Rosetta runs x64 Node; open it natively for arm64." >&2
+fi
+bundle="$release_dir/Emdash Fork.app"
+
 pnpm run build >/dev/null # workspace packages (desktop output is rebuilt below)
 
 cd "$app_dir"
@@ -18,16 +46,17 @@ cd "$app_dir"
 upstream_ref="$(git rev-parse --verify --quiet upstream/main || true)"
 fork_commits="$(git rev-list --count "${upstream_ref:+$upstream_ref..}HEAD")"
 fork_version="fork.${fork_commits} ($(git rev-parse --short=7 HEAD)$(test -z "$(git status --porcelain)" || echo '+dirty'))"
-echo "Building Emdash Fork $(node -p 'require("./package.json").version') · $fork_version"
+echo "Building Emdash Fork $(pnpm exec node -p 'require("./package.json").version') · $fork_version ($arch)"
 VITE_BUILD=fork VITE_FORK_VERSION="$fork_version" pnpm exec electron-vite build >/dev/null
-rm -rf release/mac-arm64
-CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac dir --arm64 \
+rm -rf "$release_dir"
+CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac dir "--$arch" \
   --publish never --config electron-builder.fork.config.ts
 # Sign with a stable identity when one is configured, so macOS privacy and keychain
 # grants (Documents access for the login shell, the fork's Safe Storage item) survive
 # rebuilds; ad-hoc signatures change on every build and re-prompt. The identity (name or
-# SHA-1, e.g. an "Apple Development" certificate) comes from $EMDASH_FORK_SIGN_IDENTITY,
-# else ~/.config/emdash-fork/sign-identity, else a certificate named "Emdash Fork Local".
+# SHA-1, e.g. an "Apple Development" certificate) comes from $EMDASH_FORK_SIGN_IDENTITY
+# (also settable in ~/.config/emdash-fork/config), else ~/.config/emdash-fork/sign-identity,
+# else a certificate named "Emdash Fork Local".
 identity_file="$HOME/.config/emdash-fork/sign-identity"
 sign_identity="${EMDASH_FORK_SIGN_IDENTITY:-}"
 if [ -z "$sign_identity" ] && [ -s "$identity_file" ]; then
@@ -77,7 +106,7 @@ for skill in "$app_dir"/scripts/fork/skills/*/; do
   fi
 done
 # Leave a single registered copy so Launch Services opens the installed one.
-rm -rf "$app_dir/release/mac-arm64"
+rm -rf "$release_dir"
 # Launch with a clean environment, as the Dock would: `open` otherwise hands the
 # caller's environment (e.g. ANTHROPIC_BASE_URL) to the app and its agents.
 env -i HOME="$HOME" USER="$USER" PATH=/usr/bin:/bin:/usr/sbin:/sbin \

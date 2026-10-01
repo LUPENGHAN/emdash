@@ -1,5 +1,7 @@
 # Emdash for Android
 
+Step-by-step setup (in Chinese): [FORK-GUIDE.md](../../FORK-GUIDE.md#五安卓-app).
+
 A small app that opens Emdash's remote access (Settings → Remote access) on a phone, full
 screen, without a browser.
 
