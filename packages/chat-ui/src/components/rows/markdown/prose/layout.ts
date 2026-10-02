@@ -180,7 +180,7 @@ export function layoutProse(
       // (translate(-50%, -50%)) for true horizontal + vertical centering.
       x: indent,
       top: lineHeight / 2,
-      char: '•',
+      char: block.marker ?? '•',
     };
   }
 

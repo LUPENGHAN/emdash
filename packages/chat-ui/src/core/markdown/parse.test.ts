@@ -301,3 +301,15 @@ describe('reference-style links and images', () => {
     expect(textSegments(runs).join('')).toContain('[text][missing]');
   });
 });
+
+describe('lists', () => {
+  const items = (text: string) =>
+    parseMarkdownToBlocks('t', text, nullProvider).filter(
+      (b): b is ProseBlock => b.kind === 'prose' && b.variant === 'list-item'
+    );
+
+  it('numbers ordered list items from their start, and bullets the rest', () => {
+    expect(items('3. three\n4. four').map((b) => b.marker)).toEqual(['3.', '4.']);
+    expect(items('- a\n- b').map((b) => b.marker)).toEqual([undefined, undefined]);
+  });
+});
