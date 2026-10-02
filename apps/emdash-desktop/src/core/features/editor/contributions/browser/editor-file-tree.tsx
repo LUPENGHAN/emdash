@@ -27,6 +27,7 @@ import {
   Circle,
   Copy,
   CopyMinus,
+  Download,
   FilePen,
   FilePlus,
   FileText,
@@ -51,6 +52,7 @@ import type { FilesStore } from '@core/features/editor/browser/task-editor/store
 import { FileIcon } from '@core/features/editor/contributions/browser/file-icon';
 import { fileTreeScope } from '@core/features/editor/contributions/scopes';
 import { getFilesClient } from '@core/features/files/api/browser/client';
+import { downloadFile } from '@core/features/files/api/browser/download-file';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { gitCheckoutStoreToken } from '@core/features/source-control/contributions/browser/workspace-store-tokens';
 import { openFile as openWorkbenchFile } from '@core/features/workbench/api/browser/open-file';
@@ -81,6 +83,8 @@ import { useViewScope } from '@core/primitives/view-scopes/react';
 
 const MAX_COPY_FILE_BYTES = 10 * 1024 * 1024;
 const PLATFORM = detectPlatformContext().os;
+/** In a browser (remote access) the computer's own file manager is out of reach. */
+const IN_DESKTOP_APP = typeof navigator !== 'undefined' && /Electron\//.test(navigator.userAgent);
 const REVEAL_LABEL =
   PLATFORM === 'mac'
     ? 'Show in Finder'
@@ -571,6 +575,16 @@ export const EditorFileTree = observer(function EditorFileTree() {
     }
   };
 
+  const downloadToDevice = (node: FileTreeNode) => {
+    toast.promise(downloadFile(hostFileRefFromNativePath(node.path, workspace.sshConnectionId)), {
+      loading: `Downloading ${node.name}…`,
+      success: (downloaded) =>
+        downloaded.savedTo ? `Saved to ${downloaded.savedTo}` : `Downloaded ${downloaded.name}`,
+      error: (error) =>
+        error instanceof Error ? error.message : 'The file could not be downloaded.',
+    });
+  };
+
   const revealInFileManager = async (node: FileTreeNode) => {
     try {
       const result = await (
@@ -697,12 +711,21 @@ export const EditorFileTree = observer(function EditorFileTree() {
       }
     );
     if (isOpenableFileTreeNode(node)) {
-      items.push({
-        id: 'copy-file',
-        label: 'Copy Contents',
-        icon: <FileText size={14} />,
-        onSelect: () => void copyFile(node),
-      });
+      items.push(
+        {
+          id: 'copy-file',
+          label: 'Copy Contents',
+          icon: <FileText size={14} />,
+          onSelect: () => void copyFile(node),
+        },
+        {
+          // To this device: the point of it from a phone or another computer's browser.
+          id: 'download',
+          label: 'Download',
+          icon: <Download size={14} />,
+          onSelect: () => downloadToDevice(node),
+        }
+      );
     }
     items.push(
       {
@@ -718,7 +741,7 @@ export const EditorFileTree = observer(function EditorFileTree() {
         onSelect: () => void copyRelativePath(node),
       }
     );
-    if (!workspace.sshConnectionId) {
+    if (!workspace.sshConnectionId && IN_DESKTOP_APP) {
       items.push({
         id: 'reveal',
         label: REVEAL_LABEL,
