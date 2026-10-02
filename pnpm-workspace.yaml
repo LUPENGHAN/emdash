@@ -1,3 +1,8 @@
 packages:
   - 'apps/*'
   - 'packages/**'
+
+# A Latin word after a full-width opening bracket ("（brute force）") broke per letter in
+# the chat's text layout; see the patch.
+patchedDependencies:
+  '@chenglou/pretext@0.0.8': patches/@chenglou__pretext@0.0.8.patch

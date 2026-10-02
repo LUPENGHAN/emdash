@@ -1,0 +1,34 @@
+diff --git a/dist/layout.js b/dist/layout.js
+index 957e2f04ee268f4a93bfc4b4d53f237c864c04a4..4bcf45ed56b84f311051d5bd5f36bf48f41f0474 100644
+--- a/dist/layout.js
++++ b/dist/layout.js
+@@ -107,7 +107,11 @@ function buildBaseCjkUnits(segText, engineProfile) {
+     }
+     function appendToUnit(grapheme, graphemeContainsCJK) {
+         unitParts.push(grapheme);
+-        unitContainsCJK = unitContainsCJK || graphemeContainsCJK;
++        // A lone opening bracket ("（", "「") takes the script of what follows, so a Latin
++        // word after it ("（brute force）") stays whole instead of breaking per letter.
++        unitContainsCJK = unitIsSingleKinsokuEnd
++            ? graphemeContainsCJK
++            : unitContainsCJK || graphemeContainsCJK;
+         const graphemeEndsWithClosingQuote = endsWithClosingQuote(grapheme);
+         if (grapheme.length === 1 && leftStickyPunctuation.has(grapheme)) {
+             unitEndsWithClosingQuote = unitEndsWithClosingQuote || graphemeEndsWithClosingQuote;
+diff --git a/src/layout.ts b/src/layout.ts
+index 95b1b0ab588233144c5514e1904f632bd164072d..ef0493039981a06e28d116a9e5a4d437231c4af5 100644
+--- a/src/layout.ts
++++ b/src/layout.ts
+@@ -240,7 +240,11 @@ function buildBaseCjkUnits(
+ 
+   function appendToUnit(grapheme: string, graphemeContainsCJK: boolean): void {
+     unitParts.push(grapheme)
+-    unitContainsCJK = unitContainsCJK || graphemeContainsCJK
++    // A lone opening bracket ("（", "「") takes the script of what follows, so a Latin
++    // word after it ("（brute force）") stays whole instead of breaking per letter.
++    unitContainsCJK = unitIsSingleKinsokuEnd
++      ? graphemeContainsCJK
++      : unitContainsCJK || graphemeContainsCJK
+     const graphemeEndsWithClosingQuote = endsWithClosingQuote(grapheme)
+     if (grapheme.length === 1 && leftStickyPunctuation.has(grapheme)) {
+       unitEndsWithClosingQuote = unitEndsWithClosingQuote || graphemeEndsWithClosingQuote

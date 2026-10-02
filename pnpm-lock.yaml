@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@chenglou/pretext@0.0.8':
+    hash: 06766c2f78b979000cf09a8eb92368359a2a2c45073c83a78a1242d59bc93816
+    path: patches/@chenglou__pretext@0.0.8.patch
+
 importers:
 
   .:
@@ -354,7 +359,7 @@ importers:
     dependencies:
       '@chenglou/pretext':
         specifier: ^0.0.8
-        version: 0.0.8
+        version: 0.0.8(patch_hash=06766c2f78b979000cf09a8eb92368359a2a2c45073c83a78a1242d59bc93816)
       '@emdash/core':
         specifier: workspace:*
         version: link:../core
@@ -9407,7 +9412,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@chenglou/pretext@0.0.8': {}
+  '@chenglou/pretext@0.0.8(patch_hash=06766c2f78b979000cf09a8eb92368359a2a2c45073c83a78a1242d59bc93816)': {}
 
   '@csstools/color-helpers@6.0.2': {}
 
