@@ -11,14 +11,16 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent">
 
+        <!-- A narrow tab on the screen's edge (styled by side in MainActivity), slimmer
+             than the page's side margin so it does not cover text. -->
         <ImageView
             android:id="@+id/bubble"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="@drawable/bubble_background"
+            android:layout_width="26dp"
+            android:layout_height="44dp"
             android:contentDescription="@string/computers"
-            android:elevation="6dp"
-            android:padding="9dp"
+            android:elevation="4dp"
+            android:paddingHorizontal="5dp"
+            android:paddingVertical="13dp"
             android:src="@drawable/ic_devices"
             android:visibility="gone" />
     </FrameLayout>

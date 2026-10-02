@@ -589,8 +589,22 @@ public class MainActivity extends Activity implements Session.Listener {
     private void placeBubble() {
         boolean left = prefs.getBoolean("bubble_left", false);
         float share = prefs.getFloat("bubble_y", 0.3f);
-        bubble.setX(left ? dp(6) : maxBubbleX() - dp(6));
+        styleBubble(left);
+        bubble.setX(left ? 0 : maxBubbleX());
         bubble.setY(clamp(share * maxBubbleY(), 0, maxBubbleY()));
+    }
+
+    /** A tab flush with the edge it sits on: rounded on the inner side only. */
+    private void styleBubble(boolean left) {
+        float r = dp(12);
+        GradientDrawable tab = new GradientDrawable();
+        tab.setColor(getColor(R.color.bubble));
+        tab.setStroke(dp(1), getColor(R.color.border));
+        tab.setCornerRadii(
+                left
+                        ? new float[] {0, 0, r, r, r, r, 0, 0}
+                        : new float[] {r, r, 0, 0, 0, 0, r, r});
+        bubble.setBackground(tab);
     }
 
     private void settleBubble() {
@@ -598,7 +612,8 @@ public class MainActivity extends Activity implements Session.Listener {
                 bubble.getX() + bubble.getLayoutParams().width / 2f < webContainer.getWidth() / 2f;
         float share = maxBubbleY() > 0 ? bubble.getY() / maxBubbleY() : 0.3f;
         prefs.edit().putBoolean("bubble_left", left).putFloat("bubble_y", share).apply();
-        bubble.animate().x(left ? dp(6) : maxBubbleX() - dp(6)).setDuration(150).start();
+        styleBubble(left);
+        bubble.animate().x(left ? 0 : maxBubbleX()).setDuration(150).start();
     }
 
     // Its own size, not getWidth(): it measures 0 while hidden, which is when it is placed.
