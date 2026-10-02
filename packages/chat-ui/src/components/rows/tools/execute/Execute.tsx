@@ -88,6 +88,8 @@ export function ExecuteBody(props: ExecuteBodyProps) {
 
   return (
     <div
+      // Command output, as printed.
+      translate="no"
       class={executeBody}
       style={{
         height: `${props.bodyH}px`,

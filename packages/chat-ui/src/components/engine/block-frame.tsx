@@ -76,6 +76,9 @@ export function BlockFrame(props: BlockFrameProps) {
         props.ref?.(e);
       }}
       data-block-id={blockId}
+      // The agent's words and code: never for a page translator (e.g. the host's UI
+      // translation, which would turn a code token like `Error` into its own word).
+      translate="no"
       class={`${pblock}${props.class ? ` ${props.class}` : ''}`}
       style={{
         ...props.style,

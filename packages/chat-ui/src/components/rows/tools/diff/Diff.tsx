@@ -171,7 +171,7 @@ export function DiffLines(props: DiffLinesProps) {
   const lineH = () => props.codeLineHeight();
 
   return (
-    <div class={diffBodyCard}>
+    <div class={diffBodyCard} translate="no">
       <div class={pdiffBody}>
         <For each={props.layout.previewRows}>
           {(row, i) => (

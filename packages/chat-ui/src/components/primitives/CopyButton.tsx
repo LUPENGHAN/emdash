@@ -29,6 +29,7 @@ export function CopyButton(props: CopyButtonProps) {
     return (
       <button
         type="button"
+        translate="yes"
         class={copyButtonOverlay}
         aria-label={ariaLabel()}
         onClick={() => copy(props.text)}
@@ -43,6 +44,7 @@ export function CopyButton(props: CopyButtonProps) {
   return (
     <button
       type="button"
+      translate="yes"
       class={copyButtonInline}
       aria-label={ariaLabel()}
       onClick={() => copy(props.text)}
