@@ -12,6 +12,8 @@ screen, without a browser.
   online; tap one to open it, long-press to rename, reload or remove it. A small floating
   button on the page (drag it out of the way) or Back on Emdash's first screen returns to the
   list. Each computer's page stays loaded, so switching back picks up where it was.
+- **Downloads.** Long-press a file in Emdash's file tree and choose Download: it is saved to
+  the phone's Downloads folder (up to 100 MB a file).
 - **Plain HTTP over a private network.** Computers are reached by address on EasyTier,
   Tailscale or the LAN, so HTTP is allowed (no certificate needed).
 - **Reconnects by itself.** If a computer can't be reached, the app retries every 10 seconds

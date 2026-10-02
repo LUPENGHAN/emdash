@@ -53,7 +53,12 @@ final class Session {
     private final Listener listener;
 
     @SuppressLint("SetJavaScriptEnabled")
-    Session(Context context, Computers.Computer computer, String userAgentSuffix, Listener listener) {
+    Session(
+            Context context,
+            Computers.Computer computer,
+            String userAgentSuffix,
+            FileBridge files,
+            Listener listener) {
         this.computer = computer;
         this.listener = listener;
         web = new WebView(context);
@@ -62,6 +67,9 @@ final class Session {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setUserAgentString(settings.getUserAgentString() + userAgentSuffix);
+        // Downloads of the computer's files; links out of Emdash leave for the browser, so
+        // only Emdash's own page ever sees it.
+        web.addJavascriptInterface(files, "EmdashAndroidFiles");
 
         web.setWebViewClient(
                 new WebViewClient() {

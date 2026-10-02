@@ -68,6 +68,7 @@ public class MainActivity extends Activity implements Session.Listener {
     }
 
     private Computers computers;
+    private FileBridge files;
     private SharedPreferences prefs;
     private final Map<String, Session> sessions = new HashMap<>();
     private final Map<String, Reachability> reachability = new HashMap<>();
@@ -118,6 +119,7 @@ public class MainActivity extends Activity implements Session.Listener {
         CookieManager.getInstance().setAcceptCookie(true);
 
         computers = new Computers(this);
+        files = new FileBridge(this);
         prefs = getSharedPreferences("ui", MODE_PRIVATE);
         webContainer = findViewById(R.id.web_container);
         devices = findViewById(R.id.devices);
@@ -210,7 +212,7 @@ public class MainActivity extends Activity implements Session.Listener {
         computers.select(computer);
         Session session = sessions.get(computer.baseUrl);
         if (session == null) {
-            session = new Session(this, computer, " EmdashAndroid/" + version(), this);
+            session = new Session(this, computer, " EmdashAndroid/" + version(), files, this);
             sessions.put(computer.baseUrl, session);
             // Under the floating button, which is the container's last child.
             webContainer.addView(
