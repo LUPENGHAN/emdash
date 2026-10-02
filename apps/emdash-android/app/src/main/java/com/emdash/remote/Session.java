@@ -67,6 +67,9 @@ final class Session {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setUserAgentString(settings.getUserAgentString() + userAgentSuffix);
+        // Emdash's chat lays text out itself, at the font sizes its styles name; a WebView
+        // scales text by the system font size (text zoom), so lines would overlap.
+        settings.setTextZoom(100);
         // Downloads of the computer's files; links out of Emdash leave for the browser, so
         // only Emdash's own page ever sees it.
         web.addJavascriptInterface(files, "EmdashAndroidFiles");
