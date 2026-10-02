@@ -19,7 +19,11 @@ export const popupContent = style({
   zIndex: 50,
   display: 'flex',
   transformOrigin: 'var(--transform-origin)',
-  overflow: 'hidden',
+  // Never wider or taller than the room beside the trigger (a phone's narrow screen
+  // otherwise cut fixed-width popovers off at the edge); scroll what does not fit.
+  maxWidth: 'var(--available-width)',
+  maxHeight: 'var(--available-height)',
+  overflow: 'auto',
   flexDirection: 'column',
   gap: '1rem',
   borderRadius: tokenVars.radiusMd,
