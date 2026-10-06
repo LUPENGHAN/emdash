@@ -131,6 +131,20 @@
                 android:textColorHint="@color/muted"
                 android:textSize="14sp" />
 
+            <!-- With an address instead of a link: the access key set on the computers. -->
+            <EditText
+                android:id="@+id/key_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:hint="@string/key_hint"
+                android:importantForAutofill="no"
+                android:inputType="textPassword"
+                android:maxLines="1"
+                android:textColor="@color/foreground"
+                android:textColorHint="@color/muted"
+                android:textSize="14sp" />
+
             <Button
                 android:id="@+id/primary_button"
                 android:layout_width="match_parent"

@@ -21,9 +21,17 @@ screen, without a browser.
 
 ## Add a computer
 
-Copy the link from Emdash → Settings → Remote access (`http://address:port/connect?token=…`)
-and paste it in the app (a copied link fills in by itself), share it to the app, or tap it
-in another app and choose Emdash.
+Either:
+
+- **Address and access key.** Set the same access key on each computer (Emdash → Settings →
+  Remote access), then enter a computer's address (`10.126.126.3:7788`; port 7788 may be left
+  out) and the key. The app remembers the key, so other computers take only their address.
+- **Link.** Copy the link from Emdash → Settings → Remote access
+  (`http://address:port/connect?token=…`) and paste it in the app (a copied link fills in by
+  itself), share it to the app, or tap it in another app and choose Emdash.
+
+Each signed-in phone gets a sign-in of its own, listed on the computer under Signed-in devices,
+where it can be signed out alone.
 
 ## Build and install
 

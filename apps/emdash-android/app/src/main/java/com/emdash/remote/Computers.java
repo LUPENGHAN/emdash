@@ -26,15 +26,31 @@ final class Computers {
             this.name = name;
         }
 
-        /** Signs in (the server trades the token for its cookie) and opens Emdash. */
+        /**
+         * Signs in (the server trades the token for its cookie) and opens Emdash. The
+         * install's id and the phone's name keep one entry in the computer's device list.
+         */
         String connectUrl() {
-            return baseUrl + "/connect?token=" + Uri.encode(token);
+            return baseUrl
+                    + "/connect?token="
+                    + Uri.encode(token)
+                    + "&client="
+                    + Uri.encode(clientId)
+                    + "&name="
+                    + Uri.encode(deviceName);
         }
 
         String label() {
             return name != null && !name.isEmpty() ? name : Uri.parse(baseUrl).getAuthority();
         }
     }
+
+    /** This app install, and the phone's name, as computers list it among their devices. */
+    static String clientId = "";
+    static String deviceName = "Android";
+
+    /** Remote access's default port, for an address typed without one. */
+    static final int DEFAULT_PORT = 7788;
 
     private static final String KEY_LIST = "computers";
     private static final String KEY_CURRENT = "current";
@@ -51,7 +67,7 @@ final class Computers {
      */
     static Computer parseLink(String text) {
         if (text == null) return null;
-        for (String word : text.trim().split("\\s+")) {
+        for (String word : halfWidth(text).trim().split("\\s+")) {
             Uri uri = Uri.parse(word);
             String scheme = uri.getScheme();
             if (!"http".equals(scheme) && !"https".equals(scheme)) continue;
@@ -61,6 +77,35 @@ final class Computers {
             return new Computer(scheme + "://" + uri.getAuthority(), token, null);
         }
         return null;
+    }
+
+    /**
+     * A computer's address as typed ("10.126.126.3", "mac.lan:7788", "https://emdash.example.com"):
+     * its base URL, plain HTTP and port 7788 unless given. Null if it is not an address.
+     */
+    static String parseAddress(String text) {
+        if (text == null) return null;
+        String trimmed = halfWidth(text).trim();
+        if (trimmed.isEmpty() || trimmed.contains(" ")) return null;
+        Uri uri = Uri.parse(trimmed.contains("://") ? trimmed : "http://" + trimmed);
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        if (host == null || host.isEmpty()) return null;
+        if (!"http".equals(scheme) && !"https".equals(scheme)) return null;
+        int port = uri.getPort();
+        if (port == -1 && "http".equals(scheme)) port = DEFAULT_PORT;
+        String hostPart = host.contains(":") ? "[" + host + "]" : host;
+        return scheme + "://" + hostPart + (port == -1 ? "" : ":" + port);
+    }
+
+    /**
+     * Text as an address needs it: a Chinese keyboard types "１０。０。２：７７８８" for
+     * "10.0.2:7788" (full-width digits, colon and the ideographic full stop).
+     */
+    static String halfWidth(String text) {
+        return java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFKC)
+                .replace('。', '.')
+                .replace('｡', '.');
     }
 
     List<Computer> all() {

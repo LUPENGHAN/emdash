@@ -58,6 +58,8 @@ public class MainActivity extends Activity implements Session.Listener {
     private static final int FILE_CHOOSER = 1;
     private static final long RETRY_MS = 10_000;
     private static final long PROBE_MS = 10_000;
+    private static final String KEY_ACCESS_KEY = "access_key";
+    private static final String KEY_INSTALL_ID = "install_id";
 
     /** What a computer's card says about it, from a quick request to its `/info`. */
     private enum Reachability {
@@ -83,6 +85,7 @@ public class MainActivity extends Activity implements Session.Listener {
     private TextView panelTitle;
     private TextView panelMessage;
     private EditText linkInput;
+    private EditText keyInput;
     private Button primaryButton;
     private Button secondaryButton;
     private View bubble;
@@ -128,6 +131,11 @@ public class MainActivity extends Activity implements Session.Listener {
         panelTitle = findViewById(R.id.panel_title);
         panelMessage = findViewById(R.id.panel_message);
         linkInput = findViewById(R.id.link_input);
+        keyInput = findViewById(R.id.key_input);
+        // A password field's hint would otherwise show in a monospace font.
+        keyInput.setTypeface(android.graphics.Typeface.DEFAULT);
+        Computers.clientId = installId();
+        Computers.deviceName = deviceName();
         primaryButton = findViewById(R.id.primary_button);
         secondaryButton = findViewById(R.id.secondary_button);
         bubble = findViewById(R.id.bubble);
@@ -297,24 +305,144 @@ public class MainActivity extends Activity implements Session.Listener {
         linkInput.setVisibility(needsLink ? View.VISIBLE : View.GONE);
         linkInput.setError(null);
         if (needsLink) linkInput.setText("");
+        keyInput.setVisibility(needsLink ? View.VISIBLE : View.GONE);
+        keyInput.setError(null);
+        // The key used before: adding another computer then takes only its address.
+        if (needsLink) keyInput.setText(prefs.getString(KEY_ACCESS_KEY, ""));
+        primaryButton.setEnabled(true);
         boolean hasComputers = !computers.all().isEmpty();
         secondaryButton.setVisibility(hasComputers ? View.VISIBLE : View.GONE);
         secondaryButton.setText(R.string.computers);
         secondaryButton.setOnClickListener(v -> showDevices());
     }
 
-    /** Adds the pasted link's computer, or gives a signed-out one its new link. */
+    /**
+     * Adds the pasted link's computer, or signs in at a typed address with the access key;
+     * for a signed-out computer, a new link or the key (its address is known) signs it in.
+     */
     private void connectFromInput(Session signedOut) {
-        Computers.Computer computer = Computers.parseLink(linkInput.getText().toString());
-        if (computer == null) {
+        String text = linkInput.getText().toString().trim();
+        Computers.Computer link = Computers.parseLink(text);
+        if (link != null) {
+            open(computers.save(link));
+            if (signedOut != null && current != null && current.status == Session.Status.SIGNED_OUT) {
+                current.connect();
+                render();
+            }
+            return;
+        }
+        String baseUrl =
+                text.isEmpty() && signedOut != null
+                        ? signedOut.computer.baseUrl
+                        : Computers.parseAddress(text);
+        if (baseUrl == null) {
             linkInput.setError(getString(R.string.invalid_link));
             return;
         }
-        open(computers.save(computer));
-        if (signedOut != null && current != null && current.status == Session.Status.SIGNED_OUT) {
-            current.connect();
-            render();
+        String key = keyInput.getText().toString();
+        if (key.isEmpty()) {
+            keyInput.setError(getString(R.string.key_needed));
+            return;
         }
+        primaryButton.setEnabled(false);
+        probes.execute(
+                () -> {
+                    PairResult result = pair(baseUrl, key);
+                    runOnUiThread(() -> onPaired(baseUrl, key, result));
+                });
+    }
+
+    /** What a computer answered an access key with. */
+    private static final class PairResult {
+        int status;
+        String token;
+        String name;
+        int remaining;
+        int retryAfterSeconds;
+    }
+
+    /** Signs this phone in at a computer with the access key (`POST /pair`). */
+    private PairResult pair(String baseUrl, String key) {
+        PairResult result = new PairResult();
+        try {
+            HttpURLConnection connection =
+                    (HttpURLConnection) new URL(baseUrl + "/pair").openConnection();
+            connection.setConnectTimeout(8_000);
+            connection.setReadTimeout(15_000);
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            JSONObject body = new JSONObject();
+            body.put("key", key);
+            body.put("client", Computers.clientId);
+            body.put("name", Computers.deviceName);
+            connection.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8));
+            result.status = connection.getResponseCode();
+            InputStream stream =
+                    result.status < 400 ? connection.getInputStream() : connection.getErrorStream();
+            JSONObject answer = stream == null ? new JSONObject() : new JSONObject(read(stream));
+            result.token = answer.optString("token", null);
+            result.name = answer.optString("name", null);
+            result.remaining = answer.optInt("remaining", 0);
+            result.retryAfterSeconds = answer.optInt("retryAfter", 0);
+            connection.disconnect();
+        } catch (Exception e) {
+            result.status = 0;
+        }
+        return result;
+    }
+
+    private void onPaired(String baseUrl, String key, PairResult result) {
+        if (isDestroyed()) return;
+        primaryButton.setEnabled(true);
+        if (result.status == 200 && result.token != null) {
+            prefs.edit().putString(KEY_ACCESS_KEY, key).apply();
+            // A name the user gave this computer stays; a new one takes the computer's own.
+            String name = result.name;
+            for (Computers.Computer known : computers.all()) {
+                if (known.baseUrl.equals(baseUrl) && known.name != null) name = known.name;
+            }
+            open(computers.save(new Computers.Computer(baseUrl, result.token, name)));
+            return;
+        }
+        switch (result.status) {
+            case 401:
+                keyInput.setError(getString(R.string.key_wrong, result.remaining));
+                break;
+            case 429:
+                keyInput.setError(
+                        getString(
+                                R.string.key_locked,
+                                Math.max(1, (result.retryAfterSeconds + 59) / 60)));
+                break;
+            case 404:
+                linkInput.setError(getString(R.string.key_off));
+                break;
+            default:
+                linkInput.setError(
+                        getString(R.string.pair_unreachable, Uri.parse(baseUrl).getAuthority()));
+                break;
+        }
+    }
+
+    /** This app install's id, made once: one entry in each computer's device list. */
+    private String installId() {
+        String id = prefs.getString(KEY_INSTALL_ID, null);
+        if (id == null) {
+            id = java.util.UUID.randomUUID().toString();
+            prefs.edit().putString(KEY_INSTALL_ID, id).apply();
+        }
+        return id;
+    }
+
+    /** "Google Pixel 9", as computers list this phone. */
+    private static String deviceName() {
+        String model = Build.MODEL == null ? "" : Build.MODEL;
+        String maker = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER;
+        if (maker.isEmpty() || model.toLowerCase().startsWith(maker.toLowerCase())) {
+            return model.isEmpty() ? "Android" : model;
+        }
+        return Character.toUpperCase(maker.charAt(0)) + maker.substring(1) + " " + model;
     }
 
     // ── Computer list ────────────────────────────────────────────────────────

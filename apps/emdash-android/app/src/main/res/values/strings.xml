@@ -2,14 +2,14 @@
 <resources>
     <string name="app_name">Emdash</string>
     <string name="add_title">Add a computer</string>
-    <string name="add_message">In Emdash on your computer, open Settings → Remote access and copy the link. Paste it here, or share it to this app. You only do this once per computer.</string>
-    <string name="link_hint">http://…/connect?token=…</string>
-    <string name="invalid_link">Not an Emdash link. It looks like http://address:port/connect?token=…</string>
+    <string name="add_message">Paste the link from Emdash → Settings → Remote access on your computer, or type the computer\'s address and the access key set there. A copied link fills in by itself.</string>
+    <string name="link_hint">Link, or address (e.g. 10.126.126.3:7788)</string>
+    <string name="invalid_link">Not an Emdash link or a computer\'s address.</string>
     <string name="connect">Connect</string>
     <string name="unreachable_title">Can\'t reach %1$s</string>
     <string name="unreachable_message">Check that Emdash is running on it and that this phone is on the same network (EasyTier, Tailscale, Wi-Fi). It keeps trying while this app is open.</string>
     <string name="signed_out_title">Signed out of %1$s</string>
-    <string name="signed_out_message">Its link was replaced in Emdash. Copy the new link from Settings → Remote access and paste it here.</string>
+    <string name="signed_out_message">This phone was signed out of it. Paste its new link from Settings → Remote access, or enter the access key.</string>
     <string name="retry">Retry</string>
     <string name="computers">Computers</string>
     <string name="add_computer">Add a computer…</string>
@@ -24,4 +24,10 @@
     <string name="status_checking">Checking…</string>
     <string name="status_open">Open</string>
     <string name="rename">Rename</string>
+    <string name="key_hint">Access key (with an address)</string>
+    <string name="key_needed">Enter the access key to sign in with an address.</string>
+    <string name="key_wrong">Wrong key. %1$d tries left.</string>
+    <string name="key_locked">Too many tries. Try again in %1$d min.</string>
+    <string name="key_off">This computer has no access key: paste its link instead.</string>
+    <string name="pair_unreachable">Can\'t reach %1$s.</string>
 </resources>
