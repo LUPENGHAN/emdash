@@ -15,6 +15,7 @@ export function SidebarSpace() {
             className="size-7 bg-background-tertiary-3 [-webkit-app-region:no-drag] hover:bg-background-tertiary-3 data-pressed:bg-background-tertiary-2"
             size="sm"
             icon
+            aria-label="Toggle left sidebar"
             pressed={isLeftOpen}
             onPressedChange={() => toggleLeftSidebar()}
           >

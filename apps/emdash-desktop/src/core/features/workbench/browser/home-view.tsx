@@ -2,6 +2,7 @@ import { menuItemBase } from '@emdash/ui/styles/recipes/menu-item';
 import { FolderOpen, Github, Plus, Server, type LucideIcon } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Fragment } from 'react';
+import { BorderlessTitlebar } from '@core/features/workbench/contributions/browser/BorderlessTitlebar';
 import { homeViewDef } from '@core/features/workbench/contributions/views';
 import { useOpenModal } from '@core/manifests/browser/modal-api';
 import { EmdashShimmerLogo } from '@core/primitives/app-identity/browser/emdash-shimmer-logo';
@@ -50,37 +51,42 @@ export function HomeMainPanel() {
   const isDark = effectiveTheme === 'emdark';
 
   return (
-    <motion.div
-      className="flex h-full flex-col overflow-y-auto bg-background text-foreground"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.5, ease: 'easeOut' }}
-    >
-      <div className="container mx-auto flex min-h-full max-w-6xl flex-1 flex-col justify-center px-8 py-8">
-        <div className="mb-3 text-center">
-          <div className="mb-3 flex items-center justify-center">
-            <EmdashShimmerLogo
-              height={32}
-              color={isDark ? 'var(--color-background-2)' : 'var(--color-foreground)'}
-              shimmerColor={isDark ? 'white' : 'var(--color-foreground-passive)'}
-            />
+    // The titlebar brings the sidebar back once it is closed: on a phone, where the
+    // sidebar covers the screen, the home page otherwise had no way to reopen it.
+    <div className="relative h-full">
+      <BorderlessTitlebar />
+      <motion.div
+        className="flex h-full flex-col overflow-y-auto bg-background text-foreground"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.5, ease: 'easeOut' }}
+      >
+        <div className="container mx-auto flex min-h-full max-w-6xl flex-1 flex-col justify-center px-8 py-8">
+          <div className="mb-3 text-center">
+            <div className="mb-3 flex items-center justify-center">
+              <EmdashShimmerLogo
+                height={32}
+                color={isDark ? 'var(--color-background-2)' : 'var(--color-foreground)'}
+                shimmerColor={isDark ? 'white' : 'var(--color-foreground-passive)'}
+              />
+            </div>
+          </div>
+          <div className="mx-auto mt-8 flex w-full max-w-md flex-col gap-1">
+            {PROJECT_ACTIONS.map((action, i) => (
+              <HomeProjectAction
+                key={action.label}
+                label={action.label}
+                description={action.description}
+                icon={action.icon}
+                isSelected={i === selectedIndex}
+                onMouseEnter={() => setSelectedIndex(i)}
+                onClick={() => void openAddProjectModal(action.modalArgs)}
+              />
+            ))}
           </div>
         </div>
-        <div className="mx-auto mt-8 flex w-full max-w-md flex-col gap-1">
-          {PROJECT_ACTIONS.map((action, i) => (
-            <HomeProjectAction
-              key={action.label}
-              label={action.label}
-              description={action.description}
-              icon={action.icon}
-              isSelected={i === selectedIndex}
-              onMouseEnter={() => setSelectedIndex(i)}
-              onClick={() => void openAddProjectModal(action.modalArgs)}
-            />
-          ))}
-        </div>
-      </div>
-    </motion.div>
+      </motion.div>
+    </div>
   );
 }
 
