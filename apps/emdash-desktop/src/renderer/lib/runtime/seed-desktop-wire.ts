@@ -83,11 +83,30 @@ async function openBrowserSocket(): Promise<WebSocket> {
   const socket = new WebSocket(`${scheme}://${window.location.host}/wire`);
   await new Promise<void>((resolve, reject) => {
     socket.addEventListener('open', () => resolve(), { once: true });
-    socket.addEventListener('error', () => reject(new Error('Could not reach Emdash')), {
-      once: true,
-    });
+    socket.addEventListener(
+      'error',
+      () => {
+        void reloadIfSignedOut();
+        reject(new Error('Could not reach Emdash'));
+      },
+      { once: true }
+    );
   });
   return socket;
+}
+
+/**
+ * A refused socket is either the network or this device being signed out on the
+ * computer: the server answers the latter with 401, and the reload shows its sign-in
+ * page at once instead of after every reconnect attempt.
+ */
+async function reloadIfSignedOut(): Promise<void> {
+  try {
+    const response = await fetch('/info', { cache: 'no-store' });
+    if (response.status === 401) window.location.reload();
+  } catch {
+    // Unreachable: keep reconnecting.
+  }
 }
 
 // Dev-server edits to seeding modules must not leave a stale connection behind.

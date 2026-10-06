@@ -1,11 +1,20 @@
 import { PageLayout } from '@emdash/ui/react/patterns';
-import { Button, Field, Input, Select, Switch, toast } from '@emdash/ui/react/primitives';
+import {
+  Button,
+  Field,
+  Input,
+  RelativeTime,
+  Select,
+  Switch,
+  toast,
+} from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import {
   ALL_ADDRESSES,
   DEFAULT_REMOTE_ACCESS_SETTINGS,
+  type RemoteAccessDevice,
   type RemoteAccessLink,
   type RemoteAccessStatus,
 } from '../api';
@@ -15,6 +24,9 @@ import { OtherComputersSection } from './other-computers-section';
 
 const STATUS_KEY = ['remoteAccessStatus'];
 const LINK_KEY = ['remoteAccessLink'];
+const DEVICES_KEY = ['remoteAccessDevices'];
+const ACCESS_KEY_KEY = ['remoteAccessKey'];
+const MIN_ACCESS_KEY_LENGTH = 12;
 
 export function RemoteAccessSettingsPage() {
   const queryClient = useQueryClient();
@@ -37,6 +49,7 @@ export function RemoteAccessSettingsPage() {
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: STATUS_KEY });
     void queryClient.invalidateQueries({ queryKey: LINK_KEY });
+    void queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
   };
   // The server restarts before the save returns, so the refreshed status is current.
   const save = async (next: Partial<typeof settings>) => {
@@ -139,7 +152,7 @@ export function RemoteAccessSettingsPage() {
                   void (async () => {
                     await (await getRemoteAccessClient()).regenerateToken();
                     refresh();
-                    toast.success('New link created; browsers using the old one were signed out');
+                    toast.success('New link created; every device was signed out');
                   })()
                 }
               >
@@ -148,9 +161,128 @@ export function RemoteAccessSettingsPage() {
             </div>
           </Field.Root>
         ) : null}
+        {settings.enabled ? <AccessKeySection /> : null}
+        {settings.enabled ? <DevicesSection /> : null}
       </Field.Group>
       <OtherComputersSection />
     </div>
+  );
+}
+
+/**
+ * The access key: the same one on all of a person's computers lets a phone or browser
+ * sign in with the address and the key, without copying each computer's link.
+ */
+function AccessKeySection() {
+  const queryClient = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ACCESS_KEY_KEY,
+    queryFn: async () => (await getRemoteAccessClient()).accessKey(),
+  });
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const isSet = data?.set ?? false;
+
+  const save = async (key: string | null) => {
+    try {
+      await (await getRemoteAccessClient()).setAccessKey({ key });
+      setDraft('');
+      setEditing(false);
+      toast.success(key === null ? 'Access key turned off' : 'Access key saved');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save the access key');
+    } finally {
+      void queryClient.invalidateQueries({ queryKey: ACCESS_KEY_KEY });
+    }
+  };
+
+  return (
+    <Field.Root>
+      <Field.Label>Access key</Field.Label>
+      {isSet && !editing ? (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-foreground">An access key is set</span>
+          <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
+            Change
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => void save(null)}>
+            Turn off
+          </Button>
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <Input
+            type="password"
+            autoComplete="new-password"
+            placeholder={`At least ${MIN_ACCESS_KEY_LENGTH} characters`}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <Button
+            variant="secondary"
+            disabled={draft.length < MIN_ACCESS_KEY_LENGTH}
+            onClick={() => void save(draft)}
+          >
+            Save
+          </Button>
+          {editing ? (
+            <Button variant="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          ) : null}
+        </div>
+      )}
+      <Field.Description>
+        Set the same key on each of your computers: a phone or browser then signs in with the
+        computer’s address and the key, no link needed. Five wrong keys lock that address out for 15
+        minutes; a new device signing in shows a notification here.
+      </Field.Description>
+    </Field.Root>
+  );
+}
+
+/** The devices signed in to this computer, each of which can be signed out alone. */
+function DevicesSection() {
+  const queryClient = useQueryClient();
+  const { data: devices = [] } = useQuery({
+    queryKey: DEVICES_KEY,
+    queryFn: async () => (await getRemoteAccessClient()).devices(),
+    refetchInterval: 10_000,
+  });
+
+  const signOut = async (device: RemoteAccessDevice) => {
+    await (await getRemoteAccessClient()).revokeDevice({ id: device.id });
+    void queryClient.invalidateQueries({ queryKey: DEVICES_KEY });
+    toast.success(`${device.name} was signed out`);
+  };
+
+  return (
+    <Field.Root>
+      <Field.Label>Signed-in devices</Field.Label>
+      {devices.length === 0 ? (
+        <p className="text-xs text-foreground-muted">No device has signed in yet.</p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
+          {devices.map((device) => (
+            <li key={device.id} className="flex items-center gap-3 px-3 py-2">
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span translate="no" className="truncate text-sm text-foreground">
+                  {device.name}
+                </span>
+                <span className="flex gap-1 text-xs text-foreground-muted">
+                  {device.lastAddress ? <span translate="no">{device.lastAddress}</span> : null}
+                  {device.lastAddress ? <span>·</span> : null}
+                  <RelativeTime value={device.lastSeenAt} compact />
+                </span>
+              </span>
+              <Button variant="ghost" size="sm" onClick={() => void signOut(device)}>
+                Sign out
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Field.Root>
   );
 }
 

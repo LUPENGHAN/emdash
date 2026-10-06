@@ -11,7 +11,7 @@ import { integrationPluginRegistry } from '@emdash/plugins/integrations';
 import { err, ok, secret } from '@emdash/shared';
 import { runWithTimeout } from '@emdash/shared/scheduling';
 import { peek } from '@emdash/wire/state';
-import { app, powerMonitor } from 'electron';
+import { app, Notification, powerMonitor } from 'electron';
 import { providerTokenRegistry } from '@core/features/account/api/node/provider-token-registry';
 import { AccountAuthServerClient } from '@core/features/account/node/services/account-auth-server-client';
 import { AccountOAuthClient } from '@core/features/account/node/services/account-oauth-client';
@@ -114,6 +114,7 @@ import { createProjectAttachmentAdapter } from '@core/features/projects/node/pro
 import { createProjectAttachmentManager } from '@core/features/projects/node/project-attachment-manager';
 import { migrateAppWorktreeRootToLocalHostDefault } from '@core/features/projects/node/settings/migrations/app-worktree-root';
 import type { RemoteAccessService, RemoteClientService } from '@core/features/remote-access/api';
+import { createRemoteAccessAuth } from '@core/features/remote-access/node/remote-access-auth';
 import { createRemoteAccessService } from '@core/features/remote-access/node/remote-access-service';
 import { createSearchService } from '@core/features/search/node/search-service';
 import { TaskService } from '@core/features/tasks/api/node/task-service';
@@ -317,6 +318,28 @@ export async function bootServices(
     accountHome: (account) => prepareAccountHome(account),
   });
   const REMOTE_ACCESS_TOKEN_KEY = 'remote-access-token';
+  const REMOTE_ACCESS_KEY_HASH = 'remote-access-key-hash';
+  const remoteAccessAuth = createRemoteAccessAuth({
+    file: join(app.getPath('userData'), 'remote-access-devices.json'),
+    readKeyHash: async () =>
+      (await encryptedAppSecretsStore.getSecret(REMOTE_ACCESS_KEY_HASH))?.expose() ?? null,
+    writeKeyHash: (hash) =>
+      hash === null
+        ? encryptedAppSecretsStore.deleteSecret(REMOTE_ACCESS_KEY_HASH)
+        : encryptedAppSecretsStore.setSecret(
+            REMOTE_ACCESS_KEY_HASH,
+            secret(hash, REMOTE_ACCESS_KEY_HASH)
+          ),
+    // Whoever signs in, the person at this computer should hear about it.
+    onDevicePaired: (device) => {
+      if (!Notification.isSupported()) return;
+      new Notification({
+        title: 'New device signed in to remote access',
+        body: `${device.name}${device.lastAddress ? ` · ${device.lastAddress}` : ''}`,
+      }).show();
+    },
+  });
+  appScope.add(() => remoteAccessAuth.flush());
   const remoteAccess = createRemoteAccessService({
     getSettings: () => appSettingsService.get('remoteAccess'),
     onSettingsChanged: (listener) => {
@@ -337,7 +360,9 @@ export async function bootServices(
       rendererRoot: join(app.getAppPath(), 'out', 'renderer'),
       openSession: openRemoteWireSession,
       info: () => ({ name: hostname(), version: app.getVersion() }),
+      auth: remoteAccessAuth,
     }),
+    auth: remoteAccessAuth,
     warn: (message, details) => log.warn(message, details),
   });
   void remoteAccess.apply();

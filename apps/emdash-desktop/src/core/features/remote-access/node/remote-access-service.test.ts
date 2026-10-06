@@ -1,5 +1,8 @@
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_REMOTE_ACCESS_SETTINGS, type RemoteAccessSettings } from '../api';
+import { createRemoteAccessAuth } from './remote-access-auth';
 import { createRemoteAccessService, type RemoteAccessServer } from './remote-access-service';
 
 function setup(initial: Partial<RemoteAccessSettings> = {}) {
@@ -12,6 +15,14 @@ function setup(initial: Partial<RemoteAccessSettings> = {}) {
     stop: vi.fn<RemoteAccessServer['stop']>(async () => {}),
     clientCount: () => 2,
   };
+  let keyHash: string | null = null;
+  const auth = createRemoteAccessAuth({
+    file: path.join(tmpdir(), `emdash-remote-devices-${Math.random()}.json`),
+    readKeyHash: async () => keyHash,
+    writeKeyHash: async (hash) => {
+      keyHash = hash;
+    },
+  });
   const service = createRemoteAccessService({
     getSettings: async () => settings,
     onSettingsChanged: (listener) => {
@@ -23,6 +34,7 @@ function setup(initial: Partial<RemoteAccessSettings> = {}) {
       stored = token;
     },
     server,
+    auth,
     listAddresses: () => [
       { name: 'This computer only', address: '127.0.0.1' },
       { name: 'ZeroTier (feth1)', address: '10.147.17.5' },
@@ -38,7 +50,7 @@ function setup(initial: Partial<RemoteAccessSettings> = {}) {
     for (const listener of listeners) listener();
     await service.status();
   };
-  return { service, server, change, timers, token: () => stored };
+  return { service, server, auth, change, timers, token: () => stored };
 }
 
 describe('createRemoteAccessService', () => {
@@ -108,5 +120,21 @@ describe('createRemoteAccessService', () => {
       ['en0', `http://192.168.1.8:7788/connect?token=${token()}`],
       ['This computer only', `http://127.0.0.1:7788/connect?token=${token()}`],
     ]);
+  });
+
+  it('signs every device out with a new link, and manages the access key', async () => {
+    const { service, auth } = setup({ enabled: true });
+    await service.status();
+    await auth.issue({ clientId: 'phone', name: 'Pixel', address: '10.0.0.2' });
+    expect(await service.devices()).toHaveLength(1);
+    await service.regenerateToken();
+    expect(await service.devices()).toEqual([]);
+
+    expect(await service.accessKey()).toEqual({ set: false });
+    await expect(service.setAccessKey('short')).rejects.toThrow(/12/);
+    await service.setAccessKey('correct horse battery');
+    expect(await service.accessKey()).toEqual({ set: true });
+    await service.setAccessKey(null);
+    expect(await service.accessKey()).toEqual({ set: false });
   });
 });

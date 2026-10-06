@@ -8,6 +8,7 @@ import {
   type RemoteAccessSettings,
   type RemoteAccessStatus,
 } from '../api';
+import type { RemoteAccessAuth } from './remote-access-auth';
 
 /** A private-network address may come up after Emdash (ZeroTier at login): keep trying. */
 export const START_RETRY_MS = 30_000;
@@ -25,6 +26,8 @@ export type RemoteAccessServiceDeps = {
   readToken: () => Promise<string | null>;
   writeToken: (token: string) => Promise<void>;
   server: RemoteAccessServer;
+  /** Devices signed in, and the access key; shared with the server. */
+  auth: RemoteAccessAuth;
   listAddresses?: () => RemoteAccessAddress[];
   warn?: (message: string, details: Record<string, unknown>) => void;
   setTimer?: (callback: () => void, ms: number) => () => void;
@@ -140,8 +143,17 @@ export function createRemoteAccessService(
     regenerateToken: () =>
       serialize(async () => {
         await deps.writeToken(randomBytes(32).toString('base64url'));
+        // Devices that signed in with the old link go too: a leaked link is why a new one
+        // is made.
+        await deps.auth.revokeAll();
         await reconcile();
       }),
+    devices: () => deps.auth.devices(),
+    async revokeDevice(id: string): Promise<void> {
+      await deps.auth.revoke(id);
+    },
+    accessKey: async () => ({ set: await deps.auth.hasAccessKey() }),
+    setAccessKey: (key) => deps.auth.setAccessKey(key),
     async dispose(): Promise<void> {
       unsubscribe();
       cancelRetry?.();

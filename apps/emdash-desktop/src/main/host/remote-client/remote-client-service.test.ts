@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createWireSessionHub, type Controller } from '@emdash/wire/rpc';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteAccessStatus } from '@core/features/remote-access/api';
+import { createRemoteAccessAuth } from '@core/features/remote-access/node/remote-access-auth';
 import { createRemoteAccessWireController } from '@core/features/remote-access/node/wire-controller';
 import { createRemoteAccessServer } from '../remote-access-server';
 import { createRemoteClientService, parseLink } from './remote-client-service';
@@ -65,6 +66,10 @@ describe('createRemoteClientService', () => {
       status: async () => SERVER_STATUS,
       links: async () => [],
       regenerateToken: async () => {},
+      devices: async () => [],
+      revokeDevice: async () => {},
+      accessKey: async () => ({ set: false }),
+      setAccessKey: async () => {},
     });
     const hub = createWireSessionHub({
       call: (p, input, meta) =>
@@ -77,6 +82,11 @@ describe('createRemoteClientService', () => {
       rendererRoot: dir,
       openSession: (transport) => hub.open(++session, transport),
       info: () => ({ name: 'studio-mac', version: '1.2.6' }),
+      auth: createRemoteAccessAuth({
+        file: path.join(dir, 'devices.json'),
+        readKeyHash: async () => null,
+        writeKeyHash: async () => {},
+      }),
     });
     port = await freePort();
     await server.start({ host: '127.0.0.1', port, token: TOKEN });

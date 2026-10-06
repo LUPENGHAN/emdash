@@ -6,5 +6,9 @@ export function createRemoteAccessWireController(service: RemoteAccessService): 
     status: () => service.status(),
     links: () => service.links(),
     regenerateToken: () => service.regenerateToken(),
+    devices: () => service.devices(),
+    revokeDevice: ({ id }) => service.revokeDevice(id),
+    accessKey: () => service.accessKey(),
+    setAccessKey: ({ key }) => service.setAccessKey(key),
   });
 }

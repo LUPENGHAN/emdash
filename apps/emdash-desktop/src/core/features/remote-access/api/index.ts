@@ -40,12 +40,32 @@ export type RemoteAccessStatus = {
   clients: number;
 };
 
+/** A device signed in to remote access (with the link or the access key). */
+export type RemoteAccessDevice = {
+  id: string;
+  /** Its own name, e.g. "Pixel 9" or "Chrome on Windows". */
+  name: string;
+  /** The app install it is, when it says (one entry however often it signs in). */
+  clientId: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  /** The address it last came from (the visitor's, behind a proxy on this computer). */
+  lastAddress: string | null;
+};
+
 export interface RemoteAccessService {
   status(): Promise<RemoteAccessStatus>;
   /** Links that sign a browser in, one per reachable address; empty while access is off. */
   links(): Promise<RemoteAccessLink[]>;
-  /** Invalidates the current link and disconnects every browser. */
+  /** Invalidates the current link, signs every device out and disconnects them. */
   regenerateToken(): Promise<void>;
+  devices(): Promise<RemoteAccessDevice[]>;
+  /** Signs one device out and disconnects it. */
+  revokeDevice(id: string): Promise<void>;
+  /** Whether an access key is set (key sign-in on). */
+  accessKey(): Promise<{ set: boolean }>;
+  /** Sets the access key, or turns key sign-in off with null. */
+  setAccessKey(key: string | null): Promise<void>;
 }
 
 export const remoteAccessDomain = 'remoteAccess' as const;
@@ -56,6 +76,13 @@ export const remoteAccessContract = defineContract({
   status: procedure({ input: voidInput, output: z.custom<RemoteAccessStatus>() }),
   links: procedure({ input: voidInput, output: z.custom<RemoteAccessLink[]>() }),
   regenerateToken: procedure({ input: voidInput, output: z.void() }),
+  devices: procedure({ input: voidInput, output: z.custom<RemoteAccessDevice[]>() }),
+  revokeDevice: procedure({ input: z.object({ id: z.string() }), output: z.void() }),
+  accessKey: procedure({ input: voidInput, output: z.object({ set: z.boolean() }) }),
+  setAccessKey: procedure({
+    input: z.object({ key: z.string().max(256).nullable() }),
+    output: z.void(),
+  }),
 });
 
 // ── Client side: this app driving another computer's Emdash ────────────────────────
