@@ -47,6 +47,12 @@ import { createConversationDeletionSweepKind } from '@core/features/conversation
 import { ConversationBackfillService } from '@core/features/conversations/node/sync/conversation-backfill';
 import { ConversationSyncService } from '@core/features/conversations/node/sync/conversation-sync-service';
 import { TuiConversationProvider } from '@core/features/conversations/node/tui-conversation-provider';
+import { createUsageScanner } from '@core/features/conversations/node/usage-stats/session-records';
+import {
+  readUsageAttribution,
+  usageSessionRoots,
+} from '@core/features/conversations/node/usage-stats/usage-attribution';
+import { createUsageStatsService } from '@core/features/conversations/node/usage-stats/usage-stats-service';
 import {
   createGitCredentialsService,
   type GitCredentialsService,
@@ -93,7 +99,10 @@ import {
   createEffectiveAgentConfig,
   type EffectiveAgentConfig,
 } from '@core/features/model-providers/node/effective-agent-config';
-import { prepareAccountHome } from '@core/features/model-providers/node/official-accounts';
+import {
+  mainAgentHome,
+  prepareAccountHome,
+} from '@core/features/model-providers/node/official-accounts';
 import { createModelProviderKeys } from '@core/features/model-providers/node/provider-keys';
 import { createUsageLimitsService } from '@core/features/model-providers/node/usage-limits';
 import { previewServerService } from '@core/features/preview-servers/api/node/preview-server-service-instance';
@@ -249,6 +258,7 @@ export type ServicesBundle = {
   readonly taskService: TaskService;
   readonly taskSessions: TaskSessionManager;
   readonly usage: ReturnType<typeof createUsageOverview>;
+  readonly usageStats: ReturnType<typeof createUsageStatsService>;
   readonly workspacePlacement: WorkspacePlacementResolver;
   readonly conversationSync: ConversationSyncService;
   readonly reconcileSweep: ReconcileSweepService;
@@ -370,6 +380,7 @@ export async function bootServices(
       openSession: openRemoteWireSession,
       info: () => ({ name: hostname(), version: app.getVersion() }),
       auth: remoteAccessAuth,
+      usageStats: (from, to) => usageStats.localUsage(from, to),
     }),
     auth: remoteAccessAuth,
     warn: (message, details) => log.warn(message, details),
@@ -407,6 +418,46 @@ export async function bootServices(
   const priceCatalog = createPriceCatalog({
     cacheFile: join(app.getPath('userData'), 'model-prices.json'),
   });
+  const usageStats = createUsageStatsService({
+    scanner: createUsageScanner({
+      cacheFile: join(app.getPath('userData'), 'usage-stats-cache.json'),
+      roots: async () =>
+        usageSessionRoots(
+          { claude: mainAgentHome('claude'), codex: mainAgentHome('codex') },
+          { home: homedir(), env: process.env }
+        ),
+      catalog: priceCatalog,
+      warn: (message, details) => log.warn(message, details),
+    }),
+    attribution: () =>
+      readUsageAttribution({
+        db,
+        providers: async () => (await appSettingsService.get('modelProviders')).providers,
+        agentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
+      }),
+    catalog: priceCatalog,
+    pricingFile: join(app.getPath('userData'), 'usage-pricing.json'),
+    machineName: () => hostname().replace(/\.(local|lan|home)$/i, ''),
+    remotes: async () => {
+      const { servers } = await remoteClient.state();
+      const signedIn = await Promise.all(
+        servers.map(async (server) => ({
+          name: server.name,
+          baseUrl: server.baseUrl,
+          token:
+            (
+              await encryptedAppSecretsStore.getSecret(`${REMOTE_SERVER_TOKEN_PREFIX}${server.id}`)
+            )?.expose() ?? null,
+        }))
+      );
+      return signedIn.flatMap((remote) =>
+        remote.token ? [{ name: remote.name, baseUrl: remote.baseUrl, token: remote.token }] : []
+      );
+    },
+  });
+  // Read the agents' session history once Emdash has settled, so the first look is quick.
+  const usageWarmTimer = setTimeout(() => usageStats.warm(), 60_000);
+  appScope.add(() => clearTimeout(usageWarmTimer));
   const effectiveAgentConfig = createEffectiveAgentConfig({
     getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
@@ -1129,6 +1180,7 @@ export async function bootServices(
     priceCatalog,
     modelProviderKeys,
     usageLimits,
+    usageStats,
     agentControl,
     agentLibrary,
     prepareAgentLaunch,

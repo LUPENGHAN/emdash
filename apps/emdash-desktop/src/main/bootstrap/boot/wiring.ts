@@ -154,6 +154,7 @@ export function createDesktopWireOptions(
     },
     updateOperations,
     usage: services.usage,
+    usageStats: services.usageStats,
     workspaceIdentity: database.workspaceIdentity,
     workspacePlacement: services.workspacePlacement,
     workspaces: {

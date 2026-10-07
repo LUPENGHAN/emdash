@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react';
+import { UsageStatsButton } from '@core/features/usage-stats/contributions/browser/usage-stats-button';
 import { SidebarRecoveryControls } from '@core/features/workbench/browser/sidebar-recovery-controls';
 import { WindowControls } from '@core/features/workbench/browser/window-controls';
 import { useWorkspaceLayoutContext } from '@core/features/workbench/contributions/browser/layout-provider';
@@ -38,6 +39,7 @@ export function Titlebar({ leftSlot, rightSlot }: { leftSlot?: ReactNode; rightS
           </div>
           <div className="flex shrink-0 items-center justify-end gap-1 [-webkit-app-region:no-drag]">
             {rightSlot}
+            <UsageStatsButton />
           </div>
         </div>
       </div>

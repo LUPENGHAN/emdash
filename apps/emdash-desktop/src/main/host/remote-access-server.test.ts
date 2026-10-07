@@ -109,6 +109,7 @@ describe('createRemoteAccessServer', () => {
       },
       info: () => ({ name: 'studio-mac', version: '1.2.6' }),
       auth,
+      usageStats: async (from, to) => ({ machine: 'studio-mac', from, to }),
     });
     // Find a free port, then listen on it.
     const probe = await import('node:net').then(({ createServer }) => createServer());
@@ -261,6 +262,18 @@ describe('createRemoteAccessServer', () => {
     expect((await get(port, '/info')).status).toBe(401);
     const info = await get(port, '/info', `emdash_remote=${TOKEN}`);
     expect(JSON.parse(info.body)).toEqual({ name: 'studio-mac', version: '1.2.6' });
+  });
+
+  it("shares this computer's usage with signed-in callers only", async () => {
+    expect((await get(port, '/usage-stats?from=2026-10-01&to=2026-10-07')).status).toBe(401);
+    const cookie = `emdash_remote=${TOKEN}`;
+    const answer = await get(port, '/usage-stats?from=2026-10-01&to=2026-10-07', cookie);
+    expect(JSON.parse(answer.body)).toEqual({
+      machine: 'studio-mac',
+      from: '2026-10-01',
+      to: '2026-10-07',
+    });
+    expect((await get(port, '/usage-stats?from=yesterday&to=today', cookie)).status).toBe(400);
   });
 
   it('tunnels raw TCP to an address this computer can reach', async () => {

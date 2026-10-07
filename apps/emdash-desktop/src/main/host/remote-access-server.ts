@@ -20,6 +20,9 @@ const CONNECT_PATH = '/connect';
 /** POST `{ key, client?, name? }`: signs a device in with the access key. */
 const PAIR_PATH = '/pair';
 const INFO_PATH = '/info';
+/** This computer's model calls, for another computer's usage statistics. */
+const USAGE_STATS_PATH = '/usage-stats';
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_PAIR_BODY_BYTES = 4096;
 /** Raw TCP to a host:port reachable from this computer, for a client's built-in browser. */
 const TUNNEL_PATH = '/tunnel';
@@ -94,6 +97,8 @@ export type RemoteAccessServerDeps = {
   info: () => RemoteServerInfo;
   /** Signed-in devices and the access key. */
   auth: RemoteAccessAuth;
+  /** This computer's model calls between two local days, answered at `/usage-stats`. */
+  usageStats?: (from: string, to: string) => Promise<unknown>;
 };
 
 /** Whoever a request comes from: the computer's link itself, or a signed-in device. */
@@ -175,6 +180,7 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
             caller,
             auth: deps.auth,
             info: deps.info,
+            usageStats: deps.usageStats,
             compressed,
           }).catch(() => {
             if (!response.headersSent) response.writeHead(500);
@@ -280,6 +286,7 @@ async function handleRequest(
     caller: (request: IncomingMessage) => Promise<Caller | null>;
     auth: RemoteAccessAuth;
     info: () => RemoteServerInfo;
+    usageStats?: (from: string, to: string) => Promise<unknown>;
     compressed: Map<string, Promise<Buffer>>;
   }
 ): Promise<void> {
@@ -344,6 +351,20 @@ async function handleRequest(
   if (url.pathname === INFO_PATH) {
     response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     response.end(JSON.stringify(context.info()));
+    return;
+  }
+  if (url.pathname === USAGE_STATS_PATH && context.usageStats) {
+    const from = url.searchParams.get('from') ?? '';
+    const to = url.searchParams.get('to') ?? '';
+    if (!DAY.test(from) || !DAY.test(to)) return sendText(response, 400, 'Bad range');
+    let body: unknown;
+    try {
+      body = await context.usageStats(from, to);
+    } catch {
+      return sendText(response, 500, 'Could not read the usage records');
+    }
+    response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    response.end(JSON.stringify(body));
     return;
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') {

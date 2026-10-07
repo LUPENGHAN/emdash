@@ -36,7 +36,7 @@ type Env = ExternalSessionEnv;
 const defaultEnv = (): Env => ({ home: homedir(), env: process.env });
 
 /** Token counts of one request (or a run of them on one model). */
-type Usage = {
+export type Usage = {
   model: string;
   input: number;
   output: number;
@@ -174,6 +174,12 @@ function costOf(usage: Usage, price: ModelPrice): number {
   );
 }
 
+/** What one request would cost at its vendor's API list price; null for an unknown model. */
+export function usageCost(usage: Usage, catalog: PriceCatalog): number | null {
+  const price = priceOf(catalog, usage.model);
+  return price ? costOf(usage, price) : null;
+}
+
 /** What a session's token usage would cost at the vendors' API list prices. */
 export function priceUsage(usages: Usage[], catalog: PriceCatalog): SessionCost {
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -295,10 +301,11 @@ function claudeRecordsUsage(text: string): Usage[] {
   return [...byMessage.values(), ...compactions];
 }
 
-const ZERO = { input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 };
+export const ZERO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 };
+const ZERO = ZERO_USAGE;
 
 /** Roughly a tokenizer's count: about four Latin characters a token, one per CJK character. */
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
   let latin = 0;
   let other = 0;
   for (const char of text) {

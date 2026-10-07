@@ -87,6 +87,8 @@ import {
   createUpdatesWireController,
   type UpdateOperations,
 } from '@core/features/updates/node/wire-controller';
+import type { UsageStatsService } from '@core/features/usage-stats/api';
+import { createUsageStatsWireController } from '@core/features/usage-stats/node/wire-controller';
 import type { UsageOverviewSource } from '@core/features/usage/node/usage-overview';
 import { createUsageWireController } from '@core/features/usage/node/wire-controller';
 import {
@@ -192,6 +194,7 @@ export type DesktopControllerContext = {
   readonly terminalShell: CreateTerminalsWireControllerOptions['terminalShell'];
   readonly updateOperations: UpdateOperations;
   readonly usage: UsageOverviewSource;
+  readonly usageStats: UsageStatsService;
   readonly workspaceIdentity: WorkspaceIdentityService;
   readonly workspacePlacement: WorkspacePlacementResolver;
   readonly workspaces: Omit<CreateWorkspacesWireControllerOptions, 'db' | 'mutations'>;
@@ -512,6 +515,9 @@ export const desktopNodeControllers = {
   },
   usage: {
     create: ({ scope, usage }) => createUsageWireController({ scope, usage }),
+  },
+  usageStats: {
+    create: ({ usageStats }) => createUsageStatsWireController(usageStats),
   },
   hosts: {
     create: ({ hostAvailability, hosts, ssh }) =>

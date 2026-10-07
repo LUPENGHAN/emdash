@@ -1,3 +1,4 @@
+import { UsageStatsButton } from '@core/features/usage-stats/contributions/browser/usage-stats-button';
 import { SidebarRecoveryControls } from '@core/features/workbench/browser/sidebar-recovery-controls';
 import { WindowControls } from '@core/features/workbench/browser/window-controls';
 import { useWorkspaceLayoutContext } from '@core/features/workbench/contributions/browser/layout-provider';
@@ -31,6 +32,7 @@ export function BorderlessTitlebar() {
       <div className="flex min-w-0 flex-1 items-center">
         {!isLeftOpen && <SidebarRecoveryControls onShowSidebar={toggleLeftSidebar} />}
       </div>
+      <UsageStatsButton />
       {isLinux && <WindowControls />}
     </header>
   );
