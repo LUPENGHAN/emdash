@@ -111,7 +111,7 @@ type Caller = { kind: 'link' } | { kind: 'device'; device: RemoteAccessDevice };
  */
 export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAccessServer {
   const root = normalize(deps.rendererRoot);
-  let server: Server | null = null;
+  let servers: Server[] = [];
   let sockets: WebSocketServer | null = null;
   let stopWatchingRevokes: (() => void) | null = null;
   const sessions = new Map<WebSocket, { dispose: () => void; deviceId: string | null }>();
@@ -157,64 +157,74 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
         }
       });
 
-      const http = createServer((request, response) => {
-        void handleRequest(request, response, {
-          root,
-          token,
-          caller,
-          auth: deps.auth,
-          info: deps.info,
-          compressed,
-        }).catch(() => {
-          if (!response.headersSent) response.writeHead(500);
-          response.end();
-        });
-      });
-      http.on('upgrade', (request, socket, head) => {
-        void (async () => {
-          const url = new URL(request.url ?? '/', 'http://local');
-          const who = await caller(request);
-          if (!who || !isSameOrigin(request)) {
-            socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
-            return;
-          }
-          const deviceId = who.kind === 'device' ? who.device.id : null;
-          if (deviceId) void deps.auth.touch(deviceId, clientAddress(request));
-          if (url.pathname === WIRE_PATH) {
-            wss.handleUpgrade(request, socket, head, (ws) =>
-              wss.emit('connection', ws, request, deviceId)
-            );
-            return;
-          }
-          const target = url.pathname === TUNNEL_PATH ? parseTarget(url.searchParams) : null;
-          if (!target) {
-            socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
-            return;
-          }
-          wss.handleUpgrade(request, socket, head, (ws) => {
-            tunnels.add(ws);
-            const stream = createWebSocketStream(ws);
-            const tcp = connectTcp(target.port, target.host);
-            const end = () => {
-              tunnels.delete(ws);
-              stream.destroy();
-              tcp.destroy();
-            };
-            stream.on('error', end).on('close', end);
-            tcp.on('error', end).on('close', end);
-            stream.pipe(tcp).pipe(stream);
+      const makeServer = (): Server => {
+        const http = createServer((request, response) => {
+          void handleRequest(request, response, {
+            root,
+            token,
+            caller,
+            auth: deps.auth,
+            info: deps.info,
+            compressed,
+          }).catch(() => {
+            if (!response.headersSent) response.writeHead(500);
+            response.end();
           });
-        })().catch(() => socket.destroy());
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        http.once('error', reject);
-        http.listen(port, host, () => {
-          http.off('error', reject);
-          resolve();
         });
-      });
-      server = http;
+        http.on('upgrade', (request, socket, head) => {
+          void (async () => {
+            const url = new URL(request.url ?? '/', 'http://local');
+            const who = await caller(request);
+            if (!who || !isSameOrigin(request)) {
+              socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+              return;
+            }
+            const deviceId = who.kind === 'device' ? who.device.id : null;
+            if (deviceId) void deps.auth.touch(deviceId, clientAddress(request));
+            if (url.pathname === WIRE_PATH) {
+              wss.handleUpgrade(request, socket, head, (ws) =>
+                wss.emit('connection', ws, request, deviceId)
+              );
+              return;
+            }
+            const target = url.pathname === TUNNEL_PATH ? parseTarget(url.searchParams) : null;
+            if (!target) {
+              socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+              return;
+            }
+            wss.handleUpgrade(request, socket, head, (ws) => {
+              tunnels.add(ws);
+              const stream = createWebSocketStream(ws);
+              const tcp = connectTcp(target.port, target.host);
+              const end = () => {
+                tunnels.delete(ws);
+                stream.destroy();
+                tcp.destroy();
+              };
+              stream.on('error', end).on('close', end);
+              tcp.on('error', end).on('close', end);
+              stream.pipe(tcp).pipe(stream);
+            });
+          })().catch(() => socket.destroy());
+        });
+        return http;
+      };
+
+      const main = makeServer();
+      await listen(main, port, host);
+      servers = [main];
+      // Also on loopback (this computer only): a tunnel or HTTPS proxy running here
+      // (cloudflared, Tailscale Serve) reaches it there, and is then known as a local
+      // proxy, whose visitor addresses count for lockouts. Not fatal when taken.
+      if (!LOOPBACK_OR_ALL.has(host)) {
+        const local = makeServer();
+        try {
+          await listen(local, port, '127.0.0.1');
+          servers.push(local);
+        } catch {
+          local.close();
+        }
+      }
       sockets = wss;
     },
     async stop() {
@@ -223,14 +233,29 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
       closeAll();
       sockets?.close();
       sockets = null;
-      const http = server;
-      server = null;
-      if (!http) return;
-      http.closeAllConnections();
-      await new Promise<void>((resolve) => http.close(() => resolve()));
+      const closing = servers;
+      servers = [];
+      await Promise.all(
+        closing.map((http) => {
+          http.closeAllConnections();
+          return new Promise<void>((resolve) => http.close(() => resolve()));
+        })
+      );
     },
     clientCount: () => sessions.size,
   };
+}
+
+const LOOPBACK_OR_ALL = new Set(['127.0.0.1', '::1', 'localhost', '0.0.0.0', '::']);
+
+function listen(http: Server, port: number, host: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    http.once('error', reject);
+    http.listen(port, host, () => {
+      http.off('error', reject);
+      resolve();
+    });
+  });
 }
 
 async function handleRequest(

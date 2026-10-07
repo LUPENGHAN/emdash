@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import path from 'node:path';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import type { WireMessage, WireTransport } from '@emdash/wire/rpc';
@@ -351,6 +351,15 @@ describe('createRemoteAccessServer', () => {
     expect(
       String((await get(port, `/connect?token=${TOKEN}`)).headers['set-cookie'])
     ).not.toContain('Secure');
+  });
+  it('also listens on loopback when serving another address, for a local tunnel', async () => {
+    const lan = Object.values(networkInterfaces())
+      .flat()
+      .find((entry) => entry && entry.family === 'IPv4' && !entry.internal)?.address;
+    if (!lan) return; // No other address to serve on here.
+    await server.stop();
+    await server.start({ host: lan, port, token: TOKEN });
+    expect((await get(port, `/connect?token=${TOKEN}`)).status).toBe(302); // via 127.0.0.1
   });
 });
 
