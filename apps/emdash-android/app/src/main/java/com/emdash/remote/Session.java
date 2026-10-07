@@ -23,7 +23,9 @@ final class Session {
         LOADING,
         READY,
         UNREACHABLE,
-        SIGNED_OUT
+        SIGNED_OUT,
+        /** On Cloudflare Access's sign-in page, in front of the computer. */
+        VERIFYING
     }
 
     interface Listener {
@@ -79,13 +81,19 @@ final class Session {
                     @Override
                     public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                         if (sameOrigin(request.getUrl(), Session.this.computer.baseUrl)) return false;
+                        if (CloudflareAccess.isSignInPage(request.getUrl())) return false;
                         listener.onExternalLink(request.getUrl());
                         return true;
                     }
 
                     @Override
                     public void onPageFinished(WebView view, String url) {
-                        if (status != Status.LOADING) return;
+                        if (CloudflareAccess.isSignInPage(Uri.parse(url))) {
+                            setStatus(Status.VERIFYING, listener);
+                            return;
+                        }
+                        // Signed in at Access, the page is back on the computer's own.
+                        if (status != Status.LOADING && status != Status.VERIFYING) return;
                         setStatus(Status.READY, listener);
                         loadedAt = System.currentTimeMillis();
                         web.postDelayed(Session.this::checkBoot, BOOT_CHECK_MS);

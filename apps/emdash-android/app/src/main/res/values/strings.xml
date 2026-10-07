@@ -21,6 +21,9 @@
     <string name="status_online">Online</string>
     <string name="status_offline">Can\'t reach</string>
     <string name="status_signed_out">Needs a new link</string>
+    <string name="status_verify">Needs Cloudflare sign-in</string>
+    <string name="access_needed">Behind Cloudflare Access: sign in, then it connects by itself.</string>
+    <string name="access_blocked">Cloudflare Access still turns this phone away. Check that your email is allowed in its policy.</string>
     <string name="status_checking">Checking…</string>
     <string name="status_open">Open</string>
     <string name="rename">Rename</string>

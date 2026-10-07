@@ -255,7 +255,11 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloudflare.cloudflar
 
 **多一层保护（可选）：Cloudflare Access。** 在 Cloudflare 后台 Zero Trust → Access → Applications，给这个网址加一条规则，比如只允许你的邮箱。这样访问网址要先通过邮箱验证码，然后才能看到 Emdash 的登录页。
 
-注意：开了 Access 之后，App 里「地址 + 密钥」的方式会被 Access 挡住。请改用浏览器，或者在 App 里用链接添加。
+开了 Access 之后：
+
+- **App 需要 1.7 以上。** 添加电脑或打开电脑页面时，App 会先显示 Access 的验证页，验证后自动继续。电脑列表里会显示「需要 Cloudflare 验证」。
+- **登录方式选「One-time PIN」（邮箱验证码）。** 不要选 Google 登录：Google 不允许在 App 内的网页里登录。
+- **有效期按需设置**，比如一个月。到期后在 App 或浏览器里重新输一次验证码。
 
 ---
 

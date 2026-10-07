@@ -31,6 +31,9 @@ Either:
   (`http://address:port/connect?token=…`) and paste it in the app (a copied link fills in by
   itself), share it to the app, or tap it in another app and choose Emdash.
 
+Behind Cloudflare Access, the app shows Access's sign-in (use its one-time PIN; Google
+sign-in refuses app web views) before adding or opening the computer, then goes on by itself.
+
 Each signed-in phone gets a sign-in of its own, listed on the computer under Signed-in devices,
 where it can be signed out alone.
 

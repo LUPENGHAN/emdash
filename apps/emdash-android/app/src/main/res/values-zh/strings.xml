@@ -19,6 +19,9 @@
     <string name="status_online">在线</string>
     <string name="status_offline">连不上</string>
     <string name="status_signed_out">需要新链接</string>
+    <string name="status_verify">需要 Cloudflare 验证</string>
+    <string name="access_needed">这台电脑开了 Cloudflare Access，验证后会自动连接。</string>
+    <string name="access_blocked">Cloudflare Access 仍然拒绝这台手机。请检查规则里是否允许了你的邮箱。</string>
     <string name="status_checking">检查中…</string>
     <string name="status_open">已打开</string>
     <string name="rename">重命名</string>

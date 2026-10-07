@@ -30,12 +30,15 @@ import android.view.WindowInsets;
 import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.window.OnBackInvokedDispatcher;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -66,7 +69,9 @@ public class MainActivity extends Activity implements Session.Listener {
         CHECKING,
         ONLINE,
         OFFLINE,
-        SIGNED_OUT
+        SIGNED_OUT,
+        /** Cloudflare Access is in front of it, and wants its email code first. */
+        VERIFY
     }
 
     private Computers computers;
@@ -77,6 +82,12 @@ public class MainActivity extends Activity implements Session.Listener {
     private Session current;
     /** Adding a computer (not a session's own error) is what the panel shows. */
     private boolean adding;
+    /** Cloudflare Access's sign-in, shown before signing in at a computer behind it. */
+    private WebView verifier;
+    /** Back from Access's sign-in: the panel keeps what was typed. */
+    private boolean keepInputs;
+    /** Signed in at Access just now: turned away again, it won't be asked once more. */
+    private boolean accessVerified;
 
     private FrameLayout webContainer;
     private View devices;
@@ -185,6 +196,7 @@ public class MainActivity extends Activity implements Session.Listener {
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
         probes.shutdownNow();
+        closeVerifier();
         if (networkCallback != null) {
             getSystemService(ConnectivityManager.class).unregisterNetworkCallback(networkCallback);
         }
@@ -257,7 +269,14 @@ public class MainActivity extends Activity implements Session.Listener {
         handler.removeCallbacks(retry);
         handler.removeCallbacks(probeAgain);
         for (Session session : sessions.values()) {
-            session.web.setVisibility(session == current ? View.VISIBLE : View.GONE);
+            session.web.setVisibility(
+                    session == current && verifier == null ? View.VISIBLE : View.GONE);
+        }
+        if (verifier != null) {
+            panel.setVisibility(View.GONE);
+            devices.setVisibility(View.GONE);
+            bubble.setVisibility(View.GONE);
+            return;
         }
         if (adding) {
             showPanel(R.string.add_title, getString(R.string.add_message), true);
@@ -304,11 +323,12 @@ public class MainActivity extends Activity implements Session.Listener {
         panelMessage.setText(message);
         linkInput.setVisibility(needsLink ? View.VISIBLE : View.GONE);
         linkInput.setError(null);
-        if (needsLink) linkInput.setText("");
+        boolean fresh = needsLink && !keepInputs;
+        if (fresh) linkInput.setText("");
         keyInput.setVisibility(needsLink ? View.VISIBLE : View.GONE);
         keyInput.setError(null);
         // The key used before: adding another computer then takes only its address.
-        if (needsLink) keyInput.setText(prefs.getString(KEY_ACCESS_KEY, ""));
+        if (fresh) keyInput.setText(prefs.getString(KEY_ACCESS_KEY, ""));
         primaryButton.setEnabled(true);
         boolean hasComputers = !computers.all().isEmpty();
         secondaryButton.setVisibility(hasComputers ? View.VISIBLE : View.GONE);
@@ -321,6 +341,7 @@ public class MainActivity extends Activity implements Session.Listener {
      * for a signed-out computer, a new link or the key (its address is known) signs it in.
      */
     private void connectFromInput(Session signedOut) {
+        accessVerified = false;
         String text = linkInput.getText().toString().trim();
         Computers.Computer link = Computers.parseLink(text);
         if (link != null) {
@@ -344,6 +365,11 @@ public class MainActivity extends Activity implements Session.Listener {
             keyInput.setError(getString(R.string.key_needed));
             return;
         }
+        startPair(candidates, key);
+    }
+
+    /** Signs in with the key at the first of the addresses that answers at all. */
+    private void startPair(List<String> candidates, String key) {
         primaryButton.setEnabled(false);
         probes.execute(
                 () -> {
@@ -363,6 +389,9 @@ public class MainActivity extends Activity implements Session.Listener {
 
     /** What a computer answered an access key with. */
     private static final class PairResult {
+        /** In place of an HTTP status: Cloudflare Access turned the request away. */
+        static final int ACCESS = -1;
+
         int status;
         String token;
         String name;
@@ -378,15 +407,22 @@ public class MainActivity extends Activity implements Session.Listener {
                     (HttpURLConnection) new URL(baseUrl + "/pair").openConnection();
             connection.setConnectTimeout(8_000);
             connection.setReadTimeout(15_000);
+            connection.setInstanceFollowRedirects(false);
             connection.setRequestMethod("POST");
             connection.setDoOutput(true);
             connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Cookie", CloudflareAccess.cookies(baseUrl, null));
             JSONObject body = new JSONObject();
             body.put("key", key);
             body.put("client", Computers.clientId);
             body.put("name", Computers.deviceName);
             connection.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8));
             result.status = connection.getResponseCode();
+            if (CloudflareAccess.blocked(connection, result.status)) {
+                result.status = PairResult.ACCESS;
+                connection.disconnect();
+                return result;
+            }
             InputStream stream =
                     result.status < 400 ? connection.getInputStream() : connection.getErrorStream();
             JSONObject answer = stream == null ? new JSONObject() : new JSONObject(read(stream));
@@ -415,6 +451,18 @@ public class MainActivity extends Activity implements Session.Listener {
             return;
         }
         switch (result.status) {
+            case PairResult.ACCESS:
+                if (accessVerified) {
+                    linkInput.setError(getString(R.string.access_blocked));
+                    break;
+                }
+                verifyAccess(
+                        baseUrl,
+                        () -> {
+                            accessVerified = true;
+                            startPair(List.of(baseUrl), key);
+                        });
+                break;
             case 401:
                 keyInput.setError(getString(R.string.key_wrong, result.remaining));
                 break;
@@ -432,6 +480,65 @@ public class MainActivity extends Activity implements Session.Listener {
                         getString(R.string.pair_unreachable, Uri.parse(baseUrl).getAuthority()));
                 break;
         }
+    }
+
+    /**
+     * Shows Cloudflare Access's sign-in for a computer behind it (an email code), then goes
+     * on once the page is back on the computer's own, signed in. Back gives up.
+     */
+    @android.annotation.SuppressLint("SetJavaScriptEnabled")
+    private void verifyAccess(String baseUrl, Runnable then) {
+        closeVerifier();
+        Toast.makeText(this, R.string.access_needed, Toast.LENGTH_LONG).show();
+        WebView web = new WebView(this);
+        web.getSettings().setJavaScriptEnabled(true);
+        web.getSettings().setDomStorageEnabled(true);
+        web.setWebViewClient(
+                new WebViewClient() {
+                    @Override
+                    public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                        Uri url = request.getUrl();
+                        if (Session.sameOrigin(url, baseUrl) || CloudflareAccess.isSignInPage(url)) {
+                            return false;
+                        }
+                        onExternalLink(url);
+                        return true;
+                    }
+
+                    @Override
+                    public void onPageFinished(WebView view, String url) {
+                        Uri page = Uri.parse(url);
+                        if (view != verifier || CloudflareAccess.isSignInPage(page)) return;
+                        if (!Session.sameOrigin(page, baseUrl) || !CloudflareAccess.signedIn(baseUrl)) {
+                            return;
+                        }
+                        CookieManager.getInstance().flush();
+                        closeVerifier();
+                        then.run();
+                    }
+                });
+        verifier = web;
+        webContainer.addView(
+                web,
+                0,
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        render();
+        web.loadUrl(baseUrl + "/");
+    }
+
+    /** Closes Access's sign-in, back to the screen under it as it was left. */
+    private void closeVerifier() {
+        if (verifier == null) return;
+        WebView web = verifier;
+        verifier = null;
+        webContainer.removeView(web);
+        web.destroy();
+        if (isDestroyed() || isFinishing()) return;
+        keepInputs = true;
+        render();
+        keepInputs = false;
+        primaryButton.setEnabled(true);
     }
 
     /** This app install's id, made once: one entry in each computer's device list. */
@@ -491,6 +598,8 @@ public class MainActivity extends Activity implements Session.Listener {
                 return R.string.status_offline;
             case SIGNED_OUT:
                 return R.string.status_signed_out;
+            case VERIFY:
+                return R.string.status_verify;
             default:
                 return R.string.status_checking;
         }
@@ -503,6 +612,7 @@ public class MainActivity extends Activity implements Session.Listener {
             case OFFLINE:
                 return R.color.offline;
             case SIGNED_OUT:
+            case VERIFY:
                 return R.color.warning;
             default:
                 return R.color.muted;
@@ -596,9 +706,13 @@ public class MainActivity extends Activity implements Session.Listener {
                                 (HttpURLConnection) new URL(computer.baseUrl + "/info").openConnection();
                         connection.setConnectTimeout(4_000);
                         connection.setReadTimeout(4_000);
-                        connection.setRequestProperty("Cookie", "emdash_remote=" + computer.token);
+                        connection.setInstanceFollowRedirects(false);
+                        connection.setRequestProperty(
+                                "Cookie", CloudflareAccess.cookies(computer.baseUrl, computer.token));
                         int code = connection.getResponseCode();
-                        if (code == 200) {
+                        if (CloudflareAccess.blocked(connection, code)) {
+                            state = Reachability.VERIFY;
+                        } else if (code == 200) {
                             state = Reachability.ONLINE;
                             name = new JSONObject(read(connection.getInputStream())).optString("name", null);
                         } else {
@@ -789,7 +903,9 @@ public class MainActivity extends Activity implements Session.Listener {
     }
 
     private void back() {
-        if (adding && !computers.all().isEmpty()) {
+        if (verifier != null) {
+            closeVerifier();
+        } else if (adding && !computers.all().isEmpty()) {
             if (current != null) open(current.computer);
             else showDevices();
         } else if (current != null
