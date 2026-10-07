@@ -497,12 +497,8 @@ public class MainActivity extends Activity implements Session.Listener {
                 new WebViewClient() {
                     @Override
                     public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                        Uri url = request.getUrl();
-                        if (Session.sameOrigin(url, baseUrl) || CloudflareAccess.isSignInPage(url)) {
-                            return false;
-                        }
-                        onExternalLink(url);
-                        return true;
+                        // Only signing in happens here: Access, and the sign-in it offers.
+                        return false;
                     }
 
                     @Override

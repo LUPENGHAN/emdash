@@ -81,14 +81,18 @@ final class Session {
                     @Override
                     public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                         if (sameOrigin(request.getUrl(), Session.this.computer.baseUrl)) return false;
-                        if (CloudflareAccess.isSignInPage(request.getUrl())) return false;
+                        // Until Emdash is up, the page is signing in: Access, and the sign-in
+                        // it offers (a Cloudflare or GitHub account), stay here.
+                        if (status == Status.LOADING || status == Status.VERIFYING) return false;
                         listener.onExternalLink(request.getUrl());
                         return true;
                     }
 
                     @Override
                     public void onPageFinished(WebView view, String url) {
-                        if (CloudflareAccess.isSignInPage(Uri.parse(url))) {
+                        Uri page = Uri.parse(url);
+                        if (CloudflareAccess.isSignInPage(page)
+                                || !sameOrigin(page, Session.this.computer.baseUrl)) {
                             setStatus(Status.VERIFYING, listener);
                             return;
                         }
