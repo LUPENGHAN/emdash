@@ -121,16 +121,17 @@ export const CreateConversationModal = observer(function CreateConversationModal
 
   // A resumed session can open in either UI: chat loads it with session/load.
   // Sessions tied to one UI's store (Cursor) must resume in that UI.
-  // A handoff keeps the source's UI where the target has it.
-  const lockedUi =
-    resumeSession?.resumeIn ??
-    (handoff
-      ? handoff.type === 'acp' && agentSupportsAcp(selectedAgent?.capabilities)
-        ? 'acp'
-        : 'pty'
-      : undefined);
+  const lockedUi = resumeSession?.resumeIn;
   const showAcpToggle = agentSupportsAcp(selectedAgent?.capabilities) && !lockedUi;
-  const useAcp = lockedUi ? lockedUi === 'acp' : showAcpToggle && launchSettings.useChatUi;
+  // A handoff starts in the source's UI where the target has it, and may switch (the
+  // terminal is where auto-approve is set) without changing the agent's own preference.
+  const [handoffUi, setHandoffUi] = useState<'acp' | 'pty' | null>(null);
+  const handoffWantsAcp = (handoffUi ?? handoff?.type) === 'acp';
+  const useAcp = lockedUi
+    ? lockedUi === 'acp'
+    : handoff
+      ? showAcpToggle && handoffWantsAcp
+      : showAcpToggle && launchSettings.useChatUi;
   const transport = useAcp ? 'acp' : 'pty';
   const showAutoApproveToggle = agentSupportsAutoApprove(selectedAgent?.capabilities, transport);
   const skipPermissions = showAutoApproveToggle && launchSettings.autoApprove;
@@ -284,7 +285,9 @@ export const CreateConversationModal = observer(function CreateConversationModal
                   <ConversationTransportToggle
                     value={transport}
                     disabled={!launchSettings.ready || isSubmitting}
-                    onValueChange={(value) => launchSettings.setUseChatUi(value === 'acp')}
+                    onValueChange={(value) =>
+                      handoff ? setHandoffUi(value) : launchSettings.setUseChatUi(value === 'acp')
+                    }
                   />
                 ) : null
               }
