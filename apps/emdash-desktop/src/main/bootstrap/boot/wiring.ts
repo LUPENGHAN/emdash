@@ -153,6 +153,7 @@ export function createDesktopWireOptions(
       getColorEnv: getTerminalColorEnv,
     },
     updateOperations,
+    usage: services.usage,
     workspaceIdentity: database.workspaceIdentity,
     workspacePlacement: services.workspacePlacement,
     workspaces: {
