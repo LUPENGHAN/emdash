@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -16,22 +17,47 @@ import org.json.JSONObject;
  */
 final class Computers {
     static final class Computer {
+        /** The address it was added with, which also names it among the saved ones. */
         final String baseUrl;
         final String token;
         final String name;
+        /** Its other addresses (EasyTier, a tunnel…): one sign-in serves them all. */
+        final List<String> alternates;
 
         Computer(String baseUrl, String token, String name) {
+            this(baseUrl, token, name, Collections.emptyList());
+        }
+
+        Computer(String baseUrl, String token, String name, List<String> alternates) {
             this.baseUrl = baseUrl;
             this.token = token;
             this.name = name;
+            this.alternates = Collections.unmodifiableList(new ArrayList<>(alternates));
+        }
+
+        /** Every address, the ones reached directly (LAN, EasyTier) before tunnels. */
+        List<String> addresses() {
+            List<String> direct = new ArrayList<>();
+            List<String> tunnels = new ArrayList<>();
+            List<String> all = new ArrayList<>();
+            all.add(baseUrl);
+            all.addAll(alternates);
+            for (String address : all) (isDirect(address) ? direct : tunnels).add(address);
+            direct.addAll(tunnels);
+            return direct;
+        }
+
+        boolean hasAddress(String address) {
+            return baseUrl.equals(address) || alternates.contains(address);
         }
 
         /**
-         * Signs in (the server trades the token for its cookie) and opens Emdash. The
-         * install's id and the phone's name keep one entry in the computer's device list.
+         * Signs in at one of its addresses (the server trades the token for its cookie)
+         * and opens Emdash. The install's id and the phone's name keep one entry in the
+         * computer's device list.
          */
-        String connectUrl() {
-            return baseUrl
+        String connectUrl(String address) {
+            return address
                     + "/connect?token="
                     + Uri.encode(token)
                     + "&client="
@@ -48,6 +74,15 @@ final class Computers {
     /** This app install, and the phone's name, as computers list it among their devices. */
     static String clientId = "";
     static String deviceName = "Android";
+
+    /**
+     * Whether an address reaches the computer directly (an IP, a name on the LAN, a
+     * port) rather than through a tunnel's HTTPS host name, which is slower.
+     */
+    static boolean isDirect(String address) {
+        Uri uri = Uri.parse(address);
+        return "http".equals(uri.getScheme()) || uri.getPort() != -1;
+    }
 
     /** Remote access's default port, for an address typed without one. */
     static final int DEFAULT_PORT = 7788;
@@ -132,11 +167,17 @@ final class Computers {
             JSONArray array = new JSONArray(prefs.getString(KEY_LIST, "[]"));
             for (int i = 0; i < array.length(); i++) {
                 JSONObject item = array.getJSONObject(i);
+                List<String> alternates = new ArrayList<>();
+                JSONArray more = item.optJSONArray("alternates");
+                for (int j = 0; more != null && j < more.length(); j++) {
+                    alternates.add(more.getString(j));
+                }
                 list.add(
                         new Computer(
                                 item.getString("baseUrl"),
                                 item.getString("token"),
-                                item.optString("name", null)));
+                                item.optString("name", null),
+                                alternates));
             }
         } catch (JSONException ignored) {
             // Unreadable: start over, as if nothing were saved.
@@ -165,7 +206,11 @@ final class Computers {
             Computer saved = list.get(i);
             if (!saved.baseUrl.equals(computer.baseUrl)) continue;
             if (name == null) name = saved.name;
-            Computer updated = new Computer(computer.baseUrl, computer.token, name);
+            List<String> alternates = new ArrayList<>(saved.alternates);
+            for (String address : computer.alternates) {
+                if (!alternates.contains(address)) alternates.add(address);
+            }
+            Computer updated = new Computer(computer.baseUrl, computer.token, name, alternates);
             list.set(i, updated);
             write(list);
             return updated;
@@ -181,11 +226,46 @@ final class Computers {
         String trimmed = name.trim();
         for (int i = 0; i < list.size(); i++) {
             if (!list.get(i).baseUrl.equals(computer.baseUrl)) continue;
+            Computer saved = list.get(i);
             Computer renamed =
-                    new Computer(computer.baseUrl, list.get(i).token, trimmed.isEmpty() ? null : trimmed);
+                    new Computer(
+                            computer.baseUrl,
+                            saved.token,
+                            trimmed.isEmpty() ? null : trimmed,
+                            saved.alternates);
             list.set(i, renamed);
             write(list);
             return renamed;
+        }
+        return computer;
+    }
+
+    /**
+     * Gives a computer another address, and the token it now signs in with (signing in
+     * again at the new address replaced the old one).
+     */
+    Computer addAddress(Computer computer, String address, String token) {
+        for (Computer saved : all()) {
+            if (!saved.baseUrl.equals(computer.baseUrl)) continue;
+            List<String> alternates = new ArrayList<>(saved.alternates);
+            if (!saved.hasAddress(address)) alternates.add(address);
+            return save(new Computer(saved.baseUrl, token, saved.name, alternates));
+        }
+        return computer;
+    }
+
+    /** Drops one of a computer's other addresses (not the one it was added with). */
+    Computer removeAddress(Computer computer, String address) {
+        List<Computer> list = all();
+        for (int i = 0; i < list.size(); i++) {
+            Computer saved = list.get(i);
+            if (!saved.baseUrl.equals(computer.baseUrl)) continue;
+            List<String> alternates = new ArrayList<>(saved.alternates);
+            alternates.remove(address);
+            Computer updated = new Computer(saved.baseUrl, saved.token, saved.name, alternates);
+            list.set(i, updated);
+            write(list);
+            return updated;
         }
         return computer;
     }
@@ -204,6 +284,9 @@ final class Computers {
                 item.put("baseUrl", computer.baseUrl);
                 item.put("token", computer.token);
                 if (computer.name != null) item.put("name", computer.name);
+                if (!computer.alternates.isEmpty()) {
+                    item.put("alternates", new JSONArray(computer.alternates));
+                }
                 array.put(item);
             }
         } catch (JSONException e) {

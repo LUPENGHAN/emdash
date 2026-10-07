@@ -22,6 +22,16 @@
     <string name="status_verify">需要 Cloudflare 验证</string>
     <string name="access_needed">这台电脑开了 Cloudflare Access，验证后会自动连接。</string>
     <string name="access_blocked">Cloudflare Access 仍然拒绝这台手机。请检查规则里是否允许了你的邮箱。</string>
+    <string name="addresses">地址…</string>
+    <string name="addresses_of">%1$s 的地址</string>
+    <string name="add_address">添加地址</string>
+    <string name="address_hint">比如 10.126.126.3:7788 或 home.example.com</string>
+    <string name="address_in_use">正在使用</string>
+    <string name="address_more">+%1$d</string>
+    <string name="address_added">已添加。App 会优先用能连上的直连地址。</string>
+    <string name="address_merged">已作为 %1$s 的另一个地址添加。</string>
+    <string name="address_other_computer">这个地址是另一台电脑，或者这台手机在那里没有登录。</string>
+    <string name="remove_address">移除地址 %1$s？</string>
     <string name="status_checking">检查中…</string>
     <string name="status_open">已打开</string>
     <string name="rename">重命名</string>

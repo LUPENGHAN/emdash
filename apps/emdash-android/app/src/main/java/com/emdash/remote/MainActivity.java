@@ -79,6 +79,8 @@ public class MainActivity extends Activity implements Session.Listener {
     private SharedPreferences prefs;
     private final Map<String, Session> sessions = new HashMap<>();
     private final Map<String, Reachability> reachability = new HashMap<>();
+    /** The address each computer was last reached at, by the address it was added with. */
+    private final Map<String, String> activeAddress = new HashMap<>();
     private Session current;
     /** Adding a computer (not a session's own error) is what the panel shows. */
     private boolean adding;
@@ -232,7 +234,11 @@ public class MainActivity extends Activity implements Session.Listener {
         computers.select(computer);
         Session session = sessions.get(computer.baseUrl);
         if (session == null) {
-            session = new Session(this, computer, " EmdashAndroid/" + version(), files, this);
+            String address =
+                    activeAddress.getOrDefault(computer.baseUrl, computer.addresses().get(0));
+            session =
+                    new Session(
+                            this, computer, address, " EmdashAndroid/" + version(), files, this);
             sessions.put(computer.baseUrl, session);
             // Under the floating button, which is the container's last child.
             webContainer.addView(
@@ -250,6 +256,30 @@ public class MainActivity extends Activity implements Session.Listener {
         current = session;
         adding = false;
         render();
+        rechoose(session, false);
+    }
+
+    /**
+     * For a computer with several addresses, moves its page to the nearest one that
+     * answers, if that is not where it is. A page that is up stays put unless the
+     * network changed (`evenIfReady`), when a nearer address may have come in reach.
+     */
+    private void rechoose(Session session, boolean evenIfReady) {
+        if (session.computer.addresses().size() < 2) return;
+        Computers.Computer computer = session.computer;
+        probes.execute(
+                () -> {
+                    Choice choice = choose(computer);
+                    runOnUiThread(
+                            () -> {
+                                if (isDestroyed() || choice.address == null) return;
+                                activeAddress.put(computer.baseUrl, choice.address);
+                                if (choice.address.equals(session.address)) return;
+                                if (!evenIfReady && session.status == Session.Status.READY) return;
+                                session.switchTo(choice.address);
+                                if (session == current) render();
+                            });
+                });
     }
 
     private void showDevices() {
@@ -383,8 +413,30 @@ public class MainActivity extends Activity implements Session.Listener {
                     }
                     String answered = baseUrl;
                     PairResult outcome = result;
-                    runOnUiThread(() -> onPaired(answered, key, outcome));
+                    Computers.Computer same =
+                            outcome.status == 200 && outcome.token != null
+                                    ? sameComputer(answered, outcome.token)
+                                    : null;
+                    runOnUiThread(() -> onPaired(answered, key, outcome, same));
                 });
+    }
+
+    /**
+     * The saved computer a new sign-in at this address belongs to, if any: one with this
+     * address, or one the new token also signs in at (it is the same computer, reached
+     * another way, and signing in again replaced the token it had). Off the main thread.
+     */
+    private Computers.Computer sameComputer(String address, String token) {
+        List<Computers.Computer> saved = computers.all();
+        for (Computers.Computer computer : saved) {
+            if (computer.hasAddress(address)) return computer;
+        }
+        for (Computers.Computer computer : saved) {
+            for (String other : computer.addresses()) {
+                if (probeAddress(other, token).state == Reachability.ONLINE) return computer;
+            }
+        }
+        return null;
     }
 
     /** What a computer answered an access key with. */
@@ -437,9 +489,23 @@ public class MainActivity extends Activity implements Session.Listener {
         return result;
     }
 
-    private void onPaired(String baseUrl, String key, PairResult result) {
+    private void onPaired(
+            String baseUrl, String key, PairResult result, Computers.Computer same) {
         if (isDestroyed()) return;
         primaryButton.setEnabled(true);
+        if (result.status == 200 && result.token != null && same != null) {
+            prefs.edit().putString(KEY_ACCESS_KEY, key).apply();
+            if (!same.hasAddress(baseUrl)) {
+                Toast.makeText(
+                                this,
+                                getString(R.string.address_merged, same.label()),
+                                Toast.LENGTH_LONG)
+                        .show();
+            }
+            activeAddress.put(same.baseUrl, baseUrl);
+            open(computers.addAddress(same, baseUrl, result.token));
+            return;
+        }
         if (result.status == 200 && result.token != null) {
             prefs.edit().putString(KEY_ACCESS_KEY, key).apply();
             // A name the user gave this computer stays; a new one takes the computer's own.
@@ -567,8 +633,12 @@ public class MainActivity extends Activity implements Session.Listener {
             View card = inflater.inflate(R.layout.device_card, deviceCards, false);
             ((TextView) card.findViewById(R.id.device_name)).setText(computer.label());
             Reachability state = reachability.getOrDefault(computer.baseUrl, Reachability.CHECKING);
-            String address = Uri.parse(computer.baseUrl).getAuthority();
+            String address =
+                    Uri.parse(activeAddress.getOrDefault(computer.baseUrl, computer.baseUrl))
+                            .getAuthority();
             String detail = getString(statusText(state)) + " · " + address;
+            int more = computer.addresses().size() - 1;
+            if (more > 0) detail += " " + getString(R.string.address_more, more);
             if (sessions.containsKey(computer.baseUrl)) detail += " · " + getString(R.string.status_open);
             ((TextView) card.findViewById(R.id.device_detail)).setText(detail);
             GradientDrawable dot = new GradientDrawable();
@@ -618,6 +688,7 @@ public class MainActivity extends Activity implements Session.Listener {
     private void showDeviceMenu(Computers.Computer computer) {
         String[] items = {
             getString(R.string.rename),
+            getString(R.string.addresses),
             getString(R.string.reload),
             getString(R.string.remove_computer, computer.label())
         };
@@ -629,6 +700,8 @@ public class MainActivity extends Activity implements Session.Listener {
                             if (which == 0) {
                                 showRename(computer);
                             } else if (which == 1) {
+                                showAddresses(computer);
+                            } else if (which == 2) {
                                 Session session = sessions.get(computer.baseUrl);
                                 if (session != null) session.connect();
                                 open(computer);
@@ -665,6 +738,156 @@ public class MainActivity extends Activity implements Session.Listener {
                 .show();
     }
 
+    /**
+     * A computer's addresses, the one in use marked: tap another to remove it, or add
+     * one (where the app reaches it from elsewhere, or a faster way at home).
+     */
+    private void showAddresses(Computers.Computer computer) {
+        Computers.Computer saved = find(computer.baseUrl);
+        if (saved == null) return;
+        List<String> addresses = saved.addresses();
+        String inUse = activeAddress.getOrDefault(saved.baseUrl, saved.baseUrl);
+        String[] items = new String[addresses.size()];
+        for (int i = 0; i < items.length; i++) {
+            String address = addresses.get(i);
+            items[i] = Uri.parse(address).getAuthority();
+            if (address.startsWith("https://")) items[i] = "https://" + items[i];
+            if (address.equals(inUse)) items[i] += " · " + getString(R.string.address_in_use);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.addresses_of, saved.label()))
+                .setItems(
+                        items,
+                        (dialog, which) -> {
+                            String address = addresses.get(which);
+                            if (!address.equals(saved.baseUrl)) confirmRemoveAddress(saved, address);
+                        })
+                .setPositiveButton(R.string.add_address, (dialog, which) -> showAddAddress(saved))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void confirmRemoveAddress(Computers.Computer computer, String address) {
+        new AlertDialog.Builder(this)
+                .setMessage(getString(R.string.remove_address, Uri.parse(address).getAuthority()))
+                .setPositiveButton(
+                        R.string.remove,
+                        (dialog, which) -> {
+                            Computers.Computer updated = computers.removeAddress(computer, address);
+                            Session session = sessions.get(computer.baseUrl);
+                            if (session != null) {
+                                session.computer = updated;
+                                if (address.equals(session.address)) session.switchTo(updated.baseUrl);
+                            }
+                            if (address.equals(activeAddress.get(computer.baseUrl))) {
+                                activeAddress.remove(computer.baseUrl);
+                            }
+                            renderDevices();
+                            probe(updated);
+                        })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    /** Asks for another address and keeps it once the computer's sign-in works there. */
+    private void showAddAddress(Computers.Computer computer) {
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setHint(R.string.address_hint);
+        int padding = dp(20);
+        FrameLayout frame = new FrameLayout(this);
+        frame.setPadding(padding, dp(8), padding, 0);
+        frame.addView(input);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.add_address)
+                .setView(frame)
+                .setPositiveButton(
+                        android.R.string.ok,
+                        (dialog, which) -> {
+                            List<String> candidates =
+                                    Computers.addressCandidates(input.getText().toString());
+                            if (candidates.isEmpty()) {
+                                Toast.makeText(this, R.string.invalid_link, Toast.LENGTH_LONG).show();
+                            } else {
+                                tryAddress(computer, candidates, true);
+                            }
+                        })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    /**
+     * Checks the computer's sign-in at the first candidate that answers: there, it is
+     * the same computer. Behind Cloudflare Access, its sign-in comes first (once).
+     */
+    private void tryAddress(Computers.Computer computer, List<String> candidates, boolean mayVerify) {
+        probes.execute(
+                () -> {
+                    String address = candidates.get(0);
+                    Probe probe = new Probe(Reachability.OFFLINE, null);
+                    for (String candidate : candidates) {
+                        address = candidate;
+                        probe = probeAddress(candidate, computer.token);
+                        if (probe.state != Reachability.OFFLINE) break;
+                    }
+                    String answered = address;
+                    Reachability state = probe.state;
+                    runOnUiThread(
+                            () -> {
+                                if (isDestroyed()) return;
+                                switch (state) {
+                                    case ONLINE:
+                                        Computers.Computer updated =
+                                                computers.addAddress(computer, answered, computer.token);
+                                        Session session = sessions.get(computer.baseUrl);
+                                        if (session != null) session.computer = updated;
+                                        Toast.makeText(this, R.string.address_added, Toast.LENGTH_LONG)
+                                                .show();
+                                        renderDevices();
+                                        probe(updated);
+                                        break;
+                                    case VERIFY:
+                                        if (mayVerify) {
+                                            verifyAccess(
+                                                    answered,
+                                                    () ->
+                                                            tryAddress(
+                                                                    computer,
+                                                                    List.of(answered),
+                                                                    false));
+                                        } else {
+                                            Toast.makeText(this, R.string.access_blocked, Toast.LENGTH_LONG)
+                                                    .show();
+                                        }
+                                        break;
+                                    case SIGNED_OUT:
+                                        Toast.makeText(
+                                                        this,
+                                                        R.string.address_other_computer,
+                                                        Toast.LENGTH_LONG)
+                                                .show();
+                                        break;
+                                    default:
+                                        Toast.makeText(
+                                                        this,
+                                                        getString(
+                                                                R.string.pair_unreachable,
+                                                                Uri.parse(answered).getAuthority()),
+                                                        Toast.LENGTH_LONG)
+                                                .show();
+                                        break;
+                                }
+                            });
+                });
+    }
+
+    private Computers.Computer find(String baseUrl) {
+        for (Computers.Computer computer : computers.all()) {
+            if (computer.baseUrl.equals(baseUrl)) return computer;
+        }
+        return null;
+    }
+
     private void confirmRemove(Computers.Computer computer) {
         new AlertDialog.Builder(this)
                 .setMessage(getString(R.string.remove_confirm, computer.label()))
@@ -673,6 +896,7 @@ public class MainActivity extends Activity implements Session.Listener {
                         (dialog, which) -> {
                             computers.remove(computer);
                             reachability.remove(computer.baseUrl);
+                            activeAddress.remove(computer.baseUrl);
                             Session session = sessions.remove(computer.baseUrl);
                             if (session != null) {
                                 webContainer.removeView(session.web);
@@ -691,36 +915,81 @@ public class MainActivity extends Activity implements Session.Listener {
         handler.postDelayed(probeAgain, PROBE_MS);
     }
 
-    /** Asks a computer's `/info` whether it is up and the link still works; names it too. */
+    /** What one of a computer's addresses answered. */
+    private static final class Probe {
+        final Reachability state;
+        final String name;
+
+        Probe(Reachability state, String name) {
+            this.state = state;
+            this.name = name;
+        }
+    }
+
+    /** The address to use for a computer, and what it answered there. */
+    private static final class Choice {
+        /** Null when none answered. */
+        final String address;
+        final Probe probe;
+
+        Choice(String address, Probe probe) {
+            this.address = address;
+            this.probe = probe;
+        }
+    }
+
+    /**
+     * Asks one address's `/info` whether Emdash is up there and the token signs in; names
+     * the computer too. Direct addresses get less time: one out of reach (EasyTier from
+     * the mobile network) should not hold up the tunnel behind it. Off the main thread.
+     */
+    private Probe probeAddress(String address, String token) {
+        try {
+            HttpURLConnection connection =
+                    (HttpURLConnection) new URL(address + "/info").openConnection();
+            int timeout = Computers.isDirect(address) ? 2_000 : 5_000;
+            connection.setConnectTimeout(timeout);
+            connection.setReadTimeout(timeout);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Cookie", CloudflareAccess.cookies(address, token));
+            int code = connection.getResponseCode();
+            Probe probe;
+            if (CloudflareAccess.blocked(connection, code)) {
+                probe = new Probe(Reachability.VERIFY, null);
+            } else if (code == 200) {
+                String name = new JSONObject(read(connection.getInputStream())).optString("name", null);
+                probe = new Probe(Reachability.ONLINE, name);
+            } else {
+                probe = new Probe(code == 401 ? Reachability.SIGNED_OUT : Reachability.OFFLINE, null);
+            }
+            connection.disconnect();
+            return probe;
+        } catch (Exception e) {
+            return new Probe(Reachability.OFFLINE, null);
+        }
+    }
+
+    /** The first of a computer's addresses, direct ones first, that answers. Off the main thread. */
+    private Choice choose(Computers.Computer computer) {
+        for (String address : computer.addresses()) {
+            Probe probe = probeAddress(address, computer.token);
+            if (probe.state != Reachability.OFFLINE) return new Choice(address, probe);
+        }
+        return new Choice(null, new Probe(Reachability.OFFLINE, null));
+    }
+
+    /** Checks how a computer can be reached, and at which address; names it too. */
     private void probe(Computers.Computer computer) {
         probes.execute(
                 () -> {
-                    Reachability state;
-                    String name = null;
-                    try {
-                        HttpURLConnection connection =
-                                (HttpURLConnection) new URL(computer.baseUrl + "/info").openConnection();
-                        connection.setConnectTimeout(4_000);
-                        connection.setReadTimeout(4_000);
-                        connection.setInstanceFollowRedirects(false);
-                        connection.setRequestProperty(
-                                "Cookie", CloudflareAccess.cookies(computer.baseUrl, computer.token));
-                        int code = connection.getResponseCode();
-                        if (CloudflareAccess.blocked(connection, code)) {
-                            state = Reachability.VERIFY;
-                        } else if (code == 200) {
-                            state = Reachability.ONLINE;
-                            name = new JSONObject(read(connection.getInputStream())).optString("name", null);
-                        } else {
-                            state = code == 401 ? Reachability.SIGNED_OUT : Reachability.OFFLINE;
-                        }
-                        connection.disconnect();
-                    } catch (Exception e) {
-                        state = Reachability.OFFLINE;
-                    }
-                    Reachability result = state;
-                    String reported = name;
-                    runOnUiThread(() -> onProbed(computer, result, reported));
+                    Choice choice = choose(computer);
+                    runOnUiThread(
+                            () -> {
+                                if (choice.address != null && !isDestroyed()) {
+                                    activeAddress.put(computer.baseUrl, choice.address);
+                                }
+                                onProbed(computer, choice.probe.state, choice.probe.name);
+                            });
                 });
     }
 
@@ -747,6 +1016,8 @@ public class MainActivity extends Activity implements Session.Listener {
         if (session.status == Session.Status.READY && session.computer.name == null) {
             probe(session.computer);
         }
+        // Out of reach where it is: another of its addresses may answer.
+        if (session.status == Session.Status.UNREACHABLE) rechoose(session, false);
         if (session == current) render();
     }
 
@@ -926,6 +1197,8 @@ public class MainActivity extends Activity implements Session.Listener {
                                 () -> {
                                     if (isDestroyed()) return;
                                     retry.run();
+                                    // A nearer address may be in reach now, or the one in use not.
+                                    if (current != null) rechoose(current, true);
                                     if (devices.getVisibility() == View.VISIBLE) probeAll();
                                 });
                     }

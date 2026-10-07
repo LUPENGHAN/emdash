@@ -47,6 +47,8 @@ final class Session {
                     + "return !s||s.classList.contains('boot-splash-done');})()";
 
     Computers.Computer computer;
+    /** The computer's address the page is on, the nearest that answered. */
+    String address;
     final WebView web;
     Status status = Status.LOADING;
     /** Emdash started on the page; until then a failed script leaves it stuck. */
@@ -58,10 +60,12 @@ final class Session {
     Session(
             Context context,
             Computers.Computer computer,
+            String address,
             String userAgentSuffix,
             FileBridge files,
             Listener listener) {
         this.computer = computer;
+        this.address = address;
         this.listener = listener;
         web = new WebView(context);
         web.setVisibility(View.GONE);
@@ -80,7 +84,7 @@ final class Session {
                 new WebViewClient() {
                     @Override
                     public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                        if (sameOrigin(request.getUrl(), Session.this.computer.baseUrl)) return false;
+                        if (sameOrigin(request.getUrl(), Session.this.address)) return false;
                         // Until Emdash is up, the page is signing in: Access, and the sign-in
                         // it offers (a Cloudflare or GitHub account), stay here.
                         if (status == Status.LOADING || status == Status.VERIFYING) return false;
@@ -91,8 +95,9 @@ final class Session {
                     @Override
                     public void onPageFinished(WebView view, String url) {
                         Uri page = Uri.parse(url);
+                        if (stale(page)) return;
                         if (CloudflareAccess.isSignInPage(page)
-                                || !sameOrigin(page, Session.this.computer.baseUrl)) {
+                                || !sameOrigin(page, Session.this.address)) {
                             setStatus(Status.VERIFYING, listener);
                             return;
                         }
@@ -106,10 +111,11 @@ final class Session {
                     @Override
                     public void onReceivedError(
                             WebView view, WebResourceRequest request, WebResourceError error) {
+                        if (stale(request.getUrl())) return;
                         // A script that fails while Emdash starts (the connection dropped
                         // mid-load) leaves it on its splash for good: count it unreachable.
                         boolean ownAsset =
-                                sameOrigin(request.getUrl(), Session.this.computer.baseUrl);
+                                sameOrigin(request.getUrl(), Session.this.address);
                         if (request.isForMainFrame() || (ownAsset && !booted)) {
                             setStatus(Status.UNREACHABLE, listener);
                         }
@@ -118,6 +124,7 @@ final class Session {
                     @Override
                     public void onReceivedHttpError(
                             WebView view, WebResourceRequest request, WebResourceResponse response) {
+                        if (stale(request.getUrl())) return;
                         if (request.isForMainFrame() && response.getStatusCode() == 401) {
                             setStatus(Status.SIGNED_OUT, listener);
                         }
@@ -141,7 +148,21 @@ final class Session {
         status = Status.LOADING;
         booted = false;
         web.clearHistory();
-        web.loadUrl(computer.connectUrl());
+        web.loadUrl(computer.connectUrl(address));
+    }
+
+    /** Moves the page to another of the computer's addresses, signing in there. */
+    void switchTo(String next) {
+        web.stopLoading();
+        address = next;
+        connect();
+    }
+
+    /** A page or error from another of the computer's addresses: a load a switch replaced. */
+    private boolean stale(Uri url) {
+        if (url.getScheme() == null || url.getAuthority() == null) return false;
+        String origin = url.getScheme() + "://" + url.getAuthority();
+        return !sameOrigin(url, address) && computer.hasAddress(origin);
     }
 
     /** Watches the page until Emdash has started, or calls it stuck. */

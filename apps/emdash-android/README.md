@@ -17,6 +17,10 @@ screen, without a browser.
 - **Plain HTTP over a private network.** Computers are reached by address on EasyTier,
   Tailscale or the LAN, so HTTP is allowed (no certificate needed). A host name typed without
   a port is tried over HTTPS first, for a tunnel such as `emdash.example.com`.
+- **Several addresses for one computer.** EasyTier and a tunnel, say: the app uses the nearest
+  that answers (direct before tunnel), moves on when one is out of reach, and looks again when
+  the network changes. Long-press a computer → Addresses to add or remove one; adding the same
+  computer again with the access key merges it in.
 - **Reconnects by itself.** If a computer can't be reached, the app retries every 10 seconds
   while it is open, and again when the phone's network changes.
 

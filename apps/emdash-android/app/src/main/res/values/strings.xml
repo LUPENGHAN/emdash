@@ -24,6 +24,16 @@
     <string name="status_verify">Needs Cloudflare sign-in</string>
     <string name="access_needed">Behind Cloudflare Access: sign in, then it connects by itself.</string>
     <string name="access_blocked">Cloudflare Access still turns this phone away. Check that your email is allowed in its policy.</string>
+    <string name="addresses">Addresses…</string>
+    <string name="addresses_of">Addresses of %1$s</string>
+    <string name="add_address">Add an address</string>
+    <string name="address_hint">e.g. 10.126.126.3:7788 or home.example.com</string>
+    <string name="address_in_use">in use</string>
+    <string name="address_more">+%1$d</string>
+    <string name="address_added">Added. The app uses the nearest address that answers.</string>
+    <string name="address_merged">Added as another address of %1$s.</string>
+    <string name="address_other_computer">That address is another computer, or this phone is not signed in there.</string>
+    <string name="remove_address">Remove the address %1$s?</string>
     <string name="status_checking">Checking…</string>
     <string name="status_open">Open</string>
     <string name="rename">Rename</string>
