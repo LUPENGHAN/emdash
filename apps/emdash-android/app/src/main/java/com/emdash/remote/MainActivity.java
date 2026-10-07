@@ -331,11 +331,11 @@ public class MainActivity extends Activity implements Session.Listener {
             }
             return;
         }
-        String baseUrl =
+        List<String> candidates =
                 text.isEmpty() && signedOut != null
-                        ? signedOut.computer.baseUrl
-                        : Computers.parseAddress(text);
-        if (baseUrl == null) {
+                        ? java.util.Collections.singletonList(signedOut.computer.baseUrl)
+                        : Computers.addressCandidates(text);
+        if (candidates.isEmpty()) {
             linkInput.setError(getString(R.string.invalid_link));
             return;
         }
@@ -347,8 +347,17 @@ public class MainActivity extends Activity implements Session.Listener {
         primaryButton.setEnabled(false);
         probes.execute(
                 () -> {
-                    PairResult result = pair(baseUrl, key);
-                    runOnUiThread(() -> onPaired(baseUrl, key, result));
+                    // The first address that answers at all is the computer.
+                    String baseUrl = candidates.get(0);
+                    PairResult result = null;
+                    for (String candidate : candidates) {
+                        baseUrl = candidate;
+                        result = pair(candidate, key);
+                        if (result.status != 0) break;
+                    }
+                    String answered = baseUrl;
+                    PairResult outcome = result;
+                    runOnUiThread(() -> onPaired(answered, key, outcome));
                 });
     }
 

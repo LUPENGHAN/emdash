@@ -15,7 +15,8 @@ screen, without a browser.
 - **Downloads.** Long-press a file in Emdash's file tree and choose Download: it is saved to
   the phone's Downloads folder (up to 100 MB a file).
 - **Plain HTTP over a private network.** Computers are reached by address on EasyTier,
-  Tailscale or the LAN, so HTTP is allowed (no certificate needed).
+  Tailscale or the LAN, so HTTP is allowed (no certificate needed). A host name typed without
+  a port is tried over HTTPS first, for a tunnel such as `emdash.example.com`.
 - **Reconnects by itself.** If a computer can't be reached, the app retries every 10 seconds
   while it is open, and again when the phone's network changes.
 

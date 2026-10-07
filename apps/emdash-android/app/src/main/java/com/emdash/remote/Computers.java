@@ -108,6 +108,24 @@ final class Computers {
                 .replace('｡', '.');
     }
 
+    /**
+     * Where a typed address may be served, in the order to try: as given when it names
+     * the scheme or port; an IP address on remote access's port; a host name over HTTPS
+     * first (a tunnel such as emdash.example.com), then on remote access's port (mac.lan).
+     */
+    static List<String> addressCandidates(String text) {
+        List<String> found = new ArrayList<>();
+        String base = parseAddress(text);
+        if (base == null) return found;
+        String trimmed = halfWidth(text).trim();
+        Uri uri = Uri.parse(base);
+        boolean named = trimmed.contains("://") || Uri.parse("http://" + trimmed).getPort() != -1;
+        boolean ip = uri.getHost().matches("[0-9.]+") || uri.getHost().contains(":");
+        if (!named && !ip) found.add("https://" + uri.getHost());
+        found.add(base);
+        return found;
+    }
+
     List<Computer> all() {
         List<Computer> list = new ArrayList<>();
         try {

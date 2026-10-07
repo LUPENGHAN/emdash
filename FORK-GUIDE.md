@@ -205,6 +205,58 @@ emdash-android             # 只编译，产物在 apps/emdash-android/Emdash.ap
 
 只要每次都在同一台电脑上编译，都能直接覆盖安装。换了电脑编译时，需要先卸载旧版本，因为签名不同。
 
+### 4. 不装 EasyTier 也能连：Cloudflare Tunnel（可选）
+
+手机不在同一个网络里时，可以给电脑一个 HTTPS 网址，比如 `https://emdash.example.com`：
+
+- Mac 上的 `cloudflared` 主动连到 Cloudflare，访问这个网址的请求再转回本机的 `127.0.0.1:7788`。
+- 不用开端口，也不用公网 IP，证书由 Cloudflare 自动处理。
+
+**先设好访问密钥**（见上面方式一）。网址是公开的，没有密钥就只能用链接登录。
+
+需要一个托管在 Cloudflare 上的域名。在 Mac 上执行：
+
+```bash
+brew install cloudflared
+cloudflared tunnel login                     # 浏览器里选择域名并授权
+cloudflared tunnel create emdash-mac         # 记下输出里的隧道 ID
+cloudflared tunnel route dns emdash-mac emdash.example.com
+```
+
+然后写 `~/.cloudflared/config.yml`，把 `<隧道 ID>` 和域名换成你自己的：
+
+```yaml
+tunnel: <隧道 ID>
+credentials-file: /Users/你的用户名/.cloudflared/<隧道 ID>.json
+ingress:
+  - hostname: emdash.example.com
+    service: http://127.0.0.1:7788
+  - service: http_status:404
+```
+
+再让它开机自动运行：建 `~/Library/LaunchAgents/com.cloudflare.cloudflared.plist`。
+
+- 程序参数写 `cloudflared tunnel --config ~/.cloudflared/config.yml run`。
+- 打开 `RunAtLoad` 和 `KeepAlive`。
+
+建好后加载：
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloudflare.cloudflared.plist
+```
+
+用起来：
+
+- **App 里** 地址直接填 `emdash.example.com`，App 会先试 HTTPS。
+- **浏览器里** 打开网址，会出现输入密钥的登录页。
+- **网址返回 502**，说明 Emdash 没开或没开远程访问。这时没有任何东西暴露出去。
+- **远程访问的监听地址**不是本机时（比如填了 EasyTier 的 IP），Emdash 也会同时监听 `127.0.0.1`，隧道照样能用。
+- **暂停隧道**：`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.cloudflare.cloudflared.plist`。重新开启用上面的 `bootstrap`。
+
+**多一层保护（可选）：Cloudflare Access。** 在 Cloudflare 后台 Zero Trust → Access → Applications，给这个网址加一条规则，比如只允许你的邮箱。这样访问网址要先通过邮箱验证码，然后才能看到 Emdash 的登录页。
+
+注意：开了 Access 之后，App 里「地址 + 密钥」的方式会被 Access 挡住。请改用浏览器，或者在 App 里用链接添加。
+
 ---
 
 ## 六、卸载
