@@ -59,6 +59,7 @@ import type {
   SessionSnapshotJudgment,
 } from '#services/session-lifecycle/api';
 import { createSessionLifecycle } from '#services/session-lifecycle/node';
+import { autoApproveOption } from '../session/auto-approve';
 import { ConversationHandle } from './conversation-handle';
 import type { ActivationStartError, SessionRecord } from './conversation-types';
 import { persistedIntentV1Schema } from './session-intent-schemas';
@@ -106,6 +107,8 @@ export class SessionManager {
   readonly sessionsList: SessionsListModel = this.sessionsHost.model;
   readonly router: SessionRouter;
   private readonly retained = new Map<string, ConversationHandle>();
+  /** Conversations whose permission requests are answered "allow" without asking. */
+  private readonly autoApprove = new Set<string>();
   private readonly suspendedIntents = new Map<string, SuspendedIntentEntry>();
   private readonly clock: Clock;
   private readonly lifecycle: ConversationSessionLifecycle;
@@ -184,7 +187,14 @@ export class SessionManager {
     });
   }
 
+  private noteAutoApprove(input: AcpStartInput): void {
+    if (input.autoApprove === undefined) return;
+    if (input.autoApprove) this.autoApprove.add(input.conversationId);
+    else this.autoApprove.delete(input.conversationId);
+  }
+
   async attach(input: AcpStartInput): Promise<Result<{ sessionId: string | null }, AcpStartError>> {
+    this.noteAutoApprove(input);
     await this.retained.get(input.conversationId)?.waitForEviction();
     const existing = this.getOrRestoreHandle(input.conversationId);
     const entry =
@@ -210,6 +220,7 @@ export class SessionManager {
       AcpStartError
     >
   > {
+    this.noteAutoApprove(input);
     await this.retained.get(input.conversationId)?.waitForEviction();
     const existing = this.retained.get(input.conversationId);
     const restored = existing ? null : this.getOrRestoreHandle(input.conversationId);
@@ -507,6 +518,17 @@ export class SessionManager {
     return record ? record.cell.resolvePermission(requestId, optionId) : ok();
   }
 
+  setAutoApprove(
+    conversationId: string,
+    enabled: boolean
+  ): Result<void, AcpResolvePermissionError> {
+    if (enabled) this.autoApprove.add(conversationId);
+    else this.autoApprove.delete(conversationId);
+    if (enabled)
+      this.readyRecord(conversationId)?.cell.resolvePendingPermissions(autoApproveOption);
+    return ok();
+  }
+
   async setOption(
     conversationId: string,
     configId: string,
@@ -643,6 +665,13 @@ export class SessionManager {
     const record = this.recordForCallbacks(conversationId);
     if (!record) return Promise.resolve({ outcome: { outcome: 'cancelled' } });
     this.lifecycle.recordOutput(conversationId);
+    const approved = this.autoApprove.has(conversationId)
+      ? autoApproveOption(params.options)
+      : null;
+    if (approved) {
+      record.cell.recordAutoApproval(params, approved);
+      return Promise.resolve({ outcome: { outcome: 'selected', optionId: approved } });
+    }
     const response = record.cell.requestPermission(params);
     record.conversation.syncRecord(record);
     return response;

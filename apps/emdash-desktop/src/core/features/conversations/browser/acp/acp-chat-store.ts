@@ -176,6 +176,8 @@ export class AcpChatStore {
       configuredOptions: computed,
       setOption: action,
       resolvePermission: action,
+      autoApprove: computed,
+      setAutoApprove: action,
       editQueuedPrompt: action,
       deleteQueuedPrompt: action,
       reorderQueuedPrompts: action,
@@ -532,6 +534,24 @@ export class AcpChatStore {
         }
       })
       .catch((error: unknown) => this._toastError('Failed to change setting', error));
+  }
+
+  /** Whether Emdash answers this conversation's permission requests with "allow". */
+  get autoApprove(): boolean {
+    return (
+      conversationRegistry.get(this.taskId)?.conversations.get(this.conversationId)?.data
+        .autoApprove === true
+    );
+  }
+
+  setAutoApprove(enabled: boolean): void {
+    if (!this.session) return;
+    void this.session
+      .setAutoApprove(enabled)
+      .then((result) => {
+        if (!result.success) this._toastError('Failed to change auto-approval', result.error);
+      })
+      .catch((error: unknown) => this._toastError('Failed to change auto-approval', error));
   }
 
   resolvePermission(optionId: string): void {

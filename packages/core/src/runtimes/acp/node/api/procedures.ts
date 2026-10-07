@@ -90,6 +90,12 @@ export function createAcpProcedures(runtime: AcpRuntime) {
     }): Result<void, AcpResolvePermissionError> {
       return runtime.resolvePermission(input.conversationId, input.requestId, input.optionId);
     },
+    setAutoApprove(input: {
+      conversationId: string;
+      enabled: boolean;
+    }): Result<void, AcpResolvePermissionError> {
+      return runtime.setAutoApprove(input.conversationId, input.enabled);
+    },
     exportAcpTranscript(input: {
       conversationId: string;
     }): Result<{ transcript: string }, AcpExportTranscriptError> {

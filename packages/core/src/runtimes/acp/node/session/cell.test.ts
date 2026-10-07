@@ -3,6 +3,7 @@ import { isOk } from '@emdash/shared';
 import { noopLogger } from '@emdash/shared/logger';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeAcpAgent } from '#runtimes/acp/node/acp-test-support';
+import { autoApproveOption } from './auto-approve';
 import { SessionCell } from './cell';
 function makePendingCell(agent = new FakeAcpAgent()) {
   const cell = new SessionCell({
@@ -155,6 +156,35 @@ describe('SessionCell permissions', () => {
       outcome: { outcome: 'selected', optionId: 'allow' },
     });
     expect(cell.sessionState.pendingPermissions).toHaveLength(0);
+  });
+  it('answers pending requests when auto-approval turns on, allowing once', async () => {
+    const { cell } = makeCell();
+    const permission = cell.requestPermission({
+      sessionId: 'session-1',
+      toolCall: { toolCallId: 'tool-3', title: 'Run a command', kind: 'execute' },
+      options: [
+        { optionId: 'always', name: 'Always', kind: 'allow_always' as PermissionOptionKind },
+        { optionId: 'once', name: 'Once', kind: 'allow_once' as PermissionOptionKind },
+        { optionId: 'reject', name: 'Reject', kind: 'reject_once' as PermissionOptionKind },
+      ],
+    });
+    cell.resolvePendingPermissions(autoApproveOption);
+    await expect(permission).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'once' },
+    });
+    expect(cell.sessionState.pendingPermissions).toHaveLength(0);
+  });
+  it('leaves a request it cannot allow for the user', () => {
+    const { cell } = makeCell();
+    void cell.requestPermission({
+      sessionId: 'session-1',
+      toolCall: { toolCallId: 'tool-4', title: 'Delete', kind: 'delete' },
+      options: [
+        { optionId: 'reject', name: 'Reject', kind: 'reject_once' as PermissionOptionKind },
+      ],
+    });
+    cell.resolvePendingPermissions(autoApproveOption);
+    expect(cell.sessionState.pendingPermissions).toHaveLength(1);
   });
   it('drains pending permissions on dispose', async () => {
     const { cell } = makeCell();

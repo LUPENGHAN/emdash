@@ -35,6 +35,8 @@ const acpConfigV1 = z.object({
   type: z.literal('acp'),
   /** Initial queued prompts to deliver once, before the first successful ACP session id is persisted. */
   initialQueue: z.array(initialQueuePromptSchema).optional(),
+  /** Emdash answers the agent's permission requests with "allow" instead of asking. */
+  autoApprove: z.boolean().optional(),
   /** Model provider this conversation runs on: its id, null = the agent's own login, absent = agent default. */
   modelSource: z.string().nullable().optional(),
   /** Model on that provider. */

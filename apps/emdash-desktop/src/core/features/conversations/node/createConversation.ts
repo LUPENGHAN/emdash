@@ -100,6 +100,7 @@ export async function createConversation(
           version: '1',
           type: 'acp',
           ...(params.options && { options: params.options }),
+          ...(params.autoApprove && { autoApprove: true }),
           ...(params.modelSource !== undefined && { modelSource: params.modelSource }),
           ...(params.sourceModel && { sourceModel: params.sourceModel }),
           ...(initialQueue?.length && { initialQueue }),

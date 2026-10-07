@@ -225,7 +225,8 @@ export function agentSupportsAutoApprove(
   capabilities: AgentCapabilities | undefined | null,
   transport: 'acp' | 'pty' = 'pty'
 ): boolean {
-  if (transport === 'acp') return false;
+  // Chat conversations: Emdash answers the agent's permission requests itself.
+  if (transport === 'acp') return true;
   return capabilities?.autoApprove.kind === 'supported';
 }
 

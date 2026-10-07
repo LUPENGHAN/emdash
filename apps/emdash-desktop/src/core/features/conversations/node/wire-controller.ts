@@ -393,6 +393,15 @@ export function createConversationsWireController(
         ),
       cancelTurn: (input, meta) =>
         run(input.conversationId, (client) => client.acp.cancelTurn(input, callOptions(meta))),
+      setAutoApprove: (input, meta) =>
+        run(input.conversationId, async (client) => {
+          const persisted = await client.conversations.patchConfig({
+            conversationId: input.conversationId,
+            patch: { autoApprove: input.enabled },
+          });
+          if (!persisted.success) return acpErr.invalidState(persisted.error.message);
+          return client.acp.setAutoApprove(input, callOptions(meta));
+        }),
       resolvePermission: (input, meta) =>
         run(input.conversationId, (client) =>
           client.acp.resolvePermission(input, callOptions(meta))
@@ -556,6 +565,7 @@ async function resolveConversationRuntimeTarget(
               ? await piFamilySessionId(row.providerId, row.sessionId)
               : row.sessionId,
           options: acpConfig?.options,
+          autoApprove: acpConfig?.autoApprove === true,
           ...(initialQueue && { initialQueue }),
           ...(Object.keys(processEnv).length > 0 ? { env: processEnv } : {}),
           ...(extraMcpServers?.length ? { extraMcpServers } : {}),

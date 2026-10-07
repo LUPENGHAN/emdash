@@ -353,6 +353,31 @@ export class SessionCell {
     return ok();
   }
 
+  /** Records a permission request that auto-approval answered without asking. */
+  recordAutoApproval(params: RequestPermissionRequest, optionId: string): void {
+    this.rawLog.record({
+      kind: 'permission_request',
+      sessionId: params.sessionId,
+      request: params,
+    });
+    this.rawLog.record({
+      kind: 'permission_resolved',
+      sessionId: this.acpSessionId,
+      requestId: 'auto-approved',
+      optionId,
+    });
+  }
+
+  /** Answers the pending permission requests with the option `choose` picks, where it picks one. */
+  resolvePendingPermissions(
+    choose: (options: readonly { optionId: string; kind: string }[]) => string | null
+  ): void {
+    for (const request of [...this.machine.pendingPermissions]) {
+      const optionId = choose(request.options);
+      if (optionId) this.resolvePermission(request.requestId, optionId);
+    }
+  }
+
   requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
     const requestId = crypto.randomUUID();
     const request: AcpPermissionRequest = {

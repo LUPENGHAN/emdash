@@ -273,6 +273,10 @@ export class AcpLiveSession {
     return this.client.setOption({ conversationId: this.conversationId, configId, value });
   }
 
+  setAutoApprove(enabled: boolean): Promise<Result<void, unknown>> {
+    return this.client.setAutoApprove({ conversationId: this.conversationId, enabled });
+  }
+
   resolvePermission(requestId: string, optionId: string): Promise<Result<void, unknown>> {
     return this.client.resolvePermission({
       conversationId: this.conversationId,

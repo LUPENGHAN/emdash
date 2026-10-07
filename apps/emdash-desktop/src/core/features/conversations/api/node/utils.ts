@@ -28,7 +28,7 @@ export function mapConversationRowToConversation(row: ConversationRow): Conversa
     taskId: row.taskId,
     projectId: row.projectId,
     providerId: row.provider as AgentProviderId,
-    autoApprove: config?.type === 'pty' ? config.autoApprove : undefined,
+    autoApprove: config?.autoApprove,
     sessionId: row.providerSessionId ?? undefined,
     model: config?.type === 'pty' ? config.model : undefined,
     options: config?.type === 'acp' ? config.options : undefined,

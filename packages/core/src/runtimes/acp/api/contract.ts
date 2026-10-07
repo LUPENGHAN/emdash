@@ -99,6 +99,11 @@ export const acpApiContract = defineContract({
     input: resolvePermissionCommandSchema,
     error: acpResolvePermissionErrorSchema,
   }),
+  /** Turns a conversation's auto-approval on or off; on answers what is pending too. */
+  setAutoApprove: fallible({
+    input: z.object({ conversationId: z.string(), enabled: z.boolean() }),
+    error: acpResolvePermissionErrorSchema,
+  }),
   exportAcpTranscript: fallible({
     input: exportAcpTranscriptCommandSchema,
     data: z.object({ transcript: z.string() }),

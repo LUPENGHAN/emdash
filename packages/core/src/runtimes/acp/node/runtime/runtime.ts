@@ -130,6 +130,13 @@ export class AcpRuntime {
     return this.manager.resolvePermission(conversationId, requestId, optionId);
   }
 
+  setAutoApprove(
+    conversationId: string,
+    enabled: boolean
+  ): Result<void, AcpResolvePermissionError> {
+    return this.manager.setAutoApprove(conversationId, enabled);
+  }
+
   setOption(conversationId: string, configId: string, value: string | boolean) {
     return this.manager.setOption(conversationId, configId, value);
   }

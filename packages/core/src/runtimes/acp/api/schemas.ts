@@ -14,6 +14,8 @@ export const acpStartInputSchema = z.object({
   options: providerOptionValuesSchema.optional(),
   initialQueue: z.array(promptInputSchema).optional(),
   env: z.record(z.string(), z.string()).optional(),
+  /** Answer the agent's permission requests with "allow" instead of asking. */
+  autoApprove: z.boolean().optional(),
   /**
    * MCP servers for this conversation only (the app's own tools and its MCP library):
    * `url` for HTTP servers, `command` for stdio ones.

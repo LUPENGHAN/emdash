@@ -10,8 +10,8 @@ import type {
   MentionItem,
   PromptEditorRef,
 } from '@emdash/ui/react/components';
-import { Button, toast } from '@emdash/ui/react/primitives';
-import { ArrowDown, MessageSquare } from 'lucide-react';
+import { Button, toast, Tooltip } from '@emdash/ui/react/primitives';
+import { ArrowDown, MessageSquare, ShieldCheck } from 'lucide-react';
 import { observer, useObserver } from 'mobx-react-lite';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -202,6 +202,45 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
   return btoa(binary);
+}
+
+/**
+ * Lets Emdash answer the agent's permission requests ("allow once") without asking:
+ * agents such as Cursor have no mode of their own that skips them in chat.
+ */
+function AutoApproveToggle({
+  checked,
+  disabled,
+  onChange,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={disabled}
+            aria-label="Auto-approve"
+            aria-pressed={checked}
+            className={checked ? 'text-foreground-info' : undefined}
+            onClick={() => onChange(!checked)}
+          />
+        }
+      >
+        <ShieldCheck className="h-3.5 w-3.5" fill={checked ? 'currentColor' : 'none'} />
+        Auto-approve
+      </Tooltip.Trigger>
+      <Tooltip.Content>
+        {checked ? 'Auto-approve: On' : 'Auto-approve: Off'}
+        <div>Emdash answers the agent's permission requests with "allow" without asking.</div>
+      </Tooltip.Content>
+    </Tooltip.Root>
+  );
 }
 
 // ── Composer for a single store ────────────────────────────────────────────────
@@ -596,6 +635,14 @@ const ComposerForStore = observer(function ComposerForStore({
   const a = store.affordances;
   const permissionRequest = toComposerPermission(store.permissionQueue[0]);
 
+  const providerControls = providerComposerOptions(
+    composerOptions,
+    store.configuredOptions,
+    (id, value) => store.setOption(id, value),
+    store.canSetOptions,
+    providerOptions !== undefined
+  );
+
   return createPortal(
     <>
       <input ref={fileInputRef} type="file" multiple hidden onChange={handleFileInputChange} />
@@ -639,13 +686,17 @@ const ComposerForStore = observer(function ComposerForStore({
           onReorderQueuedPrompts={(ids) => store.reorderQueuedPrompts(ids)}
           onSendQueuedPromptNow={handleSendQueuedPromptNow}
           editorApiRef={editorApiRef}
-          {...providerComposerOptions(
-            composerOptions,
-            store.configuredOptions,
-            (id, value) => store.setOption(id, value),
-            store.canSetOptions,
-            providerOptions !== undefined
-          )}
+          {...providerControls}
+          configurationControls={
+            <>
+              {providerControls.configurationControls}
+              <AutoApproveToggle
+                checked={store.autoApprove}
+                disabled={!store.liveActionsEnabled}
+                onChange={(enabled) => store.setAutoApprove(enabled)}
+              />
+            </>
+          }
           mcpServers={store.mcpServers}
           skills={sessionSkills}
           agentOptions={agentOptions}

@@ -145,6 +145,11 @@ const conversationsAcpContract = defineContract({
     acpApiContract.resolvePermission.input,
     acpApiContract.resolvePermission.output
   ),
+  /** Saves a chat conversation's auto-approval and applies it to the live session. */
+  setAutoApprove: runtimeFallibleProcedure(
+    acpApiContract.setAutoApprove.input,
+    acpApiContract.setAutoApprove.output
+  ),
   exportAcpTranscript: runtimeFallibleProcedure(
     acpApiContract.exportAcpTranscript.input,
     acpApiContract.exportAcpTranscript.output
