@@ -10,6 +10,13 @@ import { DESKTOP_WIRE_CHANNEL } from '@core/manifests/shared/wire-channels';
 import { resetWireConnection, seedWireConnection } from '@core/primitives/wire/browser/connection';
 import { isBrowserHost } from './browser-host';
 
+/**
+ * How long a call may take under browser access before it fails. The desktop's own
+ * window answers in milliseconds, but over a phone's mobile data or a tunnel a large
+ * answer (a long conversation's history) can take far longer than the usual 30s.
+ */
+const BROWSER_CALL_TIMEOUT_MS = 120_000;
+
 /** Reconnect attempts after a drop before the page reloads (e.g. the sign-in was revoked). */
 const BROWSER_RECONNECT_ATTEMPTS = 20;
 /**
@@ -75,7 +82,7 @@ async function connectBrowser() {
   window.addEventListener('online', () => {
     if (current?.readyState === WebSocket.OPEN) current.close();
   });
-  return connect(transport);
+  return connect(transport, { callTimeoutMs: BROWSER_CALL_TIMEOUT_MS });
 }
 
 async function openBrowserSocket(): Promise<WebSocket> {

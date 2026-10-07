@@ -113,6 +113,7 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
   const root = normalize(deps.rendererRoot);
   let servers: Server[] = [];
   let sockets: WebSocketServer | null = null;
+  let tunnelSockets: WebSocketServer | null = null;
   let stopWatchingRevokes: (() => void) | null = null;
   const sessions = new Map<WebSocket, { dispose: () => void; deviceId: string | null }>();
   const tunnels = new Set<WebSocket>();
@@ -138,7 +139,16 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
         return device ? { kind: 'device', device } : null;
       };
 
-      const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
+      // Wire messages are JSON, and some are large (a conversation's history page can be
+      // megabytes of tool output): compressed, they cross a slow link (a phone on mobile
+      // data, a tunnel) several times faster. Small messages are sent as they are.
+      const wss = new WebSocketServer({
+        noServer: true,
+        maxPayload: 64 * 1024 * 1024,
+        perMessageDeflate: { threshold: 16 * 1024 },
+      });
+      // Port tunnels carry raw TCP (often already compressed): not worth deflating.
+      const tunnelWss = new WebSocketServer({ noServer: true });
       wss.on(
         'connection',
         (socket: WebSocket, _request: IncomingMessage, deviceId: string | null) => {
@@ -192,7 +202,7 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
               socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
               return;
             }
-            wss.handleUpgrade(request, socket, head, (ws) => {
+            tunnelWss.handleUpgrade(request, socket, head, (ws) => {
               tunnels.add(ws);
               const stream = createWebSocketStream(ws);
               const tcp = connectTcp(target.port, target.host);
@@ -226,6 +236,7 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
         }
       }
       sockets = wss;
+      tunnelSockets = tunnelWss;
     },
     async stop() {
       stopWatchingRevokes?.();
@@ -233,6 +244,8 @@ export function createRemoteAccessServer(deps: RemoteAccessServerDeps): RemoteAc
       closeAll();
       sockets?.close();
       sockets = null;
+      tunnelSockets?.close();
+      tunnelSockets = null;
       const closing = servers;
       servers = [];
       await Promise.all(

@@ -232,6 +232,20 @@ describe('createRemoteAccessServer', () => {
     client.close?.();
   });
 
+  it('compresses wire messages, which can be large, for slow links', async () => {
+    const socket = await openSocket(port, {
+      cookie: `emdash_remote=${TOKEN}`,
+      origin: `http://127.0.0.1:${port}`,
+    });
+    expect(socket.extensions).toContain('permessage-deflate');
+    const client = webSocketTransport(socket as unknown as WebSocketLike);
+    const big = { kind: 'cancel', id: 'x'.repeat(200_000) } as const;
+    const echoed = new Promise<WireMessage>((resolve) => client.onMessage(resolve));
+    client.post(big);
+    expect(await echoed).toEqual(big);
+    client.close?.();
+  });
+
   it('disconnects browsers when it stops', async () => {
     const socket = await openSocket(port, {
       cookie: `emdash_remote=${TOKEN}`,
