@@ -436,6 +436,9 @@ export async function bootServices(
         agentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
       }),
     catalog: priceCatalog,
+    refreshCatalog: () => priceCatalog.refreshNow(),
+    catalogFetchedAt: () => priceCatalog.fetchedAt(),
+    listings: (model) => priceCatalog.listings(model),
     pricingFile: join(app.getPath('userData'), 'usage-pricing.json'),
     machineName: () => hostname().replace(/\.(local|lan|home)$/i, ''),
     remotes: async () => {
@@ -1177,7 +1180,8 @@ export async function bootServices(
     projectSettings: projectSettingsService,
     providerSettings: providerOverrideSettings,
     effectiveAgentConfig,
-    priceCatalog,
+    // Costs shown anywhere count prices set by hand (Usage statistics → Prices).
+    priceCatalog: () => usageStats.pricedCatalog(),
     modelProviderKeys,
     usageLimits,
     usageStats,

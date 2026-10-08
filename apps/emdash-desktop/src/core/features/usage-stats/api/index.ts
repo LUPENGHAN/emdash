@@ -59,8 +59,29 @@ export const sourcePricingSchema = z.object({
 });
 export type SourcePricing = z.infer<typeof sourcePricingSchema>;
 
+/** USD per million tokens, as models.dev lists them. */
+export const modelPriceSchema = z.object({
+  input: z.number().nonnegative(),
+  output: z.number().nonnegative(),
+  cacheRead: z.number().nonnegative().optional(),
+  cacheWrite: z.number().nonnegative().optional(),
+  longContext: z
+    .object({
+      above: z.number().positive(),
+      input: z.number().nonnegative(),
+      output: z.number().nonnegative(),
+      cacheRead: z.number().nonnegative().optional(),
+    })
+    .optional(),
+  /** Whose listing it is on models.dev (`manual` for a price set by hand). */
+  listing: z.string().optional(),
+});
+export type ModelPriceValue = z.infer<typeof modelPriceSchema>;
+
 export const usagePricingSchema = z.object({
   sources: z.record(z.string(), sourcePricingSchema).default({}),
+  /** Prices set by hand, by model as agents name it: they replace models.dev's. */
+  models: z.record(z.string(), modelPriceSchema).default({}),
   /** To show one total over both currencies. */
   usdToCny: z.number().positive().default(7.1),
 });
@@ -85,6 +106,28 @@ export const usageStatsContract = defineContract({
     output: z.object({ pricing: usagePricingSchema, sources: z.array(usageSourceSchema) }),
   }),
   setPricing: procedure({ input: usagePricingSchema, output: z.void() }),
+  /** The price each model is counted at, and whether it was set by hand. */
+  prices: procedure({
+    input: z.object({ models: z.array(z.string()) }),
+    output: z.object({
+      fetchedAt: z.number().nullable(),
+      models: z.array(
+        z.object({ model: z.string(), price: modelPriceSchema.nullable(), manual: z.boolean() })
+      ),
+    }),
+  }),
+  /** Sets a model's price by hand; null goes back to models.dev's. */
+  setModelPrice: procedure({
+    input: z.object({ model: z.string(), price: modelPriceSchema.nullable() }),
+    output: z.void(),
+  }),
+  /** Every models.dev listing of a model, to pick the one actually paid. */
+  modelListings: procedure({
+    input: z.object({ model: z.string() }),
+    output: z.array(modelPriceSchema),
+  }),
+  /** Fetches models.dev's prices now. */
+  refreshPrices: procedure({ input: z.void().optional(), output: z.void() }),
 });
 
 /** What the usage statistics controller serves. */
@@ -92,6 +135,13 @@ export type UsageStatsService = {
   report(input: { from: string; to: string; allMachines: boolean }): Promise<UsageReport>;
   pricing(): Promise<{ pricing: UsagePricing; sources: UsageSource[] }>;
   setPricing(pricing: UsagePricing): Promise<void>;
+  prices(models: string[]): Promise<{
+    fetchedAt: number | null;
+    models: { model: string; price: ModelPriceValue | null; manual: boolean }[];
+  }>;
+  setModelPrice(model: string, price: ModelPriceValue | null): Promise<void>;
+  modelListings(model: string): Promise<ModelPriceValue[]>;
+  refreshPrices(): Promise<void>;
 };
 
 /** The source key of an agent's own configuration. */

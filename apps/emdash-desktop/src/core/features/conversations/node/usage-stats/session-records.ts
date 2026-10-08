@@ -296,8 +296,28 @@ const CACHE_VERSION = 1;
 
 type CacheFile = {
   version: number;
+  /** The prices the files were read at: other prices mean reading them again. */
+  catalogKey?: string;
   files: Record<string, { key: string; usage: FileUsage }>;
 };
+
+/** A cheap fingerprint of a price list, which changes when any price does. */
+export function catalogFingerprint(catalog: PriceCatalog): string {
+  let sum = 0;
+  let index = 0;
+  for (const [id, price] of catalog) {
+    index += 1;
+    const weight = (index % 97) + id.length;
+    sum +=
+      weight *
+      (price.input +
+        price.output * 3 +
+        (price.cacheRead ?? 0) * 7 +
+        (price.cacheWrite ?? 0) * 11 +
+        (price.longContext?.input ?? 0) * 13);
+  }
+  return `${catalog.size}:${sum.toFixed(6)}`;
+}
 
 /**
  * Every session file's calls, kept per file and read again only when the file changes:
@@ -327,6 +347,12 @@ export function createUsageScanner(deps: {
   const run = async (): Promise<ScannedFile[]> => {
     const current = await load();
     const catalog = await deps.catalog();
+    const catalogKey = catalogFingerprint(catalog);
+    if (current.catalogKey !== catalogKey) {
+      // Priced at other prices: read every file again (a few seconds).
+      current.files = {};
+      current.catalogKey = catalogKey;
+    }
     const seen = new Set<string>();
     let changed = false;
     const results: ScannedFile[] = [];

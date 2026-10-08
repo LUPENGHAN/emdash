@@ -41,7 +41,7 @@ const rowsOf = (files: FileUsage[], overrides: Partial<Parameters<typeof buildRo
     from: '2026-10-01',
     to: '2026-10-31',
     attribution: attribution(),
-    pricing: { sources: {}, usdToCny: 7 },
+    pricing: { sources: {}, usdToCny: 7, models: {} },
     catalog,
     ...overrides,
   });
@@ -54,7 +54,7 @@ describe('usage rows', () => {
         attribution: attribution({
           conversations: new Map([['on-gateway', { modelSource: 'gw', project: 'Shop' }]]),
         }),
-        pricing: { sources: { gw: { multiplier: 0.5, currency: 'CNY' } }, usdToCny: 7 },
+        pricing: { sources: { gw: { multiplier: 0.5, currency: 'CNY' } }, usdToCny: 7, models: {} },
       }
     );
     expect(rows).toEqual(
@@ -95,7 +95,7 @@ describe('usage rows', () => {
     expect(own.rows[0]).toMatchObject({ source: 'max2', billing: 'subscription', amount: null });
 
     const overridden = rowsOf([file('claude', 's', ['2026-10-02'])], {
-      pricing: { sources: { 'own:claude': { billing: 'usage' } }, usdToCny: 7 },
+      pricing: { sources: { 'own:claude': { billing: 'usage' } }, usdToCny: 7, models: {} },
     });
     expect(overridden.rows[0]).toMatchObject({ billing: 'usage', amount: 1 });
   });
@@ -133,6 +133,18 @@ describe('usage rows', () => {
       }),
     });
     expect(rows[0]).toMatchObject({ source: 'gw', sourceName: 'My gateway', billing: 'usage' });
+  });
+
+  it('counts a model at the price set by hand, from its tokens', () => {
+    const { rows } = rowsOf([file('claude', 'a', ['2026-10-02'])], {
+      pricing: {
+        sources: { 'own:claude': { billing: 'usage' } },
+        usdToCny: 7,
+        models: { m1: { input: 3, output: 0 } },
+      },
+    });
+    // 1M input tokens at $3 per million, whatever the list price was.
+    expect(rows[0]).toMatchObject({ listUsd: 3, amount: 3 });
   });
 
   it("names projects after Emdash's worktree folders", () => {

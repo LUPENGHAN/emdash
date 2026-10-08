@@ -6,5 +6,9 @@ export function createUsageStatsWireController(service: UsageStatsService): Cont
     report: (input) => service.report(input),
     pricing: () => service.pricing(),
     setPricing: (pricing) => service.setPricing(pricing),
+    prices: ({ models }) => service.prices(models),
+    setModelPrice: ({ model, price }) => service.setModelPrice(model, price),
+    modelListings: ({ model }) => service.modelListings(model),
+    refreshPrices: () => service.refreshPrices(),
   });
 }

@@ -4,13 +4,14 @@ import {
   agentDisplayName,
   ownSourceKey,
   usagePricingSchema,
+  type ModelPriceValue,
   type UsageBilling,
   type UsagePricing,
   type UsageReport,
   type UsageRow,
   type UsageSource,
 } from '@core/features/usage-stats/api';
-import { usageCost, type PriceCatalog } from '../session-cost';
+import { costAt, priceOf, usageCost, type ModelPrice, type PriceCatalog } from '../session-cost';
 import type { FileUsage, ScannedFile, UsageBucket, UsageScanner } from './session-records';
 
 /** What Emdash knows about the sessions it started, and the sources it can run agents on. */
@@ -106,20 +107,31 @@ export function projectFromCwd(cwd: string | null): string {
   return path.basename(cwd) || cwd;
 }
 
-/** A bucket's list price, pricing it now if the model had no known price when it was read. */
-function listUsdOf(bucket: UsageBucket, catalog: PriceCatalog): number | null {
+/** A bucket's tokens as one request's, for pricing them at another price. */
+function bucketUsage(bucket: UsageBucket) {
+  return {
+    model: bucket.model,
+    input: bucket.input,
+    output: bucket.output,
+    cacheRead: bucket.cacheRead,
+    cacheWrite5m: bucket.cacheWrite,
+    cacheWrite1h: 0,
+  };
+}
+
+/**
+ * A bucket's list price: at a price set by hand, else as read (or priced now if the
+ * model had no known price then).
+ */
+function listUsdOf(
+  bucket: UsageBucket,
+  catalog: PriceCatalog,
+  manual: Record<string, ModelPrice>
+): number | null {
+  const override = manual[bucket.model];
+  if (override) return costAt(bucketUsage(bucket), override);
   if (bucket.listUsd !== null) return bucket.listUsd;
-  return usageCost(
-    {
-      model: bucket.model,
-      input: bucket.input,
-      output: bucket.output,
-      cacheRead: bucket.cacheRead,
-      cacheWrite5m: bucket.cacheWrite,
-      cacheWrite1h: 0,
-    },
-    catalog
-  );
+  return usageCost(bucketUsage(bucket), catalog);
 }
 
 /**
@@ -155,7 +167,7 @@ export function buildRows(input: {
       const settings = input.pricing.sources[source.key] ?? {};
       const billing = settings.billing ?? source.defaultBilling;
       const currency = settings.currency ?? 'USD';
-      const listUsd = listUsdOf(bucket, input.catalog);
+      const listUsd = listUsdOf(bucket, input.catalog, input.pricing.models);
       if (listUsd === null) unpriced.add(bucket.model);
       const amount =
         billing === 'usage' && listUsd !== null ? listUsd * (settings.multiplier ?? 1) : null;
@@ -207,7 +219,11 @@ export function buildRows(input: {
 export function createUsageStatsService(deps: {
   scanner: UsageScanner;
   attribution: () => Promise<UsageAttribution>;
+  /** models.dev's prices, as listed (prices set by hand are applied over them here). */
   catalog: () => Promise<PriceCatalog>;
+  refreshCatalog?: () => Promise<void>;
+  catalogFetchedAt?: () => number | null;
+  listings?: (model: string) => Promise<ModelPrice[]>;
   pricingFile: string;
   machineName: () => string;
   remotes: () => Promise<UsageRemote[]>;
@@ -315,6 +331,49 @@ export function createUsageStatsService(deps: {
     async setPricing(pricing: UsagePricing): Promise<void> {
       await mkdir(path.dirname(deps.pricingFile), { recursive: true });
       await writeFile(deps.pricingFile, JSON.stringify(usagePricingSchema.parse(pricing), null, 2));
+    },
+
+    /** models.dev's prices with the ones set by hand over them, for every cost Emdash shows. */
+    async pricedCatalog(): Promise<PriceCatalog> {
+      const [catalog, pricing] = await Promise.all([deps.catalog(), readPricing()]);
+      if (Object.keys(pricing.models).length === 0) return catalog;
+      const priced = new Map(catalog);
+      for (const [model, price] of Object.entries(pricing.models)) {
+        const manual = { ...price, listing: 'manual' };
+        priced.set(model, manual);
+        priced.set(model.replace(/\[[^\]]*\]$/, '').replace(/:[a-z]+$/i, ''), manual);
+      }
+      return priced;
+    },
+
+    async prices(models: string[]) {
+      const [catalog, pricing] = await Promise.all([deps.catalog(), readPricing()]);
+      return {
+        fetchedAt: deps.catalogFetchedAt?.() ?? null,
+        models: models.map((model) => {
+          const manual = pricing.models[model];
+          return manual
+            ? { model, price: { ...manual, listing: 'manual' }, manual: true }
+            : { model, price: priceOf(catalog, model) ?? null, manual: false };
+        }),
+      };
+    },
+
+    async setModelPrice(model: string, price: ModelPriceValue | null): Promise<void> {
+      const pricing = await readPricing();
+      const models = { ...pricing.models };
+      if (price) models[model] = { ...price, listing: 'manual' };
+      else delete models[model];
+      await mkdir(path.dirname(deps.pricingFile), { recursive: true });
+      await writeFile(deps.pricingFile, JSON.stringify({ ...pricing, models }, null, 2));
+    },
+
+    async modelListings(model: string): Promise<ModelPrice[]> {
+      return (await deps.listings?.(model)) ?? [];
+    },
+
+    async refreshPrices(): Promise<void> {
+      await deps.refreshCatalog?.();
     },
 
     /** Reads the session records in the background, so the first report is quick. */

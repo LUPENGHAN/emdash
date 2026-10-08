@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { claudeProjectDirName } from './external-sessions';
-import { createPriceCatalog, parseModelsDev, priceOf, sessionCost } from './session-cost';
+import {
+  createPriceCatalog,
+  modelListings,
+  parseModelsDev,
+  priceOf,
+  sessionCost,
+} from './session-cost';
 
 const lines = (records: unknown[]) => `${records.map((r) => JSON.stringify(r)).join('\n')}\n`;
 
@@ -49,6 +55,25 @@ describe('prices', () => {
       output: 15,
       cacheRead: 0.4,
     });
+  });
+
+  it("passes over a plan's free listing for a model some listing prices", () => {
+    const prices = parseModelsDev({
+      'alibaba-token-plan': { models: { 'flash-x': { cost: { input: 0, output: 0 } } } },
+      engy: { models: { 'flash-x': { cost: { input: 0.04, output: 0.08 } } } },
+      'free-only': { models: { 'gift-y': { cost: { input: 0, output: 0 } } } },
+    });
+    expect(prices.get('flash-x')).toMatchObject({ input: 0.04, listing: 'engy' });
+    expect(prices.get('gift-y')).toMatchObject({ input: 0, listing: 'free-only' });
+  });
+
+  it("lists every listing of a model, as agents name it, vendors' own first", () => {
+    const listings = modelListings(MODELS_DEV, 'claude-opus-5-5');
+    expect(listings.map((listing) => [listing.listing, listing.input])).toEqual([
+      ['anthropic · claude-opus-5-5', 4],
+      ['openrouter · claude-opus-5-5', 99],
+    ]);
+    expect(modelListings(MODELS_DEV, 'deepseek/deepseek-v4.1-flash')).toHaveLength(1);
   });
 
   it('caches the catalog for offline use and refreshes it daily', async () => {

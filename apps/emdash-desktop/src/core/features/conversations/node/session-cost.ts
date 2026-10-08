@@ -22,6 +22,8 @@ export type ModelPrice = {
   cacheWrite?: number;
   /** Prices once a request's context is over `above` tokens (OpenAI's long context). */
   longContext?: { above: number; input: number; output: number; cacheRead?: number };
+  /** Whose listing on models.dev the price is (`manual` for one set by hand). */
+  listing?: string;
 };
 
 /** Model id → price, first-party vendors' ids first, then every other listing. */
@@ -51,46 +53,87 @@ export type Usage = {
 
 // ── Prices ──────────────────────────────────────────────────────────────────────
 
-/** Builds the catalog from models.dev's api.json. */
-export function parseModelsDev(data: unknown): PriceCatalog {
-  const catalog: PriceCatalog = new Map();
-  const providers = asRecord(data) ?? {};
-  const order = [
+/** A models.dev listing's price, or null when it lists no input and output price. */
+function priceFromCost(cost: Record<string, unknown> | null, listing: string): ModelPrice | null {
+  if (typeof cost?.input !== 'number' || typeof cost.output !== 'number') return null;
+  const over = asRecord(cost.context_over_200k);
+  const tier = (Array.isArray(cost.tiers) ? cost.tiers : [])
+    .map((entry) => asRecord(entry))
+    .find((entry) => asRecord(entry?.tier)?.type === 'context');
+  const long = tier ?? over;
+  const above = Number(asRecord(tier?.tier)?.size ?? (over ? 200_000 : 0));
+  return {
+    input: cost.input,
+    output: cost.output,
+    ...(typeof cost.cache_read === 'number' && { cacheRead: cost.cache_read }),
+    ...(typeof cost.cache_write === 'number' && { cacheWrite: cost.cache_write }),
+    ...(long &&
+      typeof long.input === 'number' &&
+      typeof long.output === 'number' &&
+      above > 0 && {
+        longContext: {
+          above,
+          input: long.input,
+          output: long.output,
+          ...(typeof long.cache_read === 'number' && { cacheRead: long.cache_read }),
+        },
+      }),
+    listing,
+  };
+}
+
+/** A price of nothing: a subscription plan's listing ("token plan"), not what a call costs. */
+function isFree(price: ModelPrice): boolean {
+  return price.input === 0 && price.output === 0;
+}
+
+/** Providers in the order their listings count: the vendors' own first. */
+function providerOrder(providers: Record<string, unknown>): string[] {
+  return [
     ...FIRST_PARTY.filter((id) => id in providers),
     ...Object.keys(providers).filter((id) => !FIRST_PARTY.includes(id)),
   ];
-  for (const providerId of order) {
+}
+
+/**
+ * Builds the catalog from models.dev's api.json: per model id, the first vendor's
+ * listing, or else the first other one, passing over free plan listings where some
+ * listing names a real price.
+ */
+export function parseModelsDev(data: unknown): PriceCatalog {
+  const catalog: PriceCatalog = new Map();
+  const providers = asRecord(data) ?? {};
+  for (const providerId of providerOrder(providers)) {
     const models = asRecord(asRecord(providers[providerId])?.models) ?? {};
     for (const [id, model] of Object.entries(models)) {
-      if (catalog.has(id)) continue;
-      const cost = asRecord(asRecord(model)?.cost);
-      if (typeof cost?.input !== 'number' || typeof cost.output !== 'number') continue;
-      const over = asRecord(cost.context_over_200k);
-      const tier = (Array.isArray(cost.tiers) ? cost.tiers : [])
-        .map((entry) => asRecord(entry))
-        .find((entry) => asRecord(entry?.tier)?.type === 'context');
-      const long = tier ?? over;
-      const above = Number(asRecord(tier?.tier)?.size ?? (over ? 200_000 : 0));
-      catalog.set(id, {
-        input: cost.input,
-        output: cost.output,
-        ...(typeof cost.cache_read === 'number' && { cacheRead: cost.cache_read }),
-        ...(typeof cost.cache_write === 'number' && { cacheWrite: cost.cache_write }),
-        ...(long &&
-          typeof long.input === 'number' &&
-          typeof long.output === 'number' &&
-          above > 0 && {
-            longContext: {
-              above,
-              input: long.input,
-              output: long.output,
-              ...(typeof long.cache_read === 'number' && { cacheRead: long.cache_read }),
-            },
-          }),
-      });
+      const known = catalog.get(id);
+      if (known && !isFree(known)) continue;
+      const price = priceFromCost(asRecord(asRecord(model)?.cost), providerId);
+      if (!price || (known && isFree(price))) continue;
+      catalog.set(id, price);
     }
   }
   return catalog;
+}
+
+/**
+ * Every models.dev listing of a model (as agents name it, so `vendor/model` matches too),
+ * the vendors' own first: for choosing the one that is the price actually paid.
+ */
+export function modelListings(data: unknown, model: string): ModelPrice[] {
+  const bare = model.replace(/\[[^\]]*\]$/, '').replace(/:[a-z]+$/i, '');
+  const short = bare.split('/').pop() ?? bare;
+  const providers = asRecord(data) ?? {};
+  const listings: ModelPrice[] = [];
+  for (const providerId of providerOrder(providers)) {
+    const models = asRecord(asRecord(providers[providerId])?.models) ?? {};
+    for (const [id, entry] of Object.entries(models)) {
+      if (id !== bare && id !== short && !id.endsWith(`/${short}`)) continue;
+      const price = priceFromCost(asRecord(asRecord(entry)?.cost), `${providerId} · ${id}`);
+      if (price) listings.push(price);
+    }
+  }
+  return listings;
 }
 
 /**
@@ -131,7 +174,15 @@ export function createPriceCatalog(deps: {
       refreshing = null;
     }));
 
-  return async (): Promise<PriceCatalog> => {
+  /** models.dev's whole list, kept a while for looking up one model's listings. */
+  let raw: { data: unknown; at: number } | null = null;
+  const rawData = async (): Promise<unknown> => {
+    if (raw && now() - raw.at < 60 * 60_000) return raw.data;
+    raw = { data: await fetchJson(), at: now() };
+    return raw.data;
+  };
+
+  const catalog = async (): Promise<PriceCatalog> => {
     if (!loaded) {
       try {
         const cached = JSON.parse(await readFile(deps.cacheFile, 'utf8')) as {
@@ -146,12 +197,31 @@ export function createPriceCatalog(deps: {
     if (loaded && now() - loaded.fetchedAt > REFRESH_MS) void refresh();
     return loaded?.catalog ?? new Map();
   };
+
+  return Object.assign(catalog, {
+    /** Fetches the prices now rather than on the daily refresh. */
+    async refreshNow(): Promise<void> {
+      raw = null;
+      await refresh();
+    },
+    /** When the prices were last fetched; null before they ever were. */
+    fetchedAt: (): number | null => loaded?.fetchedAt ?? null,
+    /** Every models.dev listing of one model, fetched fresh. */
+    listings: async (model: string): Promise<ModelPrice[]> => modelListings(await rawData(), model),
+  });
 }
+
+export type PriceCatalogSource = ReturnType<typeof createPriceCatalog>;
 
 /** The price of a model as agents name it (`opus[1m]`-style suffixes, `vendor/` prefixes). */
 export function priceOf(catalog: PriceCatalog, model: string): ModelPrice | undefined {
   const bare = model.replace(/\[[^\]]*\]$/, '').replace(/:[a-z]+$/i, '');
   return catalog.get(bare) ?? catalog.get(bare.split('/').pop() ?? bare);
+}
+
+/** What one request costs at a given price. */
+export function costAt(usage: Usage, price: ModelPrice): number {
+  return costOf(usage, price);
 }
 
 function costOf(usage: Usage, price: ModelPrice): number {

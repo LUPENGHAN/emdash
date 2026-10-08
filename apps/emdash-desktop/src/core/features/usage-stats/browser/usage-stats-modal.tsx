@@ -20,6 +20,7 @@ import {
   type UsageSource,
 } from '../api';
 import { getUsageStatsClient } from '../api/browser/client';
+import { PricesView } from './prices-view';
 
 /** A report reads every computer's session history on first use: give it time. */
 const REPORT_TIMEOUT_MS = 180_000;
@@ -316,6 +317,7 @@ function UsageStatsModal() {
     null
   );
   const [showPricing, setShowPricing] = useState(false);
+  const [view, setView] = useState<'usage' | 'prices'>('usage');
 
   const days = useMemo(() => rangeDays(RANGES.find((r) => r.id === range)!.days), [range]);
 
@@ -345,7 +347,14 @@ function UsageStatsModal() {
   }, [load]);
 
   const usdToCny = pricing?.pricing.usdToCny ?? 7.1;
-  const rows = report?.rows ?? [];
+  const modelsUsed = useMemo(() => {
+    const byCost = new Map<string, number>();
+    for (const row of report?.rows ?? []) {
+      byCost.set(row.model, (byCost.get(row.model) ?? 0) + (row.listUsd ?? 0));
+    }
+    return [...byCost.entries()].sort((a, b) => b[1] - a[1]).map(([model]) => model);
+  }, [report]);
+  const rows = useMemo(() => report?.rows ?? [], [report]);
   const totals = useMemo(() => {
     const sum = emptyTotals();
     for (const row of rows) add(sum, row);
@@ -372,168 +381,192 @@ function UsageStatsModal() {
       </Dialog.Header>
       <Dialog.Body>
         <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <ToggleGroup.Root
-              value={[range]}
-              onValueChange={([next]) => {
-                if (next) setRange(next as RangeId);
-              }}
-            >
-              {RANGES.map((option) => (
-                <ToggleGroup.Item key={option.id} value={option.id}>
-                  {option.label}
-                </ToggleGroup.Item>
-              ))}
-            </ToggleGroup.Root>
-            <label className="flex items-center gap-2 text-xs text-foreground-muted">
-              <Switch checked={allMachines} onCheckedChange={setAllMachines} />
-              All computers
-            </label>
-          </div>
-
-          {report ? (
-            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-foreground-muted">
-              {report.machines.map((machine) => (
-                <span key={machine.name}>
-                  {machine.error ? '⚠️' : '✓'} <span translate="no">{machine.name}</span>
-                  {machine.local ? <span> (this computer)</span> : null}
-                  {machine.error ? <span> — {machine.error}</span> : null}
-                </span>
-              ))}
-            </div>
-          ) : null}
-
-          {error ? <p className="text-destructive text-sm">{error}</p> : null}
-          {loading && !report ? (
-            <div className="flex items-center gap-2 py-8 text-sm text-foreground-muted">
-              <Spinner size="sm" /> Reading the agents' session records… the first time takes a
-              little while.
-            </div>
+          <ToggleGroup.Root
+            value={[view]}
+            onValueChange={([next]) => {
+              if (next) setView(next as 'usage' | 'prices');
+            }}
+          >
+            <ToggleGroup.Item value="usage">Usage</ToggleGroup.Item>
+            <ToggleGroup.Item value="prices">Prices</ToggleGroup.Item>
+          </ToggleGroup.Root>
+          {view === 'prices' ? (
+            <PricesView models={modelsUsed} onChanged={() => void load()} />
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <Stat label="Calls" value={whole.format(totals.requests)} />
-                <Stat
-                  label="Tokens"
-                  value={compact.format(
-                    totals.input + totals.output + totals.cacheRead + totals.cacheWrite
-                  )}
-                  hint={`in ${compact.format(totals.input)} · out ${compact.format(totals.output)} · cache ${compact.format(totals.cacheRead + totals.cacheWrite)}`}
-                />
-                <Stat
-                  label="Charged per call"
-                  value={chargedText(totals.charged, usdToCny)}
-                  hint="Gateways and API keys, at your rates"
-                />
-                <Stat
-                  label="Subscriptions at list prices"
-                  value={money(totals.subscriptionUsd, 'USD')}
-                  hint="What the same calls would cost on the API"
-                />
-              </div>
-
-              <DailyBars days={days} rows={rows} usdToCny={usdToCny} />
-
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <ToggleGroup.Root
-                  value={[group]}
+                  value={[range]}
                   onValueChange={([next]) => {
-                    if (next) setGroup(next as GroupId);
+                    if (next) setRange(next as RangeId);
                   }}
                 >
-                  {GROUPS.map((option) => (
+                  {RANGES.map((option) => (
                     <ToggleGroup.Item key={option.id} value={option.id}>
                       {option.label}
                     </ToggleGroup.Item>
                   ))}
                 </ToggleGroup.Root>
-                <div className="overflow-x-auto rounded-md border border-border">
-                  <table className="w-full text-xs whitespace-nowrap tabular-nums">
-                    <thead className="text-foreground-muted">
-                      <tr className="border-b border-border">
-                        <th className="px-2 py-1.5 text-left font-normal">
-                          {GROUPS.find((option) => option.id === group)!.label}
-                        </th>
-                        <th className="px-2 py-1.5 text-right font-normal">Calls</th>
-                        <th className="px-2 py-1.5 text-right font-normal">Input</th>
-                        <th className="px-2 py-1.5 text-right font-normal">Output</th>
-                        <th className="px-2 py-1.5 text-right font-normal">Cache</th>
-                        <th className="px-2 py-1.5 text-right font-normal">Charged</th>
-                        <th className="px-2 py-1.5 text-right font-normal">List price</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {grouped.map(([name, entry]) => (
-                        <tr key={name} className="border-b border-border last:border-0">
-                          <td
-                            className="max-w-56 truncate px-2 py-1.5 text-foreground"
-                            // Source names read "Codex · own configuration": translated.
-                            translate={group === 'source' ? undefined : 'no'}
-                          >
-                            {name}
-                          </td>
-                          <td className="px-2 py-1.5 text-right">{whole.format(entry.requests)}</td>
-                          <td className="px-2 py-1.5 text-right">{compact.format(entry.input)}</td>
-                          <td className="px-2 py-1.5 text-right">{compact.format(entry.output)}</td>
-                          <td className="px-2 py-1.5 text-right">
-                            {compact.format(entry.cacheRead + entry.cacheWrite)}
-                          </td>
-                          <td className="px-2 py-1.5 text-right">
-                            {entry.charged.USD + entry.charged.CNY > 0
-                              ? chargedText(entry.charged, usdToCny)
-                              : '—'}
-                          </td>
-                          <td className="px-2 py-1.5 text-right text-foreground-muted">
-                            {money(entry.listUsd, 'USD')}
-                          </td>
-                        </tr>
-                      ))}
-                      {grouped.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} className="px-3 py-4 text-center text-foreground-muted">
-                            No calls in this range.
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
+                <label className="flex items-center gap-2 text-xs text-foreground-muted">
+                  <Switch checked={allMachines} onCheckedChange={setAllMachines} />
+                  All computers
+                </label>
+              </div>
+
+              {report ? (
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-foreground-muted">
+                  {report.machines.map((machine) => (
+                    <span key={machine.name}>
+                      {machine.error ? '⚠️' : '✓'} <span translate="no">{machine.name}</span>
+                      {machine.local ? <span> (this computer)</span> : null}
+                      {machine.error ? <span> — {machine.error}</span> : null}
+                    </span>
+                  ))}
                 </div>
-              </div>
+              ) : null}
 
-              <p className="text-[11px] text-foreground-muted">
-                From each agent's own session records (Claude Code, Codex, Pi, Oh My Pi), including
-                sessions started outside Emdash. Cursor keeps no token records, so it is not counted
-                here.
-                {report?.unpricedModels.length ? (
-                  <>
-                    {' '}
-                    No list price for:{' '}
-                    <span translate="no">{report.unpricedModels.join(', ')}</span>.
-                  </>
-                ) : null}
-              </p>
+              {error ? <p className="text-destructive text-sm">{error}</p> : null}
+              {loading && !report ? (
+                <div className="flex items-center gap-2 py-8 text-sm text-foreground-muted">
+                  <Spinner size="sm" /> Reading the agents' session records… the first time takes a
+                  little while.
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Stat label="Calls" value={whole.format(totals.requests)} />
+                    <Stat
+                      label="Tokens"
+                      value={compact.format(
+                        totals.input + totals.output + totals.cacheRead + totals.cacheWrite
+                      )}
+                      hint={`in ${compact.format(totals.input)} · out ${compact.format(totals.output)} · cache ${compact.format(totals.cacheRead + totals.cacheWrite)}`}
+                    />
+                    <Stat
+                      label="Charged per call"
+                      value={chargedText(totals.charged, usdToCny)}
+                      hint="Gateways and API keys, at your rates"
+                    />
+                    <Stat
+                      label="Subscriptions at list prices"
+                      value={money(totals.subscriptionUsd, 'USD')}
+                      hint="What the same calls would cost on the API"
+                    />
+                  </div>
 
-              <div className="flex flex-col gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="self-start"
-                  onClick={() => setShowPricing((shown) => !shown)}
-                >
-                  {showPricing ? 'Hide pricing' : 'Pricing…'}
-                </Button>
-                {showPricing && pricing ? (
-                  <PricingEditor
-                    pricing={pricing.pricing}
-                    sources={pricing.sources}
-                    onSave={async (next) => {
-                      const client = await getUsageStatsClient();
-                      await client.setPricing(next);
-                      await load();
-                    }}
-                  />
-                ) : null}
-              </div>
+                  <DailyBars days={days} rows={rows} usdToCny={usdToCny} />
+
+                  <div className="flex flex-col gap-2">
+                    <ToggleGroup.Root
+                      value={[group]}
+                      onValueChange={([next]) => {
+                        if (next) setGroup(next as GroupId);
+                      }}
+                    >
+                      {GROUPS.map((option) => (
+                        <ToggleGroup.Item key={option.id} value={option.id}>
+                          {option.label}
+                        </ToggleGroup.Item>
+                      ))}
+                    </ToggleGroup.Root>
+                    <div className="overflow-x-auto rounded-md border border-border">
+                      <table className="w-full text-xs whitespace-nowrap tabular-nums">
+                        <thead className="text-foreground-muted">
+                          <tr className="border-b border-border">
+                            <th className="px-2 py-1.5 text-left font-normal">
+                              {GROUPS.find((option) => option.id === group)!.label}
+                            </th>
+                            <th className="px-2 py-1.5 text-right font-normal">Calls</th>
+                            <th className="px-2 py-1.5 text-right font-normal">Input</th>
+                            <th className="px-2 py-1.5 text-right font-normal">Output</th>
+                            <th className="px-2 py-1.5 text-right font-normal">Cache</th>
+                            <th className="px-2 py-1.5 text-right font-normal">Charged</th>
+                            <th className="px-2 py-1.5 text-right font-normal">List price</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {grouped.map(([name, entry]) => (
+                            <tr key={name} className="border-b border-border last:border-0">
+                              <td
+                                className="max-w-56 truncate px-2 py-1.5 text-foreground"
+                                // Source names read "Codex · own configuration": translated.
+                                translate={group === 'source' ? undefined : 'no'}
+                              >
+                                {name}
+                              </td>
+                              <td className="px-2 py-1.5 text-right">
+                                {whole.format(entry.requests)}
+                              </td>
+                              <td className="px-2 py-1.5 text-right">
+                                {compact.format(entry.input)}
+                              </td>
+                              <td className="px-2 py-1.5 text-right">
+                                {compact.format(entry.output)}
+                              </td>
+                              <td className="px-2 py-1.5 text-right">
+                                {compact.format(entry.cacheRead + entry.cacheWrite)}
+                              </td>
+                              <td className="px-2 py-1.5 text-right">
+                                {entry.charged.USD + entry.charged.CNY > 0
+                                  ? chargedText(entry.charged, usdToCny)
+                                  : '—'}
+                              </td>
+                              <td className="px-2 py-1.5 text-right text-foreground-muted">
+                                {money(entry.listUsd, 'USD')}
+                              </td>
+                            </tr>
+                          ))}
+                          {grouped.length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={7}
+                                className="px-3 py-4 text-center text-foreground-muted"
+                              >
+                                No calls in this range.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-foreground-muted">
+                    From each agent's own session records (Claude Code, Codex, Pi, Oh My Pi),
+                    including sessions started outside Emdash. Cursor keeps no token records, so it
+                    is not counted here.
+                    {report?.unpricedModels.length ? (
+                      <>
+                        {' '}
+                        No list price for:{' '}
+                        <span translate="no">{report.unpricedModels.join(', ')}</span>.
+                      </>
+                    ) : null}
+                  </p>
+
+                  <div className="flex flex-col gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="self-start"
+                      onClick={() => setShowPricing((shown) => !shown)}
+                    >
+                      {showPricing ? 'Hide pricing' : 'Pricing…'}
+                    </Button>
+                    {showPricing && pricing ? (
+                      <PricingEditor
+                        pricing={pricing.pricing}
+                        sources={pricing.sources}
+                        onSave={async (next) => {
+                          const client = await getUsageStatsClient();
+                          await client.setPricing(next);
+                          await load();
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>
