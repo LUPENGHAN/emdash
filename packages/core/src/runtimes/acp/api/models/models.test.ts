@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { transcriptTurnSchema } from '#runtimes/acp/api/models/turns';
 import { AcpTranscriptParser } from '../reducer/parser';
 import { agentStateSchema } from './agents';
-import { sessionConfigStateSchema, sessionUsageSchema } from './config';
+import {
+  fullAccessSetting,
+  providerConfigOptionSchema,
+  sessionConfigStateSchema,
+  sessionUsageSchema,
+} from './config';
 import { planStateSchema } from './plan';
 
 function buildParserOutput(): AcpTranscriptParser {
@@ -111,5 +116,35 @@ describe('ACP zod models', () => {
     ).not.toThrow();
     expect(() => agentStateSchema.array().parse(parser.agents)).not.toThrow();
     expect(() => (parser.plan === null ? null : planStateSchema.parse(parser.plan))).not.toThrow();
+  });
+});
+
+describe('fullAccessSetting', () => {
+  const mode = (currentValue: string, kinds: Record<string, string | undefined>) =>
+    providerConfigOptionSchema.parse({
+      id: 'mode',
+      name: 'Mode',
+      category: 'mode',
+      type: 'select',
+      currentValue,
+      options: Object.entries(kinds).map(([value, kind]) => ({
+        value,
+        name: value,
+        ...(kind && { _meta: { kind } }),
+      })),
+    });
+
+  it("finds the agent's own mode that asks no permissions", () => {
+    const claude = mode('default', { default: 'standard', bypassPermissions: 'full_access' });
+    expect(fullAccessSetting([claude])).toEqual({
+      configId: 'mode',
+      value: 'bypassPermissions',
+      currentValue: 'default',
+    });
+  });
+
+  it('is null for agents without one', () => {
+    expect(fullAccessSetting([mode('agent', { agent: undefined, plan: undefined })])).toBeNull();
+    expect(fullAccessSetting(undefined)).toBeNull();
   });
 });

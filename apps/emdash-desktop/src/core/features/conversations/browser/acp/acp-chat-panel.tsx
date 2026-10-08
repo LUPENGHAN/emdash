@@ -205,8 +205,8 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Lets Emdash answer the agent's permission requests ("allow once") without asking:
- * agents such as Cursor have no mode of their own that skips them in chat.
+ * Lets Emdash answer the agent's permission requests ("allow once") without asking, for
+ * agents with no mode of their own that skips them in chat (Cursor, OpenCode, Oh My Pi).
  */
 function AutoApproveToggle({
   checked,
@@ -690,11 +690,14 @@ const ComposerForStore = observer(function ComposerForStore({
           configurationControls={
             <>
               {providerControls.configurationControls}
-              <AutoApproveToggle
-                checked={store.autoApprove}
-                disabled={!store.liveActionsEnabled}
-                onChange={(enabled) => store.setAutoApprove(enabled)}
-              />
+              {/* An agent's own full-access mode is its auto-approval: no second switch. */}
+              {store.fullAccessSetting ? null : (
+                <AutoApproveToggle
+                  checked={store.autoApprove}
+                  disabled={!store.liveActionsEnabled}
+                  onChange={(enabled) => store.setAutoApprove(enabled)}
+                />
+              )}
             </>
           }
           mcpServers={store.mcpServers}

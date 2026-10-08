@@ -321,7 +321,14 @@ export function createConversationsWireController(
                 };
                 let result: Awaited<ReturnType<typeof client.acp.setOption>>;
                 try {
-                  result = await client.acp.setOption(input, callOptions(meta));
+                  result = await client.acp.setOption(
+                    {
+                      conversationId: input.conversationId,
+                      configId: input.configId,
+                      value: input.value,
+                    },
+                    callOptions(meta)
+                  );
                 } catch (error) {
                   await restorePreviousOption();
                   throw error;
@@ -330,7 +337,7 @@ export function createConversationsWireController(
                   await restorePreviousOption();
                   return result;
                 }
-                if (runtimeTarget.providerId) {
+                if (runtimeTarget.providerId && input.remember !== false) {
                   try {
                     await settings.patch(
                       {

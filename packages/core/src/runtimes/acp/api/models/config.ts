@@ -8,6 +8,8 @@ const providerChoiceSchema = z.object({
   value: z.string(),
   name: z.string(),
   description: z.string().nullish(),
+  /** What the choice does; `kind: 'full_access'` marks a mode that asks no permissions. */
+  _meta: z.object({ kind: z.string().optional() }).nullish(),
 });
 const providerGroupSchema = z.object({
   group: z.string(),
@@ -34,6 +36,21 @@ export function providerChoices(option: ProviderConfigOption) {
     ? option.options.flatMap((item) => ('group' in item ? item.options : [item]))
     : [];
 }
+/**
+ * The agent's own setting that stops permission requests (Claude's "Bypass permissions",
+ * Codex's "Full access"), when it has one: a select whose choice is marked `full_access`.
+ */
+export function fullAccessSetting(
+  options: readonly ProviderConfigOption[] | undefined
+): { configId: string; value: string; currentValue: string } | null {
+  for (const option of options ?? []) {
+    if (option.type !== 'select') continue;
+    const full = providerChoices(option).find((choice) => choice._meta?.kind === 'full_access');
+    if (full) return { configId: option.id, value: full.value, currentValue: option.currentValue };
+  }
+  return null;
+}
+
 export function acceptsProviderValue(
   option: ProviderConfigOption,
   value: string | boolean

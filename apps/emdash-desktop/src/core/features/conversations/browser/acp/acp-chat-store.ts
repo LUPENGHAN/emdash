@@ -1,5 +1,6 @@
 import type { ChatContext, ChatImageAttachment, ChatState, ChatView } from '@emdash/chat-ui';
 import {
+  fullAccessSetting as findFullAccessSetting,
   sessionNotFoundErrorSchema,
   type AcpSessionStartMode,
   type PromptAttachment,
@@ -177,6 +178,7 @@ export class AcpChatStore {
       setOption: action,
       resolvePermission: action,
       autoApprove: computed,
+      fullAccessSetting: computed,
       setAutoApprove: action,
       editQueuedPrompt: action,
       deleteQueuedPrompt: action,
@@ -194,6 +196,24 @@ export class AcpChatStore {
         (options) => {
           if (options !== undefined) this._lastProviderOptions.set(options);
         }
+      )
+    );
+    // Where the agent has a full-access mode, it is the auto-approval: once a session's
+    // options are known, a conversation started with auto-approval opens in that mode,
+    // and one opened in it is marked auto-approved.
+    this._scope.add(
+      reaction(
+        () => (this.canSetOptions && this.fullAccessSetting ? this.session : null),
+        (session) => {
+          const setting = this.fullAccessSetting;
+          if (!session || !setting) return;
+          const inMode = setting.currentValue === setting.value;
+          // Not remembered: new conversations keep the agent's usual mode.
+          if (this.autoApprove && !inMode) {
+            this.setOption(setting.configId, setting.value, { remember: false });
+          } else if (!this.autoApprove && inMode) this.setAutoApprove(true);
+        },
+        { fireImmediately: true }
       )
     );
     this._disposeComposerSubscription = this.composerModel.subscribe(() => {
@@ -504,14 +524,26 @@ export class AcpChatStore {
     return this.liveActionsEnabled && this.session?.config.current().options !== undefined;
   }
 
-  setOption(configId: string, value: string | boolean): void {
+  setOption(
+    configId: string,
+    value: string | boolean,
+    { remember = true }: { remember?: boolean } = {}
+  ): void {
     if (!this.canSetOptions || !configId) return;
+    const fullAccess = this.fullAccessSetting;
     void this.session
-      ?.setOption(configId, value)
+      ?.setOption(configId, value, remember)
       .then((result) => {
         if (!result.success) {
           this._toastError('Failed to change setting', result.error);
           return;
+        }
+        // Choosing the full-access mode, or leaving it, turns auto-approval on or off.
+        if (
+          fullAccess?.configId === configId &&
+          (value === fullAccess.value) !== this.autoApprove
+        ) {
+          this.setAutoApprove(value === fullAccess.value);
         }
         if (result.data.reapplyFailures.length) {
           toast.warning('Setting saved, but some settings could not be restored', {
@@ -542,6 +574,14 @@ export class AcpChatStore {
       conversationRegistry.get(this.taskId)?.conversations.get(this.conversationId)?.data
         .autoApprove === true
     );
+  }
+
+  /**
+   * The agent's own full-access mode, when it has one: then it stands for auto-approval
+   * (no separate switch), kept in step with the conversation's setting.
+   */
+  get fullAccessSetting() {
+    return findFullAccessSetting(this.providerOptions);
   }
 
   /**

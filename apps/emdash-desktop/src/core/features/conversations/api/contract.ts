@@ -137,7 +137,8 @@ const conversationsAcpContract = defineContract({
     acpApiContract.cancelTurn.output
   ),
   setOption: fallible({
-    input: acpApiContract.setOption.input,
+    // `remember: false` leaves the agent's settings for new conversations as they are.
+    input: acpApiContract.setOption.input.extend({ remember: z.boolean().optional() }),
     data: setOptionResultSchema.extend({ preferenceSaveError: z.string().optional() }),
     error: projectAttachmentErrorUnion(acpSetOptionErrorSchema),
   }),

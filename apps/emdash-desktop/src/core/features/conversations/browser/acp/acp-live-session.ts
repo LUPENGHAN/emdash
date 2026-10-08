@@ -269,8 +269,14 @@ export class AcpLiveSession {
     return this.client.cancelTurn({ conversationId: this.conversationId });
   }
 
-  setOption(configId: string, value: string | boolean) {
-    return this.client.setOption({ conversationId: this.conversationId, configId, value });
+  /** `remember: false` keeps it out of the agent's settings for new conversations. */
+  setOption(configId: string, value: string | boolean, remember?: boolean) {
+    return this.client.setOption({
+      conversationId: this.conversationId,
+      configId,
+      value,
+      ...(remember === false && { remember }),
+    });
   }
 
   setAutoApprove(enabled: boolean): Promise<Result<void, unknown>> {
