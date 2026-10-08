@@ -80,7 +80,10 @@ export const provider = registerPluginBehavior(plugin, {
       buildStandardCommand(ctx, {
         autoApproveFlag: '-f --approve-mcps',
         initialPromptFlag: '',
+        // `--resume <id>` also starts a new session under that id, so Emdash names it
+        // (the conversation id) and can reopen it, in either UI.
         resumeFlag: '--resume',
+        sessionIdFlag: '--resume',
       }),
   },
   mcp: cursorMcpAdapter(),

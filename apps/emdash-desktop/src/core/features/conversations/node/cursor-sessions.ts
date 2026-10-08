@@ -1,4 +1,15 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  copyFile,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import type { ImportableSession } from '@core/primitives/conversations/api';
@@ -13,46 +24,146 @@ export function cursorHome({ home, env }: ExternalSessionEnv): string {
   return env.CURSOR_CONFIG_DIR ?? path.join(home, '.cursor');
 }
 
-type CursorMeta = { cwd?: unknown; title?: unknown; hasConversation?: unknown };
+type CursorMeta = {
+  cwd?: unknown;
+  title?: unknown;
+  hasConversation?: unknown;
+  createdAtMs?: unknown;
+};
 
 export async function readCursorSessions(
   env: ExternalSessionEnv,
   cwds: Set<string>,
   clip: (text: string) => string
 ): Promise<ImportableSession[]> {
-  const root = cursorHome(env);
-  const sessions: ImportableSession[] = [];
-
-  // Chat UI sessions: acp-sessions/<id>/.
-  for (const id of await listDirs(path.join(root, 'acp-sessions'))) {
-    const dir = path.join(root, 'acp-sessions', id);
-    const session = await readCursorSessionDir(dir, id, 'acp', cwds, clip);
-    if (session) sessions.push(session);
+  // A session moved to the other UI has a copy in each store: list the latest once.
+  const sessions = new Map<string, ImportableSession>();
+  for (const { dir, id } of await cursorSessionDirs(cursorHome(env))) {
+    const session = await readCursorSessionDir(dir, id, cwds, clip);
+    const listed = sessions.get(id);
+    if (session && (!listed || listed.updatedAt < session.updatedAt)) sessions.set(id, session);
   }
-  // Terminal sessions: chats/<cwd hash>/<id>/.
+  return [...sessions.values()];
+}
+
+/** Every session folder: chat UI ones (acp-sessions/<id>/), then terminal ones (chats/<hash>/<id>/). */
+async function cursorSessionDirs(root: string): Promise<{ dir: string; id: string }[]> {
+  const dirs = (await listDirs(path.join(root, 'acp-sessions'))).map((id) => ({
+    dir: path.join(root, 'acp-sessions', id),
+    id,
+  }));
   for (const bucket of await listDirs(path.join(root, 'chats'))) {
     for (const id of await listDirs(path.join(root, 'chats', bucket))) {
-      const dir = path.join(root, 'chats', bucket, id);
-      const session = await readCursorSessionDir(dir, id, 'pty', cwds, clip);
-      if (session) sessions.push(session);
+      dirs.push({ dir: path.join(root, 'chats', bucket, id), id });
     }
   }
-  return sessions;
+  return dirs;
+}
+
+/**
+ * The folder a session must be in for one UI to resume it: the terminal looks by the
+ * hash of its cwd, symlinks resolved (as the CLI records it).
+ */
+export function cursorSessionDir(
+  root: string,
+  sessionId: string,
+  cwd: string,
+  ui: 'pty' | 'acp'
+): string {
+  return ui === 'acp'
+    ? path.join(root, 'acp-sessions', sessionId)
+    : path.join(root, 'chats', createHash('md5').update(cwd).digest('hex'), sessionId);
+}
+
+/**
+ * Makes a Cursor session resumable in one UI. Both stores hold the same format, so the
+ * session's latest copy is copied to where that UI looks (`cursor-agent --resume <id>`
+ * finds terminal sessions under the hash of the cwd; session/load, chat ones by id),
+ * replacing an older copy there. Its agent must have exited. False when there is no
+ * session under that id with anything said in it, so there is nothing to resume.
+ */
+export async function placeCursorSession(
+  env: ExternalSessionEnv,
+  sessionId: string,
+  cwd: string,
+  ui: 'pty' | 'acp'
+): Promise<boolean> {
+  // The id names folders: never let one climb out of Cursor's.
+  if (!/^[\w-]+$/.test(sessionId)) return false;
+  const root = cursorHome(env);
+  let latest: { dir: string; meta: CursorMeta; updatedAt: number } | null = null;
+  for (const { dir, id } of await cursorSessionDirs(root)) {
+    if (id !== sessionId) continue;
+    const meta = await readMeta(dir);
+    if (!meta) continue;
+    const updatedAt = await latestMtime(storeFiles(dir));
+    if (!latest || latest.updatedAt < updatedAt) latest = { dir, meta, updatedAt };
+  }
+  if (!latest || latest.meta.hasConversation === false) return false;
+  cwd = await realpath(cwd).catch(() => cwd);
+  const target = cursorSessionDir(root, sessionId, cwd, ui);
+  if (latest.dir === target) return true;
+
+  // Copied beside the target, then swapped in, so a failed copy leaves the old one.
+  const staging = `${target}.${randomUUID()}.tmp`;
+  await mkdir(staging, { recursive: true });
+  try {
+    for (const name of ['store.db', 'store.db-wal']) {
+      await copyFile(path.join(latest.dir, name), path.join(staging, name)).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (name === 'store.db' || error.code !== 'ENOENT') throw error;
+        }
+      );
+    }
+    const title = typeof latest.meta.title === 'string' ? latest.meta.title : undefined;
+    const now = Date.now();
+    const meta =
+      ui === 'acp'
+        ? { schemaVersion: 1, cwd, ...(title && { title }) }
+        : {
+            schemaVersion: 1,
+            createdAtMs:
+              typeof latest.meta.createdAtMs === 'number' ? latest.meta.createdAtMs : now,
+            hasConversation: true,
+            ...(title && { title }),
+            updatedAtMs: now,
+            cwd,
+          };
+    await writeFile(path.join(staging, 'meta.json'), JSON.stringify(meta));
+    await rm(target, { recursive: true, force: true });
+    await rename(staging, target);
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
+  return true;
+}
+
+function storeFiles(dir: string): string[] {
+  const store = path.join(dir, 'store.db');
+  return [store, `${store}-wal`, path.join(dir, 'meta.json')];
+}
+
+async function readMeta(dir: string): Promise<CursorMeta | null> {
+  try {
+    return JSON.parse(await readFile(path.join(dir, 'meta.json'), 'utf8')) as CursorMeta;
+  } catch {
+    return null;
+  }
 }
 
 async function readCursorSessionDir(
   dir: string,
   id: string,
-  resumeIn: 'pty' | 'acp',
   cwds: Set<string>,
   clip: (text: string) => string
 ): Promise<ImportableSession | null> {
   try {
-    const meta = JSON.parse(await readFile(path.join(dir, 'meta.json'), 'utf8')) as CursorMeta;
-    if (typeof meta.cwd !== 'string' || !cwds.has(meta.cwd)) return null;
+    const meta = await readMeta(dir);
+    if (!meta || typeof meta.cwd !== 'string' || !cwds.has(meta.cwd)) return null;
     if (meta.hasConversation === false) return null;
     const store = path.join(dir, 'store.db');
-    const updatedAt = await latestMtime([store, `${store}-wal`, path.join(dir, 'meta.json')]);
+    const updatedAt = await latestMtime(storeFiles(dir));
     const turns = readCursorTurns(store);
     const firstMessage = turns.find((turn) => turn.role === 'user')?.text ?? null;
     if (!firstMessage) return null; // Nothing was said in it.
@@ -64,7 +175,6 @@ async function readCursorSessionDir(
       firstMessage: clip(firstMessage),
       updatedAt,
       cwd: meta.cwd,
-      resumeIn,
     };
   } catch {
     return null;

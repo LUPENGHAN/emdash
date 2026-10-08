@@ -27,6 +27,11 @@ vi.mock('@core/features/workbench/api/browser/task-composition-selectors', () =>
   getTaskComposition: vi.fn(),
 }));
 
+const sshConnection = vi.hoisted(() => ({ id: undefined as string | undefined }));
+vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
+  getProjectSshConnectionId: () => sshConnection.id,
+}));
+
 describe('canSwitchConversationUi', () => {
   it('offers terminal conversations whose real session id is known', () => {
     expect(canSwitchConversationUi(conversation({ sessionId: 'native-1' }))).toBe(true);
@@ -55,6 +60,18 @@ describe('canSwitchConversationUi', () => {
       canSwitchConversationUi(conversation({ providerId: 'amp' as never, sessionId: 'T-1' }))
     ).toBe(false);
     expect(canSwitchConversationUi(conversation({ providerId: 'pi', sessionId: 'x' }))).toBe(false);
+  });
+
+  it('switches Cursor only on this computer, where its session can be moved', () => {
+    const cursor = conversation({ providerId: 'cursor', sessionId: 'conv-1' });
+    expect(canSwitchConversationUi(cursor)).toBe(true);
+    sshConnection.id = 'ssh-1';
+    try {
+      expect(canSwitchConversationUi(cursor)).toBe(false);
+      expect(canSwitchConversationUi(conversation({ sessionId: 'native-1' }))).toBe(true);
+    } finally {
+      sshConnection.id = undefined;
+    }
   });
 
   it('offers chat conversations switching back to the terminal', () => {

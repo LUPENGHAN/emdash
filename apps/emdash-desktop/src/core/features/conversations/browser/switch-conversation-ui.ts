@@ -1,4 +1,5 @@
 import { toast } from '@emdash/ui/react/primitives';
+import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
 import type { Conversation, ConversationType } from '@core/primitives/conversations/api';
 import { log } from '@core/primitives/logging/browser/logger';
@@ -6,7 +7,9 @@ import { currentChoice, restartConversation, resumableSessionId } from './restar
 
 /** Providers whose session ids resume both in the CLI (--resume) and in ACP (session/load). */
 // Pi has no chat (ACP) adapter, so it stays terminal-only.
-const SWITCHABLE_PROVIDERS = new Set(['claude', 'codex', 'opencode', 'oh-my-pi']);
+const SWITCHABLE_PROVIDERS = new Set(['claude', 'codex', 'opencode', 'oh-my-pi', 'cursor']);
+/** Providers whose session must be moved between their UIs' stores on this computer. */
+const LOCAL_ONLY_PROVIDERS = new Set(['cursor']);
 
 /** The UI a conversation would switch to: terminal ⇄ chat. */
 export function switchTarget(conversation: Conversation): ConversationType {
@@ -15,7 +18,11 @@ export function switchTarget(conversation: Conversation): ConversationType {
 
 /** Whether a conversation can move to the other UI (resuming its session if it has one). */
 export function canSwitchConversationUi(conversation: Conversation): boolean {
-  return SWITCHABLE_PROVIDERS.has(conversation.providerId);
+  if (!SWITCHABLE_PROVIDERS.has(conversation.providerId)) return false;
+  return (
+    !LOCAL_ONLY_PROVIDERS.has(conversation.providerId) ||
+    getProjectSshConnectionId(conversation.projectId) === undefined
+  );
 }
 
 /**

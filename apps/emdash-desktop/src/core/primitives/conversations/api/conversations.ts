@@ -145,11 +145,6 @@ export type ImportableSession = {
   cwd: string;
   /** Emdash workspace of that directory, for project-wide listings (checkout or worktree). */
   workspaceId?: string;
-  /**
-   * Set when the session can only be resumed in one UI (Cursor keeps terminal and chat
-   * sessions in separate stores); absent = either.
-   */
-  resumeIn?: ConversationType;
 };
 
 /**

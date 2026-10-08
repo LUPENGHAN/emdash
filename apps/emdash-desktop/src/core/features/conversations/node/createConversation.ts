@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import {
   formatHostRef,
   type HostRef,
@@ -31,6 +32,7 @@ import type { TelemetryService } from '@core/primitives/telemetry/api/telemetry'
 import type { AppDb } from '@core/services/app-db/node/db';
 import { appDbPokes } from '@core/services/app-db/node/pokes';
 import { tasks } from '@core/services/app-db/node/schema';
+import { placeCursorSession } from './cursor-sessions';
 import { launchTuiConversation } from './launch-tui-conversation';
 
 type ConversationCreateDb = Pick<AppDb, 'delete' | 'insert' | 'select' | 'update'>;
@@ -91,7 +93,21 @@ export async function createConversation(
   const conversationType = params.type ?? 'pty';
   // Terminal conversations resume it via the CLI's --resume; chat UI (ACP) ones load it
   // with session/load on first activation, which replays its history into the chat.
-  const importedSessionId = params.providerSessionId?.trim() || null;
+  let importedSessionId = params.providerSessionId?.trim() || null;
+  // Cursor keeps each UI's sessions in its own store: move the session to this UI's,
+  // or start a new one when it never got past its first prompt.
+  if (importedSessionId && params.provider === 'cursor' && identity.host.type !== 'remote') {
+    const placed = await placeCursorSession(
+      { home: homedir(), env: process.env },
+      importedSessionId,
+      identity.path,
+      conversationType
+    ).catch((error: unknown) => {
+      log.warn('createConversation: could not move the Cursor session', { error });
+      return true;
+    });
+    if (!placed) importedSessionId = null;
+  }
 
   const initialQueue = params.initialQueue?.filter((prompt) => prompt.text.trim());
   const configObj: ConversationConfig =

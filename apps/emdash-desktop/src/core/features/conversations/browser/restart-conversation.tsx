@@ -23,17 +23,21 @@ import { useCloseGuard } from '@core/primitives/modals/react/use-close-guard';
 import { agentDisplayName } from './handoff';
 
 /** Providers whose CLI and chat adapter resume a session by id. */
-const RESUMABLE_PROVIDERS = new Set(['claude', 'codex', 'opencode', 'pi', 'oh-my-pi']);
+const RESUMABLE_PROVIDERS = new Set(['claude', 'codex', 'opencode', 'pi', 'oh-my-pi', 'cursor']);
+/** Terminals spawned under their conversation id (`--session-id`, `--resume <id>`). */
+const CHOSEN_ID_PROVIDERS = new Set(['claude', 'cursor']);
 
 /**
  * The session a restart can resume: chat (ACP) ids are always the provider's own; a
- * terminal's is once captured, and Claude's placeholder is real (it is spawned with
- * `--session-id <conversation id>`). Null means the restart starts a new session.
+ * terminal's is once captured, and Claude's and Cursor's placeholder is real (they are
+ * spawned under the conversation id). Null means the restart starts a new session.
  */
 export function resumableSessionId(conversation: Conversation): string | null {
   const sessionId = conversation.sessionId;
   if (!sessionId || !RESUMABLE_PROVIDERS.has(conversation.providerId)) return null;
-  if (conversation.type === 'acp' || conversation.providerId === 'claude') return sessionId;
+  if (conversation.type === 'acp' || CHOSEN_ID_PROVIDERS.has(conversation.providerId)) {
+    return sessionId;
+  }
   return sessionId !== conversation.id ? sessionId : null;
 }
 

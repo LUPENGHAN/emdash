@@ -174,28 +174,21 @@ export const ProjectHistoryView = observer(function ProjectHistoryView({
                 ) : null}
               </p>
             </div>
-            {session.resumeIn ? null : (
-              <Button
-                size="sm"
-                variant="ghost"
-                title="Resume in a terminal, with the CLI's own interface"
-                disabled={!(session.workspaceId ?? repositoryWorkspaceId) || resumingId !== null}
-                onClick={() => void resume(session, 'pty')}
-              >
-                Terminal
-              </Button>
-            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Resume in a terminal, with the CLI's own interface"
+              disabled={!(session.workspaceId ?? repositoryWorkspaceId) || resumingId !== null}
+              onClick={() => void resume(session, 'pty')}
+            >
+              Terminal
+            </Button>
             <Button
               size="sm"
               variant="secondary"
-              title={
-                session.resumeIn === 'pty'
-                  ? 'Resume in a terminal (this session lives in the CLI’s terminal store)'
-                  : 'Resume in the chat UI'
-              }
+              title="Resume in the chat UI"
               disabled={!(session.workspaceId ?? repositoryWorkspaceId) || resumingId !== null}
-              // Sessions tied to one UI's store (Cursor) resume there; others default to chat.
-              onClick={() => void resume(session, session.resumeIn ?? 'acp')}
+              onClick={() => void resume(session, 'acp')}
             >
               {resumingId === session.sessionId ? 'Resuming…' : 'Resume'}
             </Button>
