@@ -154,6 +154,7 @@ const AGENT_NAMES: Record<string, string> = {
   codex: 'Codex',
   pi: 'Pi',
   'oh-my-pi': 'Oh My Pi',
+  opencode: 'OpenCode',
 };
 
 export function agentDisplayName(agent: string): string {

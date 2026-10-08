@@ -43,6 +43,8 @@ const SUBSCRIPTION_VENDORS = new Set([
   'github-copilot',
   'google-gemini-cli',
   'google-antigravity',
+  // OpenCode Go: OpenCode's own monthly plan.
+  'opencode-go',
 ]);
 
 /** Where the calls went, and how that source bills by default. */

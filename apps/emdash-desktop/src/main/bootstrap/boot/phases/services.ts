@@ -50,6 +50,7 @@ import { TuiConversationProvider } from '@core/features/conversations/node/tui-c
 import { createUsageScanner } from '@core/features/conversations/node/usage-stats/session-records';
 import {
   readUsageAttribution,
+  createOpenCodeCallReader,
   usageSessionRoots,
 } from '@core/features/conversations/node/usage-stats/usage-attribution';
 import { createUsageStatsService } from '@core/features/conversations/node/usage-stats/usage-stats-service';
@@ -426,6 +427,7 @@ export async function bootServices(
           { claude: mainAgentHome('claude'), codex: mainAgentHome('codex') },
           { home: homedir(), env: process.env }
         ),
+      openCodeCalls: createOpenCodeCallReader({ home: homedir(), env: process.env }),
       catalog: priceCatalog,
       warn: (message, details) => log.warn(message, details),
     }),

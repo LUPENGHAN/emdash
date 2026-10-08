@@ -299,7 +299,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloudflare.cloudflar
 
 右上角的柱状图按钮打开「使用统计」：按来源、模型、agent、项目、电脑查看调用次数、token 和花费。
 
-- **数据来源**：各 agent 自己的会话记录（Claude Code、Codex、Pi、Oh My Pi），包括在 Emdash 外面开的会话。Cursor 本地不记 token，不统计。
+- **数据来源**：各 agent 自己的会话记录（Claude Code、Codex、Pi、Oh My Pi、OpenCode），包括在 Emdash 外面开的会话。Cursor 本地不记 token，不统计。
 - **按量扣费**：网关、API key 这类来源，按「API 价格 × 你设的倍率」算，币种可选美元或人民币。在「计费设置…」里给每个来源设置。
 - **订阅**：Claude、ChatGPT 这类包月订阅不按次扣钱，单独显示「按 API 价格折算」值多少，用来判断订阅划不划算。
 - **所有电脑**：在「设置 → 远程访问」里添加过的电脑，会一起统计。对方也要是新版 Emdash；第一次统计要读完它的全部历史，可能要稍等。

@@ -11,7 +11,7 @@ import {
   type Usage,
 } from '../session-cost';
 
-export type UsageAgent = 'claude' | 'codex' | 'pi' | 'oh-my-pi';
+export type UsageAgent = 'claude' | 'codex' | 'pi' | 'oh-my-pi' | 'opencode';
 
 /** One day's calls in one file on one model (and, for Pi, one provider). */
 export type UsageBucket = {
@@ -42,7 +42,7 @@ export type FileUsage = {
 export type ScannedFile = { path: string; usage: FileUsage };
 
 /** A directory of one agent's session files. */
-export type SessionRoot = { agent: UsageAgent; dir: string };
+export type SessionRoot = { agent: Exclude<UsageAgent, 'opencode'>; dir: string };
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
 const str = (value: unknown) => (typeof value === 'string' && value ? value : null);
@@ -285,7 +285,65 @@ export async function piFileUsage(
   return { agent, sessionId, cwd, buckets: bucketize(usages, catalog) };
 }
 
-function fileUsage(agent: UsageAgent, file: string, catalog: PriceCatalog): Promise<FileUsage> {
+/** One OpenCode model call, as its database records an assistant message. */
+export type OpenCodeCall = {
+  /** The top-level session: a subagent's calls count as its parent's. */
+  sessionId: string;
+  cwd: string | null;
+  /** Epoch milliseconds. */
+  time: number;
+  model: string;
+  /** OpenCode's provider id (Emdash's are `emdash-<id>`). */
+  provider: string | null;
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
+
+/**
+ * OpenCode keeps sessions in one database rather than files: its calls, one entry per
+ * session, under a path naming the session (`opencode:<id>`).
+ */
+export function openCodeUsage(calls: OpenCodeCall[], catalog: PriceCatalog): ScannedFile[] {
+  const sessions = new Map<string, { cwd: string | null; usages: Timed[] }>();
+  for (const call of calls) {
+    const day = localDay(call.time);
+    if (!day) continue;
+    if (call.input + call.output + call.reasoning + call.cacheRead + call.cacheWrite === 0) {
+      continue; // aborted before any call
+    }
+    let session = sessions.get(call.sessionId);
+    if (!session) {
+      session = { cwd: call.cwd, usages: [] };
+      sessions.set(call.sessionId, session);
+    }
+    session.usages.push({
+      usage: {
+        model: call.model,
+        input: call.input,
+        // Reasoning is billed as output; OpenCode counts it apart.
+        output: call.output + call.reasoning,
+        cacheRead: call.cacheRead,
+        cacheWrite5m: call.cacheWrite,
+        cacheWrite1h: 0,
+      },
+      day,
+      vendor: call.provider,
+    });
+  }
+  return [...sessions].map(([sessionId, { cwd, usages }]) => ({
+    path: `opencode:${sessionId}`,
+    usage: { agent: 'opencode', sessionId, cwd, buckets: bucketize(usages, catalog) },
+  }));
+}
+
+function fileUsage(
+  agent: Exclude<UsageAgent, 'opencode'>,
+  file: string,
+  catalog: PriceCatalog
+): Promise<FileUsage> {
   if (agent === 'claude') return claudeFileUsage(file, catalog);
   if (agent === 'codex') return codexFileUsage(file, catalog);
   return piFileUsage(agent, file, catalog);
@@ -327,6 +385,8 @@ export function catalogFingerprint(catalog: PriceCatalog): string {
 export function createUsageScanner(deps: {
   cacheFile: string;
   roots: () => Promise<SessionRoot[]>;
+  /** OpenCode's calls, read whole each scan (its database answers in well under a second). */
+  openCodeCalls?: () => Promise<OpenCodeCall[]>;
   catalog: () => Promise<PriceCatalog>;
   warn?: (message: string, details: Record<string, unknown>) => void;
 }) {
@@ -383,6 +443,13 @@ export function createUsageScanner(deps: {
             error: String(error),
           });
         }
+      }
+    }
+    if (deps.openCodeCalls) {
+      try {
+        results.push(...openCodeUsage(await deps.openCodeCalls(), catalog));
+      } catch (error) {
+        deps.warn?.('usage stats: could not read OpenCode sessions', { error: String(error) });
       }
     }
     for (const file of Object.keys(current.files)) {

@@ -8,7 +8,9 @@ import {
   codexFileUsage,
   createUsageScanner,
   localDay,
+  openCodeUsage,
   piFileUsage,
+  type OpenCodeCall,
 } from './session-records';
 
 // $1 per million input tokens, $2 per million output: easy sums.
@@ -169,6 +171,48 @@ describe('session records', () => {
     expect((await scanner.scan())[0]?.usage.buckets[0]?.requests).toBe(2);
     await rm(file);
     expect(await scanner.scan()).toEqual([]);
+  });
+
+  it("counts OpenCode's calls per session, reasoning as output", async () => {
+    const call = (overrides: Partial<OpenCodeCall>): OpenCodeCall => ({
+      sessionId: 'ses_1',
+      cwd: '/work/repo',
+      time: new Date(at('2026-10-01')).getTime(),
+      model: 'deepseek/m1',
+      provider: 'emdash-newapi',
+      input: 1_000_000,
+      output: 250_000,
+      reasoning: 250_000,
+      cacheRead: 0,
+      cacheWrite: 0,
+      ...overrides,
+    });
+    const files = openCodeUsage(
+      [call({}), call({ input: 0, output: 0, reasoning: 0 }), call({ sessionId: 'ses_2' })],
+      catalog
+    );
+    expect(files.map((file) => file.path)).toEqual(['opencode:ses_1', 'opencode:ses_2']);
+    expect(files[0]?.usage).toMatchObject({ agent: 'opencode', sessionId: 'ses_1', cwd: '/work/repo' });
+    expect(files[0]?.usage.buckets).toEqual([
+      {
+        day: '2026-10-01',
+        model: 'deepseek/m1',
+        vendor: 'emdash-newapi',
+        requests: 1, // the empty (aborted) message is no call
+        input: 1_000_000,
+        output: 500_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        listUsd: 2,
+      },
+    ]);
+    const scanner = createUsageScanner({
+      cacheFile: path.join(dir, 'cache.json'),
+      roots: async () => [],
+      openCodeCalls: async () => [call({})],
+      catalog: async () => catalog,
+    });
+    expect((await scanner.scan()).map((file) => file.path)).toEqual(['opencode:ses_1']);
   });
 
   it('names local days', () => {

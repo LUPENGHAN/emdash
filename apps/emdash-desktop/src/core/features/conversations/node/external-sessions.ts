@@ -312,12 +312,13 @@ async function readPiFamilySession(
 // ── OpenCode ─────────────────────────────────────────────────────────────────
 
 /** OpenCode's SQLite session store, opened read-only. */
-export function openOpenCodeDb({ home, env }: ExternalSessionEnv): Database.Database {
+export function openCodeDbPath({ home, env }: ExternalSessionEnv): string {
   const dataHome = env.XDG_DATA_HOME ?? path.join(home, '.local', 'share');
-  return new Database(path.join(dataHome, 'opencode', 'opencode.db'), {
-    readonly: true,
-    fileMustExist: true,
-  });
+  return path.join(dataHome, 'opencode', 'opencode.db');
+}
+
+export function openOpenCodeDb(env: ExternalSessionEnv): Database.Database {
+  return new Database(openCodeDbPath(env), { readonly: true, fileMustExist: true });
 }
 
 function readOpenCodeSessions(env: ExternalSessionEnv, cwds: Set<string>): ImportableSession[] {
