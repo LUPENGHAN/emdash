@@ -91,6 +91,37 @@ emdash-update -y    # 同上；Emdash Fork 正在运行时也不再询问
 - **M 系列上不要用 Rosetta 打开「终端」。** 如果「终端」勾选了「使用 Rosetta 打开」，会编出 x64 版本：能用，但更慢。`setup.sh` 会提示这种情况。解决办法：退出「终端」，在访达里对「终端」点「显示简介」，取消勾选 Rosetta，然后在新开的终端里重新运行 `pnpm install` 和 `emdash-update`。
 - 官方 Emdash 只发布 arm64 的 Mac 版。这个分支在 Intel 上能用，是因为它总是在本机编译。
 
+### Windows
+
+Windows 上同样在本机编译安装，命令换成 PowerShell 脚本。
+
+**先准备好**（只要一次）：
+
+- **Git 和 Node**：Node 用任意版本，仓库会自己下载要求的版本。
+- **pnpm**：`npm.cmd install -g pnpm@10.28.2`。注意要用 `npm.cmd`：Windows 默认禁止运行 `.ps1` 脚本，直接用 `npm` 会报错。
+- **VS C++ 编译工具**：用来编译数据库模块。在管理员 PowerShell 里运行：
+  ```powershell
+  winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override '--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
+  ```
+
+**安装**：
+
+```powershell
+git clone --branch feat/multi-agent https://github.com/LUPENGHAN/emdash.git $env:USERPROFILE\code\emdash
+cd $env:USERPROFILE\code\emdash
+pnpm.cmd install
+powershell -ExecutionPolicy Bypass -File apps\emdash-desktop\scripts\fork\setup.ps1   # 把 emdash-update 加进 PATH
+```
+
+**之后每次更新**：新开一个终端，运行 `emdash-update`。它会拉代码、安装依赖、编译、打包，然后静默安装到 `%LOCALAPPDATA%\Programs\Emdash Fork`，开始菜单里会有「Emdash Fork」。
+
+和 Mac 的区别：
+
+- **没有代码签名。** 第一次打开时 SmartScreen 可能提示「未知发布者」，点「更多信息 → 仍要运行」。
+- **用户数据位置**：`%APPDATA%\emdash-fork`。
+- **在 Emdash 的终端里运行 `emdash-update`**：会自动转到一个新的 PowerShell 窗口继续，因为安装时要关掉 Emdash。
+- **安卓 App 的编译脚本** `emdash-android` 只支持 Mac。
+
 ---
 
 ## 四、个人设置：不改脚本也能调整
