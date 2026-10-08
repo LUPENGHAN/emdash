@@ -192,7 +192,11 @@ describe('session records', () => {
       catalog
     );
     expect(files.map((file) => file.path)).toEqual(['opencode:ses_1', 'opencode:ses_2']);
-    expect(files[0]?.usage).toMatchObject({ agent: 'opencode', sessionId: 'ses_1', cwd: '/work/repo' });
+    expect(files[0]?.usage).toMatchObject({
+      agent: 'opencode',
+      sessionId: 'ses_1',
+      cwd: '/work/repo',
+    });
     expect(files[0]?.usage.buckets).toEqual([
       {
         day: '2026-10-01',

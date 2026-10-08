@@ -1,5 +1,5 @@
 import type { GitCredentialsSessionSpec } from '@emdash/core/primitives/git-credentials/api';
-import type { HostRef } from '@emdash/core/primitives/host/api';
+import { isLocalHostRef, type HostRef } from '@emdash/core/primitives/host/api';
 import type { TuiAgentStartInput } from '@emdash/core/runtimes/tui-agents/api';
 import { and, eq } from 'drizzle-orm';
 import { conversationRegistryTable as conversations } from '@core/features/conversations/api/node/registry';
@@ -70,6 +70,13 @@ export type TuiConversationProviderDependencies = {
     host: HostRef;
     env: Record<string, string>;
   }): Promise<{ args: string[]; env: Record<string, string> } | null>;
+  /** Readies an agent's session on this computer before a terminal resumes it. */
+  beforeResume?(params: {
+    conversationId: string;
+    providerId: string;
+    sessionId: string;
+    cwd: string;
+  }): Promise<void>;
 };
 
 function parseExtraArgs(value: string | undefined): string[] {
@@ -103,8 +110,16 @@ export class TuiConversationProvider implements ConversationProvider {
     initialSize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
     initialPrompt,
   }: EnsureConversationSessionRequest): Promise<EnsureConversationSessionResult> {
-    const input = await this.buildStartInput(conversation, initialSize, mode, initialPrompt);
     const agentSession = resolveAgentSession(conversation, mode);
+    if (agentSession.isResuming && agentSession.sessionId && isLocalHostRef(this.host)) {
+      await this.dependencies.beforeResume?.({
+        conversationId: conversation.id,
+        providerId: conversation.providerId,
+        sessionId: agentSession.sessionId,
+        cwd: this.taskPath,
+      });
+    }
+    const input = await this.buildStartInput(conversation, initialSize, mode, initialPrompt);
     const result = agentSession.isResuming
       ? await this.tuiAgents.resume(input)
       : await this.tuiAgents.startSession(input);

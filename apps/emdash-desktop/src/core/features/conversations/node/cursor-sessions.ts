@@ -300,3 +300,35 @@ async function latestMtime(files: string[]): Promise<number> {
   }
   return latest;
 }
+
+/**
+ * Cursor terminals Emdash started before it named their sessions ran a bare `--resume`,
+ * which picks up the cwd's latest terminal session; their conversation id names no
+ * session. The cwd's latest terminal session no other conversation has (`claimed`) is
+ * renamed to that id, so `--resume <id>` continues it as `--resume` did. Nothing is done
+ * when a session already has the id. Returns whether one was renamed.
+ */
+export async function adoptLegacyCursorSession(
+  env: ExternalSessionEnv,
+  sessionId: string,
+  cwd: string,
+  claimed: ReadonlySet<string>
+): Promise<boolean> {
+  if (!/^[\w-]+$/.test(sessionId)) return false;
+  const root = cursorHome(env);
+  if ((await cursorSessionDirs(root)).some((entry) => entry.id === sessionId)) return false;
+  const resolved = await realpath(cwd).catch(() => cwd);
+  const bucket = path.dirname(cursorSessionDir(root, sessionId, resolved, 'pty'));
+  let latest: { dir: string; updatedAt: number } | null = null;
+  for (const id of await listDirs(bucket)) {
+    if (claimed.has(id)) continue;
+    const dir = path.join(bucket, id);
+    const meta = await readMeta(dir);
+    if (!meta || meta.hasConversation === false) continue;
+    const updatedAt = await latestMtime(storeFiles(dir));
+    if (!latest || latest.updatedAt < updatedAt) latest = { dir, updatedAt };
+  }
+  if (!latest) return false;
+  await rename(latest.dir, path.join(bucket, sessionId));
+  return true;
+}

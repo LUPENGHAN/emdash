@@ -38,6 +38,7 @@ import {
 import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registry';
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
+import { resumeLegacyCursorConversation } from '@core/features/conversations/node/legacy-cursor-sessions';
 import { getProviderSettingsService } from '@core/features/conversations/node/provider-settings-service';
 import {
   createPriceCatalog,
@@ -189,6 +190,7 @@ import { createDesktopSessionIntentStores } from '@main/core/runtime/session-int
 import { executeOAuthFlow } from '@main/core/shared/oauth-flow';
 import { getTerminalColorEnv } from '@main/core/terminal-shell/color-env';
 import { runLocalCommand } from '@main/core/utils/exec';
+import { desktopKeyValueStore } from '@main/db/kv';
 import { cleanupLegacyOperationsDatabases } from '@main/db/legacy-operations-cleanup';
 import type { DesktopRuntimes } from '@main/gateway/desktop-runtimes';
 import { openRemoteWireSession, setRemoteRouting } from '@main/gateway/desktop-wire';
@@ -576,6 +578,16 @@ export async function bootServices(
     });
     return acpMcpServers(await launchMcpServers(input.conversationId, input.projectId));
   };
+  // When this Emdash began naming Cursor terminal sessions; older terminals resume the old way.
+  const cursorSessionsNamedSince = (async () => {
+    const key = 'conversations:cursorSessionsNamedSince';
+    const stored = await desktopKeyValueStore.get(key);
+    if (!stored.success) return new Date(0);
+    if (typeof stored.data === 'string') return new Date(stored.data);
+    const now = new Date();
+    await desktopKeyValueStore.set(key, now.toISOString());
+    return now;
+  })();
   const tuiConversationDependencies = {
     db,
     getProviderConfig: (providerId: string, override?: ModelSourceOverride) =>
@@ -605,6 +617,21 @@ export async function bootServices(
         await launchMcpServers(params.conversationId, params.projectId),
         params.env
       );
+    },
+    beforeResume: async (params: {
+      conversationId: string;
+      providerId: string;
+      sessionId: string;
+      cwd: string;
+    }) => {
+      if (params.providerId !== 'cursor') return;
+      await resumeLegacyCursorConversation({
+        db,
+        ...params,
+        namedSince: await cursorSessionsNamedSince,
+      }).catch((error: unknown) => {
+        log.warn('Could not give an older Cursor terminal its session back', { error });
+      });
     },
   };
   const projectAttachmentAdapter = createProjectAttachmentAdapter({

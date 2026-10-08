@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  adoptLegacyCursorSession,
   cursorSessionDir,
   parseCursorMessage,
   placeCursorSession,
@@ -120,5 +121,51 @@ describe('placeCursorSession', () => {
     await session(cursorSessionDir(root, id, cwd, 'pty'), { hasConversation: false }, 'T');
     expect(await placeCursorSession(env(), id, cwd, 'acp')).toBe(false);
     expect(await placeCursorSession(env(), '../x', cwd, 'acp')).toBe(false);
+  });
+});
+
+describe('adoptLegacyCursorSession', () => {
+  const cwd = '/work/repo';
+  let home: string;
+  let root: string;
+  const env = () => ({ home, env: {} });
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'cursor-adopt-'));
+    root = path.join(home, '.cursor');
+  });
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  async function terminalSession(id: string, mtimeSec: number, hasConversation = true) {
+    const dir = cursorSessionDir(root, id, cwd, 'pty');
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'meta.json'), JSON.stringify({ hasConversation, cwd }));
+    await writeFile(path.join(dir, 'store.db'), id);
+    for (const name of ['meta.json', 'store.db']) {
+      await utimes(path.join(dir, name), mtimeSec, mtimeSec);
+    }
+  }
+
+  it("names the cwd's latest unclaimed terminal session after the conversation", async () => {
+    await terminalSession('older', 1_000);
+    await terminalSession('latest', 2_000);
+    await terminalSession('claimed', 3_000);
+    await terminalSession('empty', 4_000, false);
+    expect(await adoptLegacyCursorSession(env(), 'conv-1', cwd, new Set(['claimed']))).toBe(true);
+    const adopted = path.join(cursorSessionDir(root, 'conv-1', cwd, 'pty'), 'store.db');
+    expect(await readFile(adopted, 'utf8')).toBe('latest');
+    // The next older conversation gets the next session; one already named keeps its own.
+    const claimed = new Set(['claimed', 'conv-1', 'conv-2']);
+    expect(await adoptLegacyCursorSession(env(), 'conv-2', cwd, claimed)).toBe(true);
+    expect(
+      await readFile(path.join(cursorSessionDir(root, 'conv-2', cwd, 'pty'), 'store.db'), 'utf8')
+    ).toBe('older');
+    expect(await adoptLegacyCursorSession(env(), 'conv-1', cwd, new Set())).toBe(false);
+  });
+
+  it('does nothing without a session to give', async () => {
+    expect(await adoptLegacyCursorSession(env(), 'conv-1', cwd, new Set())).toBe(false);
   });
 });
