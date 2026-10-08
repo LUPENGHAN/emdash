@@ -658,6 +658,7 @@ export class ConversationStore {
       setWorking: action,
       clearWorking: action,
       markSeen: action,
+      setAutoApprove: action,
       isInitialConversation: computed,
       indicatorStatus: computed,
     });
@@ -674,6 +675,11 @@ export class ConversationStore {
     if (this.status === 'error') return 'error';
     if (this.status === 'completed') return 'completed';
     return null;
+  }
+
+  /** Shows a change of the conversation's auto-approval, which no event brings back. */
+  setAutoApprove(enabled: boolean) {
+    this.data = { ...this.data, autoApprove: enabled };
   }
 
   setStatus(status: AgentStatus) {

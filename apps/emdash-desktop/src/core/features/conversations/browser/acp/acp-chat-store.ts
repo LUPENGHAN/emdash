@@ -544,14 +544,31 @@ export class AcpChatStore {
     );
   }
 
+  /**
+   * Turns auto-approval on or off. The change shows at once (the conversation's data is
+   * not sent again when its config changes) and is undone if it cannot be saved.
+   */
   setAutoApprove(enabled: boolean): void {
-    if (!this.session) return;
-    void this.session
-      .setAutoApprove(enabled)
+    const conversation = conversationRegistry
+      .get(this.taskId)
+      ?.conversations.get(this.conversationId);
+    const previous = this.autoApprove;
+    conversation?.setAutoApprove(enabled);
+    const conversationId = this.conversationId;
+    const applied = this.session
+      ? this.session.setAutoApprove(enabled)
+      : getConversationsClient().then((client) =>
+          client.acp.setAutoApprove({ conversationId, enabled })
+        );
+    const undo = (error: unknown) => {
+      runInAction(() => conversation?.setAutoApprove(previous));
+      this._toastError('Failed to change auto-approval', error);
+    };
+    void applied
       .then((result) => {
-        if (!result.success) this._toastError('Failed to change auto-approval', result.error);
+        if (!result.success) undo(result.error);
       })
-      .catch((error: unknown) => this._toastError('Failed to change auto-approval', error));
+      .catch(undo);
   }
 
   resolvePermission(optionId: string): void {

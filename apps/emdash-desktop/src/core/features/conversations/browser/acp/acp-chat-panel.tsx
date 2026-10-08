@@ -233,7 +233,7 @@ function AutoApproveToggle({
         }
       >
         <ShieldCheck className="h-3.5 w-3.5" fill={checked ? 'currentColor' : 'none'} />
-        Auto-approve
+        {checked ? 'Auto-approve: On' : 'Auto-approve: Off'}
       </Tooltip.Trigger>
       <Tooltip.Content>
         {checked ? 'Auto-approve: On' : 'Auto-approve: Off'}
