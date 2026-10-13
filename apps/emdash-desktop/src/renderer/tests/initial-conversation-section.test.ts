@@ -408,20 +408,20 @@ describe('useInitialConversationState', () => {
     expect(Object.values(mocks.preferences.entries)[0]?.acp.options).toEqual({ model: 'sonnet' });
   });
 
-  it('starts new scopes off and isolates hosts and transports', async () => {
+  it('starts new scopes off, isolates hosts, and shares one choice across interfaces', async () => {
     await renderProbe('project-1');
     expect(latestState?.autoApprove).toBe(false);
     await act(async () => latestState?.setAutoApprove(true));
+    // Chat conversations auto-approve too (Emdash answers the requests), from the same choice.
     await act(async () => latestState?.setUseChatUi(true));
-    expect(latestState?.autoApprove).toBe(false);
-    await act(async () => latestState?.setAutoApprove(true));
+    expect(latestState?.autoApprove).toBe(true);
 
     mocks.getProjectSshConnectionId.mockReturnValue('remote-1');
     await renderProbe('project-2');
     expect(latestState?.autoApprove).toBe(false);
     mocks.getProjectSshConnectionId.mockReturnValue(undefined);
     await renderProbe('project-1');
-    expect(latestState?.autoApprove).toBe(false);
+    expect(latestState?.autoApprove).toBe(true);
     await act(async () => latestState?.setUseChatUi(false));
     expect(latestState?.autoApprove).toBe(true);
   });
@@ -677,7 +677,7 @@ describe('useInitialConversationState', () => {
     expect(latestState?.useChatUi).toBe(false);
   });
 
-  it('never exposes auto-approval for chat UI', async () => {
+  it('offers auto-approval in chat UI to an agent whose terminal cannot', async () => {
     mocks.autoApproveKind = 'unsupported';
     try {
       await renderProbe('project-1');
@@ -687,7 +687,7 @@ describe('useInitialConversationState', () => {
       await act(async () => latestState?.setUseChatUi(true));
       expect(latestState?.autoApprove).toBe(false);
       await act(async () => latestState?.setAutoApprove(true));
-      expect(latestState?.autoApprove).toBe(false);
+      expect(latestState?.autoApprove).toBe(true);
 
       await act(async () => latestState?.setUseChatUi(false));
       expect(latestState?.autoApprove).toBe(false);
