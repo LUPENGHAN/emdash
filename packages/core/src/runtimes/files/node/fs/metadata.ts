@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
-export const DEFAULT_MAX_BYTES = 200 * 1024;
+/**
+ * What the editor opens without a caller-set limit. Lock files and generated JSON or
+ * YAML (pnpm-lock.yaml, translation dictionaries) pass 200 KB routinely; Monaco handles
+ * a few megabytes well, and Git content reads stop at the same 10 MB.
+ */
+export const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 export const MAX_READ_BYTES = 100 * 1024 * 1024;
 
 export function normalizeMaxBytes(maxBytes: number | undefined): number {

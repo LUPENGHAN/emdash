@@ -13,6 +13,15 @@ afterEach(async () => {
 });
 
 describe('ContentReader', () => {
+  it('opens a lock-file-sized text file without a caller-set limit', async () => {
+    const root = await makeRoot();
+    const lock = 'lockfileVersion: 9.0\n' + 'packages: {}\n'.repeat(60_000);
+    await writeFile(path.join(root, 'pnpm-lock.yaml'), lock);
+    await expect(
+      new ContentReader(new RootPathPolicy(root)).read(relativePath('pnpm-lock.yaml'))
+    ).resolves.toMatchObject({ kind: 'text', byteSize: Buffer.byteLength(lock) });
+  });
+
   it('classifies EOL, over-limit, binary content, and unavailable files', async () => {
     const root = await makeRoot();
     await writeFile(path.join(root, 'text.txt'), 'a\r\nb\r\n');
