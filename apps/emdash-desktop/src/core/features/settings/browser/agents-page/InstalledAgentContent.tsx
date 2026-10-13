@@ -13,6 +13,7 @@ import { observer } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   defaultSourceLabel,
+  isOfficialAccount,
   isProviderCapableAgent,
   providerSupportsAgent,
   sourcesForAgent,
@@ -110,7 +111,8 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
       const isAtDefaults =
         extraArgs.trim() === '' &&
         envEntries.every((e) => !e.key.trim()) &&
-        !storedConfig?.modelSource;
+        !storedConfig?.modelSource &&
+        !storedConfig?.contextWindow;
 
       if (isAtDefaults) {
         reset(undefined, {
@@ -146,7 +148,7 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
           storedConfig={storedConfig}
           onChange={(patch) => {
             const next = { ...(storedConfig ?? {}), ...patch };
-            const empty = !next.extraArgs && !next.env && !next.modelSource;
+            const empty = !next.extraArgs && !next.env && !next.modelSource && !next.contextWindow;
             if (empty) {
               reset(undefined, {
                 onError: (err) => log.error('Failed to reset agent config:', err),
@@ -246,7 +248,9 @@ const ModelSourceFields = observer(function ModelSourceFields({
 }: {
   agentId: string;
   storedConfig: ProviderCustomConfig | undefined;
-  onChange: (patch: Pick<ProviderCustomConfig, 'modelSource' | 'sourceModel'>) => void;
+  onChange: (
+    patch: Partial<Pick<ProviderCustomConfig, 'modelSource' | 'sourceModel' | 'contextWindow'>>
+  ) => void;
 }) {
   const { value } = useAppSettingsKey('modelProviders');
   const providers = value?.providers ?? [];
@@ -342,6 +346,40 @@ const ModelSourceFields = observer(function ModelSourceFields({
           ) : null}
         </Field.Root>
       ) : null}
+      {agentId === 'codex' && (!provider || isOfficialAccount(provider)) ? (
+        <Field.Root>
+          <Label>Context window</Label>
+          <Select.Root
+            value={String(storedConfig?.contextWindow ?? '')}
+            onValueChange={(next) => onChange({ contextWindow: next ? Number(next) : undefined })}
+          >
+            <Select.Trigger appearance="input" className="w-full">
+              <Select.Value placeholder="Codex default (272k)">
+                {contextWindowLabel(storedConfig?.contextWindow)}
+              </Select.Value>
+            </Select.Trigger>
+            <Select.Content align="start" width="trigger">
+              {CODEX_CONTEXT_CHOICES.map((tokens) => (
+                <Select.Item key={tokens ?? 'default'} value={String(tokens ?? '')}>
+                  {contextWindowLabel(tokens)}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+          <Field.Description>
+            OpenAI allows official logins up to 872k. Codex compacts at 90% of this; a longer
+            context uses more of the plan per turn.
+          </Field.Description>
+        </Field.Root>
+      ) : null}
     </div>
   );
 });
+
+const CODEX_CONTEXT_CHOICES = [undefined, 400_000, 600_000, 872_000] as const;
+
+function contextWindowLabel(tokens: number | undefined): string {
+  if (!tokens) return 'Codex default (272k)';
+  const label = `${Math.round(tokens / 1000)}k`;
+  return tokens === 872_000 ? `${label} (maximum)` : label;
+}

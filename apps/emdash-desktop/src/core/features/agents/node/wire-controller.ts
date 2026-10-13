@@ -6,6 +6,7 @@ import { createController, type CallMeta, type Controller } from '@emdash/wire/r
 import type { AgentOperations } from '@core/features/agents/node/controller';
 import type {
   ModelProviderKeys,
+  ModelProviderTransfer,
   ModelSourceOverride,
   OfficialAccountStatus,
   OwnSource,
@@ -25,6 +26,7 @@ export type CreateAgentsWireControllerOptions = Readonly<{
   operations: AgentOperations;
   runtimes: AgentsRuntimeBroker;
   modelProviderKeys?: ModelProviderKeys;
+  providerTransfer?: ModelProviderTransfer;
   usageLimits?: UsageLimitsService;
   /** Resolves an agent's launch config the way a launch would; throws when it cannot start. */
   effectiveAgentConfig?: (agentId: string, override?: ModelSourceOverride) => Promise<unknown>;
@@ -158,6 +160,9 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
     clearModelProviderKey: async ({ providerId }) => {
       await options.modelProviderKeys?.clear(providerId);
     },
+    exportModelProviders: (input) => requireTransfer(options).exportProviders(input),
+    readModelProvidersImport: () => requireTransfer(options).readImport(),
+    importModelProviders: (input) => requireTransfer(options).importProviders(input),
     checkModelSource: async ({ agentId, modelSource, sourceModel }) => {
       try {
         await options.effectiveAgentConfig?.(
@@ -200,6 +205,12 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
         runtime.agentConfig.loginOutput.handle({ providerId }).asLiveSource()
       ),
   });
+}
+
+function requireTransfer(options: CreateAgentsWireControllerOptions): ModelProviderTransfer {
+  if (!options.providerTransfer)
+    throw new Error('Moving providers between computers is unavailable');
+  return options.providerTransfer;
 }
 
 function createAuthModelProvider(

@@ -12,6 +12,7 @@ interface PaneProviderProps {
   group: Pane;
   canSplit: boolean;
   splitPane: () => void;
+  splitPaneDown: () => void;
   children: ReactNode;
 }
 
@@ -19,11 +20,13 @@ export const PaneProvider = observer(function PaneProvider({
   group,
   canSplit,
   splitPane,
+  splitPaneDown,
   children,
 }: PaneProviderProps) {
   const { attachRef, instance, isFocused } = usePaneScope(group.paneId, group.pane, {
     canSplit,
     splitPane,
+    splitPaneDown,
   });
   const value: PaneContextValue = {
     paneId: group.paneId,

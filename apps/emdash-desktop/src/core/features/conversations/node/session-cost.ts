@@ -9,8 +9,8 @@ import {
   claudeText,
   cwdVariants,
   listFilesRecursive,
-  parseJsonLines,
   piSessionsDir,
+  streamJsonLines,
   type ExternalSessionEnv,
 } from './external-sessions';
 
@@ -306,7 +306,7 @@ async function claudeUsage(sessionId: string, cwd: string, { home, env }: Env): 
   return [];
 }
 
-/** Usage per session file while unchanged: a long session's file runs to 100 MB. */
+/** Usage per session file while unchanged; long sessions run to hundreds of megabytes. */
 const claudeFileCache = new Map<string, { key: string; usages: Usage[] }>();
 const CLAUDE_FILE_CACHE_SIZE = 32;
 
@@ -320,7 +320,7 @@ async function claudeFileUsage(file: string): Promise<Usage[] | null> {
   }
   const cached = claudeFileCache.get(file);
   if (cached?.key === key) return cached.usages;
-  const usages = claudeRecordsUsage(await readFile(file, 'utf8'));
+  const usages = await claudeRecordsUsage(streamJsonLines(file));
   claudeFileCache.delete(file);
   claudeFileCache.set(file, { key, usages });
   if (claudeFileCache.size > CLAUDE_FILE_CACHE_SIZE) {
@@ -329,12 +329,14 @@ async function claudeFileUsage(file: string): Promise<Usage[] | null> {
   return usages;
 }
 
-function claudeRecordsUsage(text: string): Usage[] {
+async function claudeRecordsUsage(
+  records: AsyncIterable<Record<string, unknown>>
+): Promise<Usage[]> {
   const byMessage = new Map<string, Usage>();
   const compactions: Usage[] = [];
   let model: string | null = null;
   let compaction: Usage | null = null;
-  for (const record of parseJsonLines(text)) {
+  for await (const record of records) {
     // A compaction reads the whole context (mostly cached) and writes the summary that
     // follows its boundary; Claude Code records neither, so both are estimated.
     if (record.type === 'system' && record.subtype === 'compact_boundary') {
@@ -402,10 +404,17 @@ async function codexUsage(sessionId: string, { home, env }: Env): Promise<Usage[
     }
   }
   const usages: Usage[] = [];
-  for (const file of [...own, ...children]) {
-    let model = '';
-    let previous = { input: 0, cached: 0, written: 0, output: 0 };
-    for (const record of parseJsonLines(await readFile(file, 'utf8').catch(() => ''))) {
+  for (const file of [...own, ...children]) usages.push(...(await codexFileUsage(file)));
+  return usages;
+}
+
+/** One rollout's usage; a file that vanished after listing contributes nothing. */
+async function codexFileUsage(file: string): Promise<Usage[]> {
+  const usages: Usage[] = [];
+  let model = '';
+  let previous = { input: 0, cached: 0, written: 0, output: 0 };
+  try {
+    for await (const record of streamJsonLines(file)) {
       const payload = asRecord(record.payload);
       if (record.type === 'turn_context' && typeof payload?.model === 'string') {
         model = payload.model;
@@ -439,6 +448,8 @@ async function codexUsage(sessionId: string, { home, env }: Env): Promise<Usage[
         context: num(asRecord(info?.last_token_usage)?.input_tokens),
       });
     }
+  } catch {
+    // Rollout unreadable.
   }
   return usages;
 }
@@ -464,18 +475,22 @@ async function piFamilyUsage(
   }
   if (!file) return [];
   const usages: Usage[] = [];
-  for (const record of parseJsonLines(await readFile(file, 'utf8').catch(() => ''))) {
-    const message = asRecord(record.message);
-    const usage = asRecord(message?.usage);
-    if (record.type !== 'message' || message?.role !== 'assistant' || !usage) continue;
-    usages.push({
-      model: typeof message.model === 'string' ? message.model : 'unknown',
-      input: num(usage.input),
-      output: num(usage.output),
-      cacheRead: num(usage.cacheRead),
-      cacheWrite5m: num(usage.cacheWrite),
-      cacheWrite1h: 0,
-    });
+  try {
+    for await (const record of streamJsonLines(file)) {
+      const message = asRecord(record.message);
+      const usage = asRecord(message?.usage);
+      if (record.type !== 'message' || message?.role !== 'assistant' || !usage) continue;
+      usages.push({
+        model: typeof message.model === 'string' ? message.model : 'unknown',
+        input: num(usage.input),
+        output: num(usage.output),
+        cacheRead: num(usage.cacheRead),
+        cacheWrite5m: num(usage.cacheWrite),
+        cacheWrite1h: 0,
+      });
+    }
+  } catch {
+    // Session file unreadable.
   }
   return usages;
 }

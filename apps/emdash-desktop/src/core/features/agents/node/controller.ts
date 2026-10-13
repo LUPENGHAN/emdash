@@ -13,6 +13,7 @@ import { runtimeResolveErrorAsError } from '@emdash/core/services/runtime-broker
 import type { AgentProviderId } from '@emdash/plugins/agents/types';
 import { err, ok, type Result } from '@emdash/shared';
 import type { ContractClient } from '@emdash/wire/rpc';
+import { getPlugin } from '@core/features/agents/api/node/plugin-registry';
 import type { InstallMethod } from '@core/primitives/agents/api';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import { runRuntimeLiveJob } from '@core/services/runtime-clients/node/live-job';
@@ -24,6 +25,12 @@ import {
   buildAgentPayloads,
   toAgentInstallationStatus,
 } from './agent-payload-builder';
+import {
+  applyAgentRelease,
+  clearAgentRelease,
+  loadAgentRelease,
+  peekAgentRelease,
+} from './agent-release';
 
 export type HostDependenciesClient = ContractClient<HostDependenciesContract>;
 export type AgentOperationContext = {
@@ -63,9 +70,17 @@ export function createAgentOperations(dependencies: {
     ) => {
       const mgr = await resolveDependencyManager(getDependencyManager, connectionId, manager);
       const snapshot = await snapshotFor(mgr);
-      return Object.values(snapshot.dependencies)
+      const statuses = Object.values(snapshot.dependencies)
         .filter((view) => view.definition.category === 'agent')
         .map((view) => toAgentInstallationStatus(view.definition.id, connectionId, view));
+      if (connectionId) return statuses;
+      return statuses.map((status) => {
+        const provider = getPlugin(status.id as AgentProviderId);
+        const path = snapshot.dependencies[status.id]?.resolved?.path ?? null;
+        if (!provider || !path) return status;
+        void loadAgentRelease(status.id, path, provider);
+        return applyAgentRelease(status, peekAgentRelease(status.id));
+      });
     },
 
     getAgentInstallationStatus: async (
@@ -192,7 +207,15 @@ export function createAgentOperations(dependencies: {
       return mgr.resolver.resolve(selection === undefined ? { id } : { id, selection });
     },
 
-    refreshLatestVersion: async (_id: DependencyId, _connectionId?: string): Promise<void> => {},
+    refreshLatestVersion: async (id: DependencyId, connectionId?: string): Promise<void> => {
+      clearAgentRelease(id);
+      if (connectionId) return;
+      const provider = getPlugin(id as AgentProviderId);
+      if (!provider) return;
+      const mgr = await resolveDependencyManager(getDependencyManager, connectionId);
+      const snapshot = await snapshotFor(mgr);
+      await loadAgentRelease(id, snapshot.dependencies[id]?.resolved?.path ?? null, provider);
+    },
 
     probeAll: async (connectionId?: string, manager?: HostDependenciesClient) => {
       const mgr = await resolveDependencyManager(getDependencyManager, connectionId, manager);

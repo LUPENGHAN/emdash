@@ -15,6 +15,7 @@ import {
   type AgentSkillTakeOverResult,
   type LaunchMcpServer,
 } from '../api';
+import { checkMcpHealth, checkMcpServer } from './mcp-status';
 import {
   importSkills,
   listLibrarySkills,
@@ -23,6 +24,7 @@ import {
   syncWorkspaceSkills,
   takeOverSkills,
 } from './skill-library';
+import { checkSkillUpdates, listSkillSources, setSkillSource, updateSkill } from './skill-sources';
 
 export type LocalWorkspace = { projectId: string; path: string };
 
@@ -78,6 +80,12 @@ export function createAgentLibraryService(deps: AgentLibraryServiceDeps) {
 
   const scan = async () => scanAgentSkills(deps.home, new Set(await libraryNames()));
 
+  const storedMcpServer = async (name: string): Promise<LaunchMcpServer> => {
+    const server = (await deps.getSettings()).mcpServers.find((item) => item.name === name);
+    if (!server) throw new Error(`There is no MCP server named ${name} in the library`);
+    return server;
+  };
+
   const unsubscribe = deps.onSettingsChanged(() => void resyncAll());
 
   return {
@@ -114,6 +122,19 @@ export function createAgentLibraryService(deps: AgentLibraryServiceDeps) {
     async takeOverAgentSkills(): Promise<AgentSkillTakeOverResult> {
       return takeOverSkills(await scan(), new Set(await libraryNames()), backupRoot, deps.home);
     },
+    listSkillSources: () => listSkillSources(libraryDir),
+    checkSkillUpdates: () => checkSkillUpdates(libraryDir),
+    setSkillSource: (name: string, url: string) => setSkillSource(libraryDir, name, url),
+    async updateSkill(name: string, force: boolean) {
+      const result = await updateSkill(libraryDir, name, force);
+      if (result.updated) {
+        await deps.refreshSkillCatalog().catch(() => {});
+        await resyncAll();
+      }
+      return result;
+    },
+    checkMcpServer: async (name: string) => checkMcpServer(await storedMcpServer(name)),
+    checkMcpHealth: async (name: string) => checkMcpHealth(await storedMcpServer(name)),
     dispose: () => unsubscribe(),
   };
 }

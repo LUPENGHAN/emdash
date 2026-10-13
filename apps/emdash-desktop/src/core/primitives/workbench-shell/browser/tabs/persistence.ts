@@ -10,12 +10,23 @@ export type TabManagerSnapshot = {
   activeTabId?: string;
 };
 
+export type PaneLayoutNode =
+  | { kind: 'pane'; paneId: string }
+  | {
+      kind: 'split';
+      id: string;
+      orientation: 'horizontal' | 'vertical';
+      children: PaneLayoutNode[];
+    };
+
 export type TabGroupsSnapshot = {
   groups: Array<{
     groupId: string;
     tabManager: TabManagerSnapshot;
   }>;
   activeGroupId: string;
+  /** Absent on older snapshots: the groups array is one horizontal row. */
+  layout?: PaneLayoutNode;
 };
 
 /**

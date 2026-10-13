@@ -1,4 +1,5 @@
-import { readFile, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type {
@@ -12,7 +13,7 @@ import {
   claudeText,
   cwdVariants,
   isNoise,
-  parseJsonLines,
+  streamJsonLines,
   type ExternalSessionEnv,
 } from './external-sessions';
 import { localConversation } from './handoff/prepare-conversation-handoff';
@@ -24,7 +25,7 @@ const defaultEnv = (): ExternalSessionEnv => ({ home: homedir(), env: process.en
 const TOOL_INPUT_MAX = 200;
 const PROMPT_MAX = 140;
 
-/** Parsed session files by path, while unchanged; long sessions run to 100 MB. */
+/** Parsed session files by path, while unchanged; long sessions run to hundreds of MB. */
 const cache = new Map<string, { key: string; parsed: Parsed }>();
 const CACHE_FILES = 4;
 
@@ -92,10 +93,10 @@ async function parsedClaudeSession(
     }
     const cached = cache.get(file);
     if (cached?.key === key) return cached.parsed;
-    const text = await readFile(file, 'utf8');
-    // Most sessions never compact: skip parsing them.
-    const parsed = text.includes('"compact_boundary"')
-      ? parseClaudeSession(text)
+    // Most sessions never compact: look for a boundary first, and only parse the turns
+    // of the ones that did.
+    const parsed = (await hasCompactBoundary(file))
+      ? await parseClaudeSession(streamJsonLines(file))
       : { segments: [], transcripts: [] };
     cache.delete(file);
     cache.set(file, { key, parsed });
@@ -105,8 +106,31 @@ async function parsedClaudeSession(
   return null;
 }
 
-/** Splits a Claude Code session file at its compaction boundaries. */
-export function parseClaudeSession(text: string): Parsed {
+const COMPACT_MARKER = Buffer.from('"compact_boundary"');
+
+/**
+ * Whether a session mentions a compaction; only those are worth parsing. A raw byte scan,
+ * since most files never compact and parsing every line of them is the expensive part.
+ */
+export async function hasCompactBoundary(file: string): Promise<boolean> {
+  const stream = createReadStream(file);
+  try {
+    let tail: Buffer = Buffer.alloc(0);
+    for await (const chunk of stream as AsyncIterable<Buffer>) {
+      const window = tail.length ? Buffer.concat([tail, chunk]) : chunk;
+      if (window.includes(COMPACT_MARKER)) return true;
+      tail = window.subarray(Math.max(0, window.length - COMPACT_MARKER.length + 1));
+    }
+    return false;
+  } finally {
+    stream.destroy();
+  }
+}
+
+/** Splits a Claude Code session's records at its compaction boundaries. */
+async function parseClaudeSession(
+  records: AsyncIterable<Record<string, unknown>>
+): Promise<Parsed> {
   const segments: CompactedSegment[] = [];
   const transcripts: CompactedSegmentTranscript[] = [];
   let turns: Turn[] = [];
@@ -115,7 +139,7 @@ export function parseClaudeSession(text: string): Parsed {
   let firstPrompt: string | null = null;
   let awaitingSummary: CompactedSegmentTranscript | null = null;
 
-  for (const record of parseJsonLines(text)) {
+  for await (const record of records) {
     const timestamp = typeof record.timestamp === 'string' ? record.timestamp : null;
     if (record.type === 'system' && record.subtype === 'compact_boundary') {
       const meta = asRecord(record.compactMetadata);

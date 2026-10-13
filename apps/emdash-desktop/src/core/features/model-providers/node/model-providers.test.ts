@@ -413,6 +413,26 @@ describe('createEffectiveAgentConfig', () => {
     await expect(resolve('codex')).rejects.toThrow(/account of another agent/);
   });
 
+  it('gives Codex on its own login the set context window, capped at the official maximum', async () => {
+    const resolve = resolver({
+      getAgentConfig: async () => ({
+        extraArgs: '--verbose',
+        contextWindow: 1_000_000,
+        env: { CODEX_CONFIG: '{"model":"gpt-6-sol"}' },
+      }),
+    });
+    const config = await resolve('codex');
+    expect(JSON.parse(config!.env!.CODEX_CONFIG!)).toEqual({
+      model: 'gpt-6-sol',
+      model_context_window: 872_000,
+      model_auto_compact_token_limit: 784_800,
+    });
+    expect(config?.extraArgs).toBe(
+      '--verbose -c model_context_window=872000 -c model_auto_compact_token_limit=784800'
+    );
+    expect((await resolve('claude'))?.env?.CODEX_CONFIG).toBe('{"model":"gpt-6-sol"}');
+  });
+
   it('refuses to start rather than fall back to the own login', async () => {
     await expect(resolver({ getApiKey: async () => null })('claude')).rejects.toThrow(
       ModelSourceUnavailableError

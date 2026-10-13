@@ -250,6 +250,41 @@ export function providerConfigId(provider: Pick<ModelProvider, 'id'>): string {
   return `emdash-${provider.id.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 }
 
+/** One provider in a file chosen for import, as the renderer may see it (never its key). */
+export const providerImportPreviewSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  models: z.number(),
+  hasKey: z.boolean(),
+  /** A provider with this id is already configured; importing replaces it. */
+  exists: z.boolean(),
+  /**
+   * The address the existing one sends its key to, when importing moves it elsewhere;
+   * its saved key is then removed unless the file's key is imported with it.
+   */
+  previousUrl: z.string().nullable(),
+});
+export type ProviderImportPreview = z.infer<typeof providerImportPreviewSchema>;
+
+/** Provider export and import through a file, run in the main process. */
+export type ModelProviderTransfer = {
+  exportProviders(input: {
+    providerIds: string[];
+    includeKeys: boolean;
+  }): Promise<{ path: string | null; count: number }>;
+  readImport(): Promise<{
+    token: string;
+    providers: ProviderImportPreview[];
+    skipped: number;
+  } | null>;
+  importProviders(input: {
+    token: string;
+    providerIds: string[];
+    includeKeys: boolean;
+  }): Promise<{ imported: number }>;
+};
+
 /** Provider key operations the main process exposes (implemented over the secrets store). */
 export type ModelProviderKeys = {
   read(providerId: string): Promise<string | null>;

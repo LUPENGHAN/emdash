@@ -1,4 +1,4 @@
-export type SplitSide = 'left' | 'right';
+export type SplitSide = 'left' | 'right' | 'top' | 'bottom';
 
 export type PaneDropTarget =
   | { kind: 'tab-strip'; paneId: string }
@@ -10,6 +10,8 @@ const PREFIXES = {
   content: 'pane-content-',
   'split-left': 'pane-split-left-',
   'split-right': 'pane-split-right-',
+  'split-top': 'pane-split-top-',
+  'split-bottom': 'pane-split-bottom-',
 } as const;
 
 /** Encodes every pane-owned droppable using one workbench vocabulary. */
@@ -26,7 +28,7 @@ export function parsePaneDropTargetId(id: string): PaneDropTarget | null {
   if (id.startsWith(PREFIXES.content)) {
     return { kind: 'content', paneId: id.slice(PREFIXES.content.length) };
   }
-  for (const side of ['left', 'right'] as const) {
+  for (const side of ['left', 'right', 'top', 'bottom'] as const) {
     const prefix = PREFIXES[`split-${side}`];
     if (id.startsWith(prefix)) return { kind: 'split', paneId: id.slice(prefix.length), side };
   }

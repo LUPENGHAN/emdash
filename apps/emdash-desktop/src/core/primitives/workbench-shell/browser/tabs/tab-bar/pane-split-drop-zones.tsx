@@ -17,6 +17,8 @@ export function PaneSplitDropZones({ paneId }: { paneId: string }) {
     <>
       <SplitZone paneId={paneId} side="left" draggedId={String(active.id)} />
       <SplitZone paneId={paneId} side="right" draggedId={String(active.id)} />
+      <SplitZone paneId={paneId} side="top" draggedId={String(active.id)} />
+      <SplitZone paneId={paneId} side="bottom" draggedId={String(active.id)} />
     </>
   );
 }
@@ -37,17 +39,29 @@ function SplitZone({
     disabled: !canSplit,
   });
   if (!canSplit) return null;
+  const horizontal = side === 'left' || side === 'right';
   return (
     <>
       <div
         ref={setNodeRef}
-        className={cn('absolute inset-y-0 z-30 w-1/5', side === 'left' ? 'left-0' : 'right-0')}
+        className={cn(
+          'absolute z-30',
+          horizontal ? 'inset-y-0 w-1/5' : 'inset-x-0 h-1/5',
+          side === 'left' && 'left-0',
+          side === 'right' && 'right-0',
+          side === 'top' && 'top-0',
+          side === 'bottom' && 'bottom-0'
+        )}
       />
       {isOver && (
         <div
           className={cn(
-            'pointer-events-none absolute inset-y-0 z-20 w-1/2 bg-foreground/10',
-            side === 'left' ? 'left-0' : 'right-0'
+            'pointer-events-none absolute z-20 bg-foreground/10',
+            horizontal ? 'inset-y-0 w-1/2' : 'inset-x-0 h-1/2',
+            side === 'left' && 'left-0',
+            side === 'right' && 'right-0',
+            side === 'top' && 'top-0',
+            side === 'bottom' && 'bottom-0'
           )}
         />
       )}

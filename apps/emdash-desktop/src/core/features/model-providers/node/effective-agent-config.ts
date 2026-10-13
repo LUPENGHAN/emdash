@@ -34,7 +34,7 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
   ): Promise<ProviderCustomConfig | undefined> => {
     const config = await deps.getAgentConfig(agentId);
     const sourceId = override ? override.modelSource : config?.modelSource;
-    if (!sourceId || !isProviderCapableAgent(agentId)) return config;
+    if (!sourceId || !isProviderCapableAgent(agentId)) return withCodexContext(agentId, config);
 
     // A chosen provider that cannot be used stops the launch: falling back to the
     // agent's own login would silently spend the user's subscription instead.
@@ -50,10 +50,10 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
         throw new ModelSourceUnavailableError(`“${provider.name}” is an account of another agent.`);
       }
       const home = await deps.prepareAccountHome(provider);
-      return {
+      return withCodexContext(agentId, {
         ...config,
         env: { ...config?.env, [ACCOUNT_HOME_ENV[provider.account.agent]]: home },
-      };
+      });
     }
     const apiKey = await deps.getApiKey(provider.id);
     if (!apiKey) {
@@ -78,6 +78,51 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
       env: { ...config?.env, ...launch.env },
       extraArgs: [config?.extraArgs?.trim(), ...launch.args].filter(Boolean).join(' '),
     };
+  };
+}
+
+/** OpenAI's metadata caps official Codex models here; Codex clamps anything larger. */
+export const CODEX_OFFICIAL_MAX_CONTEXT = 872_000;
+/** Codex compacts at 90% of its window by default; kept in step with a set window. */
+const CODEX_AUTO_COMPACT_RATIO = 0.9;
+
+/**
+ * Codex on its own login sizes its context from OpenAI's model metadata (272k by default).
+ * A set window goes to the chat adapter through `CODEX_CONFIG` and to the terminal CLI as
+ * `-c` flags, with the auto-compact limit moved along so compaction does not fire at 245k.
+ */
+export function withCodexContext(
+  agentId: string,
+  config: ProviderCustomConfig | undefined
+): ProviderCustomConfig | undefined {
+  const window = config?.contextWindow;
+  if (agentId !== 'codex' || !window) return config;
+  const tokens = Math.min(window, CODEX_OFFICIAL_MAX_CONTEXT);
+  const compactAt = Math.round(tokens * CODEX_AUTO_COMPACT_RATIO);
+  let userConfig: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(config.env?.CODEX_CONFIG ?? '{}');
+    if (parsed && typeof parsed === 'object') userConfig = parsed as Record<string, unknown>;
+  } catch {
+    // An unreadable user value is replaced rather than passed on broken.
+  }
+  return {
+    ...config,
+    env: {
+      ...config.env,
+      CODEX_CONFIG: JSON.stringify({
+        ...userConfig,
+        model_context_window: tokens,
+        model_auto_compact_token_limit: compactAt,
+      }),
+    },
+    extraArgs: [
+      config.extraArgs?.trim(),
+      `-c model_context_window=${tokens}`,
+      `-c model_auto_compact_token_limit=${compactAt}`,
+    ]
+      .filter(Boolean)
+      .join(' '),
   };
 }
 

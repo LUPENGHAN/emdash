@@ -1,6 +1,7 @@
 import { ArrowRight, Loader2, RefreshCw } from 'lucide-react';
 import { useMemo } from 'react';
 import { hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
+import { getAgentUpdateErrorMessage } from '@core/features/agents/api/browser/components/agent-selector/agent-install';
 import { useAgentInstallationStatus } from '@core/features/agents/api/browser/use-agent-installation-statuses';
 import type { AgentPayload, InstallMethod } from '@core/primitives/agents/api';
 import { resolveActiveInstallation } from '@core/primitives/agents/api';
@@ -142,6 +143,11 @@ export function DependencyInstallationUpdateCard({
             </CommandActionButton>
           }
         />
+        {updateFailure && updatingMethod === undefined && !isUpdatingThis ? (
+          <p className="text-xs text-foreground-destructive">
+            {getAgentUpdateErrorMessage(updateFailure.error)}
+          </p>
+        ) : null}
       </UpdateCard>
     );
   }

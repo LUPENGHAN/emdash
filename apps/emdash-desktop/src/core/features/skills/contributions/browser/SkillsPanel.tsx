@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import {
   AgentSkillsBanner,
   SkillScope,
+  SkillSource,
 } from '@core/features/agent-library/contributions/browser/skill-library-controls';
 import { SkillsList } from '@core/features/skills/browser/components/SkillsList';
 import { SkillsToolbar } from '@core/features/skills/browser/components/SkillsToolbar';
@@ -65,7 +66,12 @@ export function SkillsPanel({ host, header }: SkillsPanelProps) {
         onOpenTerminal={handleOpenTerminal}
         renderInstalledFooter={
           isLocalHostRef(host)
-            ? (skill) => <SkillScope name={skill.installId ?? skill.id} />
+            ? (skill) => (
+                <span className="flex flex-wrap items-center gap-1">
+                  <SkillScope name={skill.installId ?? skill.id} />
+                  <SkillSource name={skill.installId ?? skill.id} />
+                </span>
+              )
             : undefined
         }
       />

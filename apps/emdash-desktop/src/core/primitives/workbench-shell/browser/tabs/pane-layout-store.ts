@@ -9,9 +9,34 @@ import type {
   TabRegistry,
 } from './core/tab-provider-registry';
 import { parsePaneDropTargetId, type SplitSide } from './pane-drop-target';
+import {
+  adjacentPaneId,
+  horizontalLayout,
+  insertPaneInLayout,
+  layoutPaneIds,
+  neighborPaneId,
+  normalizeLayout,
+  removePaneFromLayout,
+  splitWouldDuplicateSinglePane,
+  type PaneLayoutNode,
+} from './pane-layout-tree';
 import type { PaneLayoutSnapshotMemento, TabGroupsSnapshot } from './persistence';
 
 const MAX_PANE_COUNT = 8;
+
+/** Every pane appears exactly once in the layout and nothing else does. */
+function layoutMatchesPanes(layout: PaneLayoutNode, paneIds: readonly string[]): boolean {
+  const layoutIds = layoutPaneIds(layout);
+  const layoutSet = new Set(layoutIds);
+  const paneSet = new Set(paneIds);
+  return (
+    layoutIds.length === paneIds.length &&
+    layoutSet.size === layoutIds.length &&
+    paneSet.size === paneIds.length &&
+    layoutIds.every((paneId) => paneSet.has(paneId)) &&
+    paneIds.every((paneId) => layoutSet.has(paneId))
+  );
+}
 
 export interface Pane<R extends TabRegistry = TabRegistry> {
   paneId: string;
@@ -35,6 +60,8 @@ export interface PaneDropDestination {
  */
 export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
   readonly groups: Pane<R>[] = [];
+  /** Nested splits. `groups` stays the flat list of panes, in tree order. */
+  root: PaneLayoutNode;
   activePaneId: string;
 
   /**
@@ -82,15 +109,18 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
 
     const initial = this._createPane();
     this.groups.push(initial);
+    this.root = { kind: 'pane', paneId: initial.paneId };
     this.activePaneId = initial.paneId;
 
     makeObservable(this, {
       groups: observable,
+      root: observable.ref,
       activePaneId: observable,
       isViewActive: computed,
       focusedPane: computed,
       canInsertPane: computed,
       splitRight: action,
+      splitDown: action,
       insertPane: action,
       closePane: action,
       moveTab: action,
@@ -123,51 +153,53 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
   }
 
   splitRight(): void {
-    if (!this.canInsertPane) return;
+    this._splitToward('right');
+  }
 
-    const focusedIndex = this.groups.findIndex((g) => g.paneId === this.activePaneId);
-    const sourceGroup = this.groups[focusedIndex === -1 ? 0 : focusedIndex];
-
-    if (sourceGroup.pane.tabOrder.length < 2) return;
-    const activeTabId = sourceGroup.pane.resolvedActiveTabId;
-    if (!activeTabId) return;
-
-    const newGroup = this._createPane();
-    const insertAt = focusedIndex === -1 ? this.groups.length : focusedIndex + 1;
-    this.groups.splice(insertAt, 0, newGroup);
-
-    this.moveTab(activeTabId, sourceGroup.paneId, newGroup.paneId);
+  splitDown(): void {
+    this._splitToward('bottom');
   }
 
   insertPane(relativeToPaneId: string, side: SplitSide): string | undefined {
     if (!this.canInsertPane) return undefined;
-    const index = this.groups.findIndex((g) => g.paneId === relativeToPaneId);
-    if (index === -1) return undefined;
+    if (!this.groups.some((group) => group.paneId === relativeToPaneId)) return undefined;
 
     const newGroup = this._createPane();
-    this.groups.splice(side === 'left' ? index : index + 1, 0, newGroup);
+    this.groups.push(newGroup);
+    this.root = insertPaneInLayout(
+      this.root,
+      relativeToPaneId,
+      side,
+      newGroup.paneId,
+      crypto.randomUUID()
+    );
+    this._orderGroups();
     return newGroup.paneId;
   }
 
   closePane(paneId: string): void {
     if (this.groups.length <= 1) return;
 
-    const index = this.groups.findIndex((g) => g.paneId === paneId);
-    if (index === -1) return;
-
-    const closing = this.groups[index];
-    const adjacentIndex = index < this.groups.length - 1 ? index + 1 : index - 1;
-    const adjacent = this.groups[adjacentIndex];
+    const closing = this.groups.find((group) => group.paneId === paneId);
+    if (!closing) return;
+    const neighbor = neighborPaneId(this.root, paneId);
 
     this._autoCloseDisposers.get(paneId)?.();
     this._autoCloseDisposers.delete(paneId);
 
     closing.pane.dispose();
-
-    this.groups.splice(index, 1);
+    this.root = removePaneFromLayout(this.root, paneId);
+    this.groups.splice(
+      this.groups.findIndex((group) => group.paneId === paneId),
+      1
+    );
+    this._orderGroups();
 
     if (this.activePaneId === paneId) {
-      this.activePaneId = adjacent.paneId;
+      this.activePaneId =
+        neighbor && this.groups.some((group) => group.paneId === neighbor)
+          ? neighbor
+          : (this.groups[0]?.paneId ?? paneId);
     }
 
     this._onPaneDestroyed?.(paneId);
@@ -216,17 +248,14 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
 
   canSplitAt(targetPaneId: string, side: SplitSide, sourceTabId?: string): boolean {
     if (!this.canInsertPane) return false;
-    const targetIndex = this.groups.findIndex((group) => group.paneId === targetPaneId);
-    if (targetIndex === -1) return false;
+    if (!this.groups.some((group) => group.paneId === targetPaneId)) return false;
 
     const fromGroup = sourceTabId
       ? this.groups.find((group) => group.pane.entries.has(sourceTabId))
       : undefined;
     if (!fromGroup || fromGroup.pane.tabOrder.length !== 1) return true;
 
-    const insertAt = side === 'left' ? targetIndex : targetIndex + 1;
-    const fromIndex = this.groups.indexOf(fromGroup);
-    return insertAt !== fromIndex && insertAt !== fromIndex + 1;
+    return !splitWouldDuplicateSinglePane(this.root, fromGroup.paneId, targetPaneId, side);
   }
 
   /**
@@ -270,7 +299,7 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
    * `config` carries engine routing flags:
    *   preview      – open as a preview tab (replaced on next preview open)
    *   overrideState – when single-mount hit, replace the existing tab's state
-   *   target       – which pane to open into ('active' | 'left' | 'right' | {paneId})
+   *   target       – which pane to open into ('active' | 'left' | 'right' | 'up' | 'down' | {paneId})
    *
    * For single-mount providers, scans all panes for an existing dedupKey match
    * and focuses it (with optional state override) instead of opening a new tab.
@@ -359,6 +388,7 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
         tabManager: g.pane.snapshot,
       })),
       activeGroupId: this.activePaneId,
+      layout: this.root,
     };
   }
 
@@ -368,16 +398,25 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
     }
     this.groups.splice(0, this.groups.length);
 
-    for (const g of snapshot.groups) {
+    const restoredGroups = snapshot.groups.filter(
+      (group, index) =>
+        snapshot.groups.findIndex((other) => other.groupId === group.groupId) === index
+    );
+    for (const g of restoredGroups) {
       const pane = this._createPaneStore(g.groupId);
       pane.restoreSnapshot(g.tabManager);
       this.groups.push({ paneId: g.groupId, pane });
       this._registerAutoClose(g.groupId, pane);
     }
 
-    this.activePaneId = snapshot.groups.some((g) => g.groupId === snapshot.activeGroupId)
+    const paneIds = restoredGroups.map((group) => group.groupId);
+    const layout = snapshot.layout ? normalizeLayout(snapshot.layout) : null;
+    this.root = layout && layoutMatchesPanes(layout, paneIds) ? layout : horizontalLayout(paneIds);
+    this._orderGroups();
+
+    this.activePaneId = paneIds.includes(snapshot.activeGroupId)
       ? snapshot.activeGroupId
-      : (snapshot.groups[0]?.groupId ?? this.activePaneId);
+      : (paneIds[0] ?? this.activePaneId);
   }
 
   /**
@@ -431,8 +470,7 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
   /**
    * Resolve a target to an existing or newly-split PaneStore.
    * 'active' => focused pane
-   * 'right'  => pane immediately after focused (split if needed and below max)
-   * 'left'   => pane immediately before focused (split if needed and below max)
+   * 'right' / 'left' / 'down' / 'up' => the neighbor in that direction, or a new pane
    * { paneId } => specific pane (falls back to focused if not found)
    */
   private _resolveTargetPane(target: OpenTarget): PaneStore<R> {
@@ -442,24 +480,46 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
       return this.groups.find((g) => g.paneId === target.paneId)?.pane ?? this.focusedPane;
     }
 
-    // 'left' or 'right' — find adjacent pane, splitting if needed.
-    const focusedIndex = this.groups.findIndex((g) => g.paneId === this.activePaneId);
-    const idx = focusedIndex === -1 ? 0 : focusedIndex;
-    const adjacentIndex = target === 'right' ? idx + 1 : idx - 1;
-
-    const existing = this.groups[adjacentIndex];
-    if (existing) {
-      this.activePaneId = existing.paneId;
-      return existing.pane;
+    const side: SplitSide =
+      target === 'left'
+        ? 'left'
+        : target === 'right'
+          ? 'right'
+          : target === 'up'
+            ? 'top'
+            : 'bottom';
+    const neighbor = adjacentPaneId(this.root, this.activePaneId, side);
+    if (neighbor) {
+      this.activePaneId = neighbor;
+      return this.groups.find((group) => group.paneId === neighbor)?.pane ?? this.focusedPane;
     }
 
-    // Need to split.
     if (!this.canInsertPane) return this.focusedPane;
-    const newGroup = this._createPane();
-    const insertAt = target === 'right' ? idx + 1 : idx;
-    this.groups.splice(insertAt, 0, newGroup);
-    this.activePaneId = newGroup.paneId;
-    return newGroup.pane;
+    const newPaneId = this.insertPane(this.activePaneId, side);
+    if (!newPaneId) return this.focusedPane;
+    this.activePaneId = newPaneId;
+    return this.groups.find((group) => group.paneId === newPaneId)?.pane ?? this.focusedPane;
+  }
+
+  private _splitToward(side: SplitSide): void {
+    if (!this.canInsertPane) return;
+    const sourceGroup =
+      this.groups.find((group) => group.paneId === this.activePaneId) ?? this.groups[0];
+    if (!sourceGroup || sourceGroup.pane.tabOrder.length < 2) return;
+    const activeTabId = sourceGroup.pane.resolvedActiveTabId;
+    if (!activeTabId) return;
+    const newPaneId = this.insertPane(sourceGroup.paneId, side);
+    if (!newPaneId) return;
+    this.moveTab(activeTabId, sourceGroup.paneId, newPaneId);
+  }
+
+  private _orderGroups(): void {
+    const byId = new Map(this.groups.map((group) => [group.paneId, group]));
+    const ordered = layoutPaneIds(this.root).flatMap((paneId) => {
+      const group = byId.get(paneId);
+      return group ? [group] : [];
+    });
+    this.groups.splice(0, this.groups.length, ...ordered);
   }
 
   private _createPane(): Pane<R> {

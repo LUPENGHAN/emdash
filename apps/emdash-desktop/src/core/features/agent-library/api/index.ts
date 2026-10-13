@@ -88,6 +88,38 @@ export type AgentSkillTakeOverResult = { moved: number; backupDir: string | null
 
 export const agentLibraryDomain = 'agentLibrary' as const;
 
+export const skillSourceSchema = z.object({
+  name: z.string(),
+  repo: z.string(),
+  path: z.string(),
+  ref: z.string(),
+  installedTree: z.string().nullable(),
+  remoteTree: z.string().nullable(),
+  installedHash: z.string().nullable(),
+  dirty: z.boolean(),
+  updateAvailable: z.boolean(),
+});
+export type SkillSourceView = z.infer<typeof skillSourceSchema>;
+
+export const mcpServerStatusSchema = z.object({
+  name: z.string(),
+  kind: z.enum(['npm', 'pypi', 'http', 'docker', 'local']),
+  currentVersion: z.string().nullable(),
+  latestVersion: z.string().nullable(),
+  deprecated: z.string().nullable(),
+  /** Unpinned packages, or anything else that is not a version bump or a deprecation. */
+  note: z.string().nullable(),
+  updateAvailable: z.boolean(),
+});
+export type McpServerStatus = z.infer<typeof mcpServerStatusSchema>;
+
+export const mcpHealthSchema = z.object({
+  ok: z.boolean(),
+  tools: z.number().nullable(),
+  error: z.string().nullable(),
+});
+export type McpHealth = z.infer<typeof mcpHealthSchema>;
+
 export const agentLibraryContract = defineContract({
   /** Skills in the agents' own folders (~/.claude/skills and the like). */
   scanAgentSkills: procedure({ input: z.void(), output: z.custom<AgentSkillFound[]>() }),
@@ -103,6 +135,30 @@ export const agentLibraryContract = defineContract({
   takeOverAgentSkills: procedure({
     input: z.void(),
     output: z.custom<AgentSkillTakeOverResult>(),
+  }),
+  listSkillSources: procedure({ input: z.void(), output: z.array(skillSourceSchema) }),
+  checkSkillUpdates: procedure({ input: z.void(), output: z.array(skillSourceSchema) }),
+  setSkillSource: procedure({
+    input: z.object({ name: z.string().min(1), url: z.string().min(1) }),
+    output: skillSourceSchema,
+  }),
+  updateSkill: procedure({
+    input: z.object({ name: z.string().min(1), force: z.boolean().default(false) }),
+    output: z.object({
+      updated: z.boolean(),
+      dirty: z.boolean(),
+      files: z.array(z.string()),
+    }),
+  }),
+  /** Checks the library's stored definition of the named server. */
+  checkMcpServer: procedure({
+    input: z.object({ name: z.string().min(1) }),
+    output: mcpServerStatusSchema,
+  }),
+  /** Starts (or calls) the library's stored definition of the named server. */
+  checkMcpHealth: procedure({
+    input: z.object({ name: z.string().min(1) }),
+    output: mcpHealthSchema,
   }),
   /** The skills and MCP servers a project's agents get (for display). */
   effectiveFor: procedure({

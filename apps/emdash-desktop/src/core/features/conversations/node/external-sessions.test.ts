@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   claudeProjectDirName,
   listExternalSessions,
+  streamJsonLines,
   type ExternalSessionEnv,
   type ExternalSessionReaders,
 } from './external-sessions';
@@ -88,6 +89,31 @@ describe('listExternalSessions', () => {
     });
 
     expect(await listExternalSessions(project, { env, readers: noOpenCode })).toEqual([]);
+  });
+
+  it('finds a session resumed here after starting elsewhere, despite a metadata-heavy head', async () => {
+    const elsewhere = path.join(home, 'code', 'my-app');
+    // Long sessions lead with file-history snapshots (tens of KB each); the head read
+    // ends inside them, before the first thing the user said.
+    const snapshots = Array.from({ length: 12 }, (_, i) => ({
+      type: 'file-history-snapshot',
+      blob: 'x'.repeat(30 * 1024),
+      seq: i,
+    }));
+    await writeClaude(
+      'eee',
+      project,
+      ...snapshots,
+      { type: 'user', cwd: elsewhere, message: { content: 'Other project' } },
+      { type: 'user', cwd: project, message: { content: 'Back home' } },
+      { type: 'custom-title', customTitle: 'Resumed' }
+    );
+
+    const sessions = await listExternalSessions(project, { env, readers: noOpenCode });
+
+    expect(sessions.map((s) => [s.providerId, s.sessionId, s.title, s.cwd])).toEqual([
+      ['claude', 'eee', 'Resumed', project],
+    ]);
   });
 
   it('finds Codex sessions for the directory with index titles, skipping sub-agents', async () => {
@@ -245,5 +271,33 @@ describe('listExternalSessions', () => {
       ['oh-my-pi', 'omp-1', 'Fix sync'],
       ['pi', 'pi-1', 'ping'],
     ]);
+  });
+});
+
+describe('streamJsonLines', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await realpath(await mkdtemp(path.join(tmpdir(), 'emdash-jsonl-')));
+    file = path.join(dir, 'session.jsonl');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('keeps records whole across read boundaries, however the file is chunked', async () => {
+    // One line longer than a read chunk, with a multi-byte character straddling the
+    // boundary, then a truncated record, then a last line without a newline.
+    const pad = 'a'.repeat(65527) + '中';
+    const beyondOneChunk = `{"pad":"${pad}"}`;
+    expect(Buffer.byteLength(beyondOneChunk)).toBeGreaterThan(65536);
+    await writeFile(file, `${beyondOneChunk}\n{"cut":tru\n{"ok":true}`);
+
+    const records: Record<string, unknown>[] = [];
+    for await (const record of streamJsonLines(file)) records.push(record);
+
+    expect(records).toEqual([{ pad }, { ok: true }]);
   });
 });

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { compactedSegments, readCompactedSegment } from './compacted-history';
+import { compactedSegments, hasCompactBoundary, readCompactedSegment } from './compacted-history';
 import { claudeProjectDirName } from './external-sessions';
 
 const lines = (records: unknown[]) => `${records.map((r) => JSON.stringify(r)).join('\n')}\n`;
@@ -110,5 +110,15 @@ describe('compacted history', () => {
     expect(await compactedSegments('claude', 's1', cwd, env())).toEqual([]);
     expect(await compactedSegments('claude', 'missing', cwd, env())).toEqual([]);
     expect(await compactedSegments('codex', 's1', cwd, env())).toEqual([]);
+  });
+
+  it('finds a compaction marker split across read chunks', async () => {
+    const file = path.join(home, 'split.jsonl');
+    // The default read size is 64 KiB; the marker straddles the first boundary.
+    const marker = '"compact_boundary"';
+    await writeFile(file, `${'x'.repeat(65_536 - 5)}${marker}\n`);
+    expect(await hasCompactBoundary(file)).toBe(true);
+    await writeFile(file, `${'x'.repeat(200_000)}\n`);
+    expect(await hasCompactBoundary(file)).toBe(false);
   });
 });

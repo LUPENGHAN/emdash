@@ -16,6 +16,12 @@ import type {
   SelectedSource,
 } from '@core/primitives/agents/api';
 import type { ProviderOverrideSettings } from '@core/services/settings/node/provider-settings-service';
+import {
+  applyAgentRelease,
+  loadAgentRelease,
+  peekAgentRelease,
+  updateMethod,
+} from './agent-release';
 import { claudeModelOptions } from './claude-models';
 import { codexModelOptions } from './codex-models';
 
@@ -39,7 +45,9 @@ function buildMetadata(provider: CLIAgentPluginProvider): AgentMetadata {
                 args: capabilities.hostDependency.updateCommand.args,
               },
             }
-          : { kind: 'none' as const },
+          : updateMethod(provider)
+            ? { kind: 'supported' as const, update: { kind: 'package-manager' as const } }
+            : { kind: 'none' as const },
         uninstall: { kind: 'none' as const },
       },
       models: modelsFor(metadata.id, capabilities.models),
@@ -106,7 +114,7 @@ async function buildOne(
   const view = snapshot?.dependencies[id];
   const used: SelectedSource = view?.selection ?? { kind: 'auto' };
 
-  return {
+  const payload = {
     ...buildMetadata(provider),
     connectionId,
     status: view?.status ?? 'missing',
@@ -120,6 +128,9 @@ async function buildOne(
     used,
     usedId: sourceKey(used),
   };
+  if (connectionId || !view?.resolved?.path) return payload;
+  void loadAgentRelease(id, view.resolved.path, provider);
+  return applyAgentRelease(payload, peekAgentRelease(id));
 }
 
 export async function buildAgentPayload(

@@ -76,6 +76,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     description: 'Add the selected issue to the initial agent prompt.',
   },
   {
+    id: 'continue-writing',
+    label: 'Continue a conversation',
+    tab: 'continue-writing',
+    description:
+      'Send a follow-up at a clock time, after a usage window resets, or on another official account.',
+    keywords: ['续写', 'quota', 'handoff', 'resume'],
+  },
+  {
     id: 'enable-tmux',
     label: 'Enable tmux',
     tab: 'general',

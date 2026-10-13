@@ -3,7 +3,13 @@ import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { openModal } from '@core/manifests/browser/modal-api';
-import { DEFAULT_AGENT_LIBRARY_SETTINGS, type LibraryMcpServer } from '../../api';
+import {
+  DEFAULT_AGENT_LIBRARY_SETTINGS,
+  type LibraryMcpServer,
+  type McpHealth,
+  type McpServerStatus,
+} from '../../api';
+import { getAgentLibraryClient } from '../../api/browser/client';
 import { ScopePicker } from './scope-picker';
 
 /** An MCP server as the agents' own configs report it (for import). */
@@ -96,6 +102,7 @@ export function McpLibraryPanel({
                     ? server.url
                     : [server.command, ...(server.args ?? [])].join(' ')}
                 </div>
+                <McpServerChecks server={server} />
               </div>
               <ScopePicker
                 projects={server.projects}
@@ -149,6 +156,73 @@ export function McpLibraryPanel({
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+function McpServerChecks({ server }: { server: LibraryMcpServer }) {
+  const [status, setStatus] = useState<McpServerStatus | null>(null);
+  const [health, setHealth] = useState<McpHealth | null>(null);
+  const [busy, setBusy] = useState<'version' | 'health' | null>(null);
+
+  const run = async (kind: 'version' | 'health') => {
+    setBusy(kind);
+    try {
+      const client = await getAgentLibraryClient();
+      if (kind === 'version') setStatus(await client.checkMcpServer({ name: server.name }));
+      else setHealth(await client.checkMcpHealth({ name: server.name }, { timeoutMs: 30_000 }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const version =
+    status == null
+      ? []
+      : [
+          status.kind,
+          status.currentVersion ? `v${status.currentVersion}` : null,
+          status.latestVersion ? `Latest ${status.latestVersion}` : null,
+          status.updateAvailable ? 'Update available' : null,
+        ].filter((part): part is string => Boolean(part));
+
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={busy !== null}
+        onClick={() => void run('version')}
+      >
+        {busy === 'version' ? 'Checking…' : 'Check version'}
+      </Button>
+      <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void run('health')}>
+        {busy === 'health' ? 'Connecting…' : 'Health check'}
+      </Button>
+      {version.map((part) => (
+        <span key={part} className="text-xs text-foreground-muted">
+          {part}
+        </span>
+      ))}
+      {status?.deprecated ? (
+        <span className="text-xs text-foreground-destructive">{status.deprecated}</span>
+      ) : null}
+      {status?.note ? <span className="text-xs text-foreground-muted">{status.note}</span> : null}
+      {health ? (
+        <span
+          className={
+            health.ok ? 'text-xs text-foreground-muted' : 'text-xs text-foreground-destructive'
+          }
+        >
+          {health.ok
+            ? health.tools === null
+              ? 'Reachable'
+              : `Reachable, ${health.tools} tools`
+            : (health.error ?? 'Unreachable')}
+        </span>
+      ) : null}
     </div>
   );
 }

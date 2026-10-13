@@ -1,4 +1,4 @@
-import { Button, toast } from '@emdash/ui/react/primitives';
+import { Button, Input, toast } from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
@@ -6,6 +6,9 @@ import { openModal } from '@core/manifests/browser/modal-api';
 import { DEFAULT_AGENT_LIBRARY_SETTINGS } from '../../api';
 import { getAgentLibraryClient } from '../../api/browser/client';
 import { ScopePicker } from './scope-picker';
+
+const SKILL_SOURCES_KEY = ['agentLibrary', 'skillSources'];
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const AGENT_SKILLS_KEY = ['agentLibrary', 'agentSkills'];
 const AGENT_LABELS: Record<string, string> = {
@@ -17,6 +20,100 @@ const AGENT_LABELS: Record<string, string> = {
   cursor: 'Cursor',
   shared: '~/.agents',
 };
+
+/** Source, update, and where a library skill applies. */
+export function SkillSource({ name }: { name: string }) {
+  const queryClient = useQueryClient();
+  const [url, setUrl] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const { data: sources = [] } = useQuery({
+    queryKey: SKILL_SOURCES_KEY,
+    queryFn: async () => (await getAgentLibraryClient()).listSkillSources(),
+  });
+  const source = sources.find((item) => item.name === name);
+
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: SKILL_SOURCES_KEY });
+  };
+
+  const saveSource = async () => {
+    setBusy(true);
+    try {
+      await (await getAgentLibraryClient()).setSkillSource({ name, url });
+      setEditing(false);
+      setUrl('');
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const update = async () => {
+    setBusy(true);
+    try {
+      const client = await getAgentLibraryClient();
+      let result = await client.updateSkill({ name, force: false });
+      if (result.dirty) {
+        const confirmed = await openModal('confirmActionModal', {
+          title: `Replace local edits in ${name}?`,
+          description: `This skill differs from the last copy Emdash wrote. Updating replaces the folder${result.files.length ? `: ${result.files.slice(0, 8).join(', ')}` : ''}.`,
+          confirmLabel: 'Replace',
+        });
+        if (!confirmed.success) return;
+        result = await client.updateSkill({ name, force: true });
+      }
+      toast.success(result.updated ? `Updated ${name}` : `${name} is already current`);
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <span className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
+        <Input
+          value={url}
+          placeholder="https://github.com/owner/repo/tree/main/path"
+          className="h-6 w-56 text-xs"
+          onChange={(event) => setUrl(event.target.value)}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={busy || !url.trim()}
+          onClick={() => void saveSource()}
+        >
+          Save
+        </Button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        className="max-w-48 truncate text-xs text-foreground-muted hover:text-foreground"
+        onClick={() => setEditing(true)}
+      >
+        {source ? `${source.repo}${source.path ? `/${source.path}` : ''}` : 'No source'}
+      </button>
+      {source?.updateAvailable ? <span className="text-xs">Update available</span> : null}
+      {source?.dirty ? <span className="text-xs text-foreground-muted">Local edits</span> : null}
+      {source ? (
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void update()}>
+          Update
+        </Button>
+      ) : null}
+    </span>
+  );
+}
 
 /** Where a library skill applies (all projects or some), edited in place on its card. */
 export function SkillScope({ name }: { name: string }) {
@@ -46,6 +143,15 @@ export function AgentSkillsBanner() {
   const { data: found = [] } = useQuery({
     queryKey: AGENT_SKILLS_KEY,
     queryFn: async () => (await getAgentLibraryClient()).scanAgentSkills(),
+  });
+  useQuery({
+    queryKey: ['agentLibrary', 'skillSourceCheck'],
+    staleTime: DAY_MS,
+    queryFn: async () => {
+      const sources = await (await getAgentLibraryClient()).checkSkillUpdates();
+      queryClient.setQueryData(SKILL_SOURCES_KEY, sources);
+      return sources;
+    },
   });
   const pending = found.filter((skill) => !skill.inLibrary);
   const importedOnly = found.filter((skill) => skill.inLibrary);

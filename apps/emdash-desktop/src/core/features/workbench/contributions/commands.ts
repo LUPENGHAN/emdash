@@ -139,10 +139,18 @@ export const renameTabCommand = defineCommand({
 
 export const splitPaneCommand = defineCommand({
   id: 'workbench.splitPane',
-  title: 'Split Pane',
+  title: 'Split Pane Right',
   description: 'Move the active tab to a new pane on the right',
   category: 'Tab Navigation',
   keybinding: keybinding.settings('splitPane', code(['Mod'], 'Backslash')),
+});
+
+export const splitPaneDownCommand = defineCommand({
+  id: 'workbench.splitPaneDown',
+  title: 'Split Pane Down',
+  description: 'Move the active tab to a new pane below',
+  category: 'Tab Navigation',
+  keybinding: keybinding.settings('splitPaneDown', code(['Mod', 'Shift'], 'Backslash')),
 });
 
 export const cycleNextTabCommand = defineCommand({
@@ -258,6 +266,7 @@ export const WORKBENCH_COMMAND_DEFS = [
   reopenTabCommand,
   renameTabCommand,
   splitPaneCommand,
+  splitPaneDownCommand,
   cycleNextTabCommand,
   cyclePreviousTabCommand,
   saveEditorCommand,
@@ -274,6 +283,7 @@ export const PANE_COMMAND_DEFS = [
   reopenTabCommand,
   renameTabCommand,
   splitPaneCommand,
+  splitPaneDownCommand,
   cycleNextTabCommand,
   cyclePreviousTabCommand,
   ...tabIndexCommands,

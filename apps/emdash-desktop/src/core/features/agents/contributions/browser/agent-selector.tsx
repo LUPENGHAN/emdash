@@ -110,7 +110,9 @@ export const AgentSelector: React.FC<AgentSelectorProps> = observer(
             {value ? (
               <>
                 <AgentIcon id={value} size={16} className="rounded-sm" />
-                <span className="flex-1 truncate text-left">{selectedOption?.label ?? value}</span>
+                <span translate="no" className="flex-1 truncate text-left">
+                  {selectedOption?.label ?? value}
+                </span>
               </>
             ) : (
               <span className="flex-1 truncate text-foreground-muted">{placeholder}</span>
@@ -153,7 +155,9 @@ export const AgentSelector: React.FC<AgentSelectorProps> = observer(
                           className={cn('rounded-sm', showInstall && 'opacity-50')}
                         />
                         <span className="min-w-0 flex-1">
+                          {/* Agent names are product names (one is "Continue"), never translated. */}
                           <span
+                            translate="no"
                             className={cn('block truncate', showInstall && 'text-foreground-muted')}
                           >
                             {item.label}

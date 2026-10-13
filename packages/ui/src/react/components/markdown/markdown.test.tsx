@@ -7,6 +7,56 @@ import { Markdown } from './markdown';
 import { sanitizeSchema } from './sanitize-schema';
 
 describe('Markdown', () => {
+  it('gives headings stable ids and skips a heading written inside a code fence', () => {
+    const { container } = render(
+      <Markdown headingIdPrefix="doc-" content={'# Setup\n\n```md\n# hidden\n```\n\n# Setup\n'} />
+    );
+    const headings = [...container.querySelectorAll('h1')].map((heading) => heading.id);
+    expect(headings).toEqual(['doc-setup', 'doc-setup-1']);
+  });
+
+  it('reports the same ids it renders for nested, raw HTML and empty headings', async () => {
+    const onHeadings = vi.fn();
+    const content = [
+      '# Intro',
+      '',
+      '> ## Quoted',
+      '',
+      '- ### In list',
+      '',
+      '#',
+      '',
+      '<h2 id="evil">Raw <em>html</em></h2>',
+      '',
+      '## Quoted',
+    ].join('\n');
+    const { container } = render(
+      <Markdown headingIdPrefix="doc-" content={content} onHeadings={onHeadings} />
+    );
+    const rendered = [...container.querySelectorAll('h1, h2, h3')].map((heading) => heading.id);
+    expect(rendered).toEqual([
+      'doc-intro',
+      'doc-quoted',
+      'doc-in-list',
+      'doc-section',
+      'doc-raw-html',
+      'doc-quoted-1',
+    ]);
+    await waitFor(() => expect(onHeadings).toHaveBeenCalledTimes(1));
+    const reported = onHeadings.mock.calls[0]?.[0] as Array<{ id: string; text: string }>;
+    expect(reported.map((heading) => heading.id)).toEqual(
+      rendered.filter((id) => id !== 'doc-section')
+    );
+    expect(reported.map((heading) => heading.text)).toContain('Raw html');
+  });
+
+  it('emits no heading ids without a prefix (compact chat messages)', () => {
+    const { container } = render(<Markdown variant="compact" content={'# Setup\n\n## Usage'} />);
+    const headings = [...container.querySelectorAll('h2, h3')];
+    expect(headings).toHaveLength(2);
+    expect(headings.every((heading) => !heading.hasAttribute('id'))).toBe(true);
+  });
+
   describe('sanitize-before-KaTeX pipeline', () => {
     it('renders math because the sanitize schema preserves math classes', () => {
       const { container } = render(<Markdown content={'Inline $x^2$ math'} />);

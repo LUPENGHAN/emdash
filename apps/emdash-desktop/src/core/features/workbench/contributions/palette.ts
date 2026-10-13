@@ -11,6 +11,7 @@ import {
   reopenTabCommand,
   settingsCommand,
   splitPaneCommand,
+  splitPaneDownCommand,
   toggleLeftSidebarCommand,
   toggleThemeCommand,
   zenModeCommand,
@@ -36,4 +37,5 @@ export const WORKBENCH_COMMAND_PALETTE_ITEMS = [
   defineCommandPaletteItem({ command: reopenTabCommand }),
   defineCommandPaletteItem({ command: renameTabCommand }),
   defineCommandPaletteItem({ command: splitPaneCommand }),
+  defineCommandPaletteItem({ command: splitPaneDownCommand }),
 ] as const;

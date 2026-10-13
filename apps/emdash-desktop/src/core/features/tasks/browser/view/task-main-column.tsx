@@ -15,7 +15,18 @@ import {
   useResizableDefaultLayout,
 } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
-import { useMemo, useState } from 'react';
+import {
+  createContext,
+  Fragment,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 import {
   splitPanePanelId,
   taskPanelLayoutsMemento,
@@ -31,6 +42,8 @@ import { createLayoutStorage, type MementoLayoutStorage } from '@core/primitives
 import { PaneContent } from '@core/primitives/workbench-shell/browser/tabs/pane-content';
 import { isPaneSplitDropTargetId } from '@core/primitives/workbench-shell/browser/tabs/pane-drop-target';
 import type { Pane as PaneGroup } from '@core/primitives/workbench-shell/browser/tabs/pane-layout-store';
+import { layoutSplitIds } from '@core/primitives/workbench-shell/browser/tabs/pane-layout-tree';
+import type { PaneLayoutNode } from '@core/primitives/workbench-shell/browser/tabs/persistence';
 import { TabDragPreview } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/tab-drag-preview';
 import { NewConversationTabButton } from '../new-conversation-tab-button';
 import { PaneEmptyState } from '../pane-empty-state';
@@ -150,87 +163,215 @@ export const TaskMainColumn = observer(function TaskMainColumn() {
  * PaneProvider + PaneContent (which self-hosts PaneDimensionProvider on its
  * content region so the TabBar is excluded from the measured dimensions).
  */
-const SplitPane = observer(function SplitPane({
-  group,
-  index,
-  onActivate,
-  defaultSize,
-}: {
-  group: PaneGroup;
-  index: number;
-  onActivate: () => void;
-  defaultSize: string;
-}) {
+const SplitPane = observer(function SplitPane({ group }: { group: PaneGroup }) {
   const taskView = useTaskComposition();
   const canSplit = group.pane.resolvedTabs.length >= 2 && taskView.paneLayout.canInsertPane;
   return (
-    <>
-      {index > 0 && <Resizable.Handle />}
-      <Resizable.Panel
-        id={splitPanePanelId(group.paneId)}
-        defaultSize={defaultSize}
-        minSize="200px"
-        onPointerDown={onActivate}
+    <div
+      className="h-full min-h-0 min-w-0"
+      onPointerDown={() => taskView.paneLayout.setActiveGroup(group.paneId)}
+    >
+      <PaneProvider
+        group={group}
+        canSplit={canSplit}
+        splitPane={() => taskView.paneLayout.splitRight()}
+        splitPaneDown={() => taskView.paneLayout.splitDown()}
       >
-        <PaneProvider
-          group={group}
-          canSplit={canSplit}
-          splitPane={() => taskView.paneLayout.splitRight()}
-        >
-          <PaneContent
-            emptyState={<PaneEmptyState />}
-            trailingSlot={<NewConversationTabButton />}
-          />
-        </PaneProvider>
-      </Resizable.Panel>
-    </>
+        <PaneContent emptyState={<PaneEmptyState />} trailingSlot={<NewConversationTabButton />} />
+      </PaneProvider>
+    </div>
   );
 });
 
-/** Renders one vertical pane per tab group inside a Resizable.Group. */
+/**
+ * Panes render once, keyed by paneId, into detached host elements; the layout
+ * tree only places those hosts. Splitting or closing a neighbour therefore moves
+ * the host's DOM instead of remounting Monaco, chat, or terminal content.
+ */
+const PaneHostContext = createContext<(paneId: string) => HTMLDivElement>(() => {
+  throw new Error('PaneHostContext is missing');
+});
+
+/**
+ * Scroll offsets inside a host as it leaves its slot. Taking a node out of the document
+ * resets every scroll position in it, so a transcript or preview would jump to the top.
+ */
+const savedScroll = new WeakMap<HTMLElement, Array<[Element, number, number]>>();
+
+function saveScroll(host: HTMLElement): void {
+  const scrolled: Array<[Element, number, number]> = [];
+  for (const element of host.querySelectorAll('*')) {
+    if (element.scrollTop || element.scrollLeft) {
+      scrolled.push([element, element.scrollTop, element.scrollLeft]);
+    }
+  }
+  savedScroll.set(host, scrolled);
+}
+
+function restoreScroll(host: HTMLElement): void {
+  const scrolled = savedScroll.get(host);
+  savedScroll.delete(host);
+  if (!scrolled?.length) return;
+  const apply = () => {
+    for (const [element, top, left] of scrolled) {
+      if (!host.contains(element)) continue;
+      element.scrollTop = top;
+      element.scrollLeft = left;
+    }
+  };
+  apply();
+  // Panel sizes can settle a frame later; until then a short slot clamps the offsets.
+  requestAnimationFrame(apply);
+}
+
+function PaneSlot({ paneId }: { paneId: string }) {
+  const hostFor = useContext(PaneHostContext);
+  const slotRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
+    if (!slot) return;
+    const host = hostFor(paneId);
+    slot.appendChild(host);
+    restoreScroll(host);
+    return () => {
+      // Runs while the old slot is still in the document, so offsets are still readable.
+      if (host.parentElement === slot) {
+        saveScroll(host);
+        slot.removeChild(host);
+      }
+    };
+  }, [hostFor, paneId]);
+  return <div ref={slotRef} className="h-full min-h-0 min-w-0" />;
+}
+
+const SplitNodeView = observer(function SplitNodeView({
+  node,
+  storage,
+}: {
+  node: PaneLayoutNode;
+  storage: MementoLayoutStorage;
+}) {
+  if (node.kind === 'pane') return <PaneSlot paneId={node.paneId} />;
+  return <SplitGroupView node={node} storage={storage} />;
+});
+
+/**
+ * One split, horizontal or vertical. The root horizontal row keeps the
+ * `task-main-split` storage id so sizes saved before vertical splits still
+ * apply. Nested splits use their own id.
+ */
+const SplitGroupView = observer(function SplitGroupView({
+  node,
+  storage,
+}: {
+  node: Extract<PaneLayoutNode, { kind: 'split' }>;
+  storage: MementoLayoutStorage;
+}) {
+  const panelIds = node.children.map((child) =>
+    child.kind === 'pane' ? splitPanePanelId(child.paneId) : `split-group-${child.id}`
+  );
+  const storageId =
+    node.id === 'root' && node.orientation === 'horizontal'
+      ? 'task-main-split'
+      : `task-split-${node.id}`;
+  const { defaultLayout, onLayoutChanged } = useResizableDefaultLayout({
+    id: storageId,
+    panelIds,
+    storage,
+  });
+  const evenSharePct = Math.floor(100 / node.children.length);
+
+  return (
+    <div className="h-full min-h-0 min-w-0">
+      <Resizable.Group
+        orientation={node.orientation}
+        id={storageId}
+        defaultLayout={defaultLayout}
+        onLayoutChanged={onLayoutChanged}
+      >
+        {node.children.map((child, index) => {
+          const panelId = panelIds[index] ?? `split-group-${index}`;
+          return (
+            <Fragment key={panelId}>
+              {index > 0 && <Resizable.Handle />}
+              <Resizable.Panel
+                id={panelId}
+                defaultSize={`${defaultLayout?.[panelId] ?? evenSharePct}%`}
+                minSize={node.orientation === 'vertical' ? '80px' : '200px'}
+              >
+                <SplitNodeView node={child} storage={storage} />
+              </Resizable.Panel>
+            </Fragment>
+          );
+        })}
+      </Resizable.Group>
+    </div>
+  );
+});
+
+/** Renders the nested pane splits. A single pane fills the column. */
 const SplitPaneLayout = observer(function SplitPaneLayout({
   storage,
 }: {
   storage: MementoLayoutStorage;
 }) {
   const taskView = useTaskComposition();
-  const { paneLayout } = taskView;
+  const { root, groups } = taskView.paneLayout;
+  const [hosts] = useState(() => new Map<string, HTMLDivElement>());
+  const hostFor = useCallback(
+    (paneId: string) => {
+      let host = hosts.get(paneId);
+      if (!host) {
+        host = document.createElement('div');
+        host.className = 'h-full min-h-0 min-w-0';
+        hosts.set(paneId, host);
+      }
+      return host;
+    },
+    [hosts]
+  );
 
-  // Split sizes persist through the shared layout storage like every other
-  // resizable surface (sync contract: pixel sizes belong to the library, no
-  // store write-back). The storage entry key derives from the pane-group id
-  // combination, so a stale entry for a different set of groups is never
-  // read and a re-split (fresh group id) starts from defaults; destroyed
-  // groups' entries are deleted by the store owner (task-composition).
-  const panelIds = paneLayout.groups.map((group) => splitPanePanelId(group.paneId));
-  const { defaultLayout, onLayoutChanged } = useResizableDefaultLayout({
-    id: 'task-main-split',
-    panelIds,
-    storage,
+  useEffect(() => {
+    const live = new Set(groups.map((group) => group.paneId));
+    for (const paneId of hosts.keys()) {
+      if (!live.has(paneId)) hosts.delete(paneId);
+    }
   });
-  // `defaultLayout` covers panels present at Group mount; a panel entering
-  // later (a fresh split) falls back to an even share via `defaultSize`.
-  const evenSharePct = Math.floor(100 / paneLayout.groups.length);
+
+  usePruneRemovedSplitSizes(root, storage);
 
   return (
-    <Resizable.Group
-      orientation="horizontal"
-      id="task-main-split"
-      defaultLayout={defaultLayout}
-      onLayoutChanged={onLayoutChanged}
-    >
-      {paneLayout.groups.map((group, i) => (
-        <SplitPane
-          key={group.paneId}
-          group={group}
-          index={i}
-          onActivate={() => paneLayout.setActiveGroup(group.paneId)}
-          defaultSize={`${defaultLayout?.[splitPanePanelId(group.paneId)] ?? evenSharePct}%`}
-        />
+    <PaneHostContext.Provider value={hostFor}>
+      <SplitNodeView node={root} storage={storage} />
+      {groups.map((group) => (
+        <Fragment key={group.paneId}>
+          {createPortal(<SplitPane group={group} />, hostFor(group.paneId))}
+        </Fragment>
       ))}
-    </Resizable.Group>
+    </PaneHostContext.Provider>
   );
 });
+
+/**
+ * Drops saved sizes that reference a split which just left the tree (collapsed
+ * or flattened). Destroyed panes' own entries are dropped by the composition.
+ * Only splits seen in a previous render are pruned, so a restore never loses sizes.
+ */
+function usePruneRemovedSplitSizes(root: PaneLayoutNode, storage: MementoLayoutStorage) {
+  const taskView = useTaskComposition();
+  const previousSplitIds = useRef<ReadonlySet<string>>(new Set(layoutSplitIds(root)));
+  useEffect(() => {
+    const current = new Set(layoutSplitIds(root));
+    const removed = [...previousSplitIds.current].filter((id) => !current.has(id));
+    previousSplitIds.current = current;
+    if (removed.length === 0) return;
+    const segments = new Set(removed.flatMap((id) => [`split-group-${id}`, `task-split-${id}`]));
+    const keys = Object.keys(taskView.space.handle(taskPanelLayoutsMemento).value.layouts);
+    for (const key of keys) {
+      if (key.split(':').some((segment) => segments.has(segment))) storage.deleteEntry(key);
+    }
+  }, [root, storage, taskView.space]);
+}
 
 function TerminalDragPreview({ label }: { label: string }) {
   return (

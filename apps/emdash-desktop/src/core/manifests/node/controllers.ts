@@ -58,6 +58,7 @@ import {
   officialAccountStatus,
 } from '@core/features/model-providers/node/official-accounts';
 import { describeOwnSource } from '@core/features/model-providers/node/own-source';
+import { createProviderTransfer } from '@core/features/model-providers/node/provider-transfer';
 import type { PreviewServerAccessOperations } from '@core/features/preview-servers/node/preview-server-access-service';
 import { createPreviewServersWireController } from '@core/features/preview-servers/node/wire-controller';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
@@ -168,6 +169,11 @@ export type DesktopControllerContext = {
   readonly effectiveAgentConfig: EffectiveAgentConfig;
   readonly priceCatalog: () => Promise<PriceCatalog>;
   readonly modelProviderKeys: ModelProviderKeys;
+  /** Native JSON file pickers; undefined when the user cancels. */
+  readonly jsonFileDialogs: {
+    pickSavePath: (input: { title: string; defaultPath: string }) => Promise<string | undefined>;
+    pickOpenPath: (input: { title: string }) => Promise<string | undefined>;
+  };
   readonly usageLimits: UsageLimitsService;
   readonly remoteAccess: RemoteAccessService;
   readonly remoteClient: RemoteClientService;
@@ -238,6 +244,7 @@ export const desktopNodeControllers = {
       providerSettings,
       runtimes,
       modelProviderKeys,
+      jsonFileDialogs,
       usageLimits,
       effectiveAgentConfig,
     }) =>
@@ -248,6 +255,14 @@ export const desktopNodeControllers = {
         }),
         runtimes,
         modelProviderKeys,
+        providerTransfer: createProviderTransfer({
+          getProviders: async () => (await appSettings.get('modelProviders')).providers,
+          saveProviders: (providers) => appSettings.update('modelProviders', { providers }),
+          keys: modelProviderKeys,
+          pickExportPath: (defaultPath) =>
+            jsonFileDialogs.pickSavePath({ title: 'Export providers', defaultPath }),
+          pickImportPath: () => jsonFileDialogs.pickOpenPath({ title: 'Import providers' }),
+        }),
         usageLimits,
         effectiveAgentConfig,
         describeOwnSource: (agentId, modelId) => describeOwnSource(agentId, modelId),

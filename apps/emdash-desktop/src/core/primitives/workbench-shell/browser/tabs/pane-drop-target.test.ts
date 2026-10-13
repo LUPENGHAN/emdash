@@ -12,6 +12,8 @@ describe('pane-drop-target', () => {
     { kind: 'content', paneId: 'pane-with-hyphens' },
     { kind: 'split', paneId: 'pane-with-hyphens', side: 'left' },
     { kind: 'split', paneId: 'pane-with-hyphens', side: 'right' },
+    { kind: 'split', paneId: 'pane-with-hyphens', side: 'top' },
+    { kind: 'split', paneId: 'pane-with-hyphens', side: 'bottom' },
   ])('round-trips $kind targets', (target) => {
     expect(parsePaneDropTargetId(paneDropTargetId(target))).toEqual(target);
   });

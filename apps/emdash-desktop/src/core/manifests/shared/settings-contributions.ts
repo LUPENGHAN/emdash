@@ -4,6 +4,7 @@ import {
   browserPreviewSettingsContribution,
   browserSettingsContribution,
 } from '@core/features/browser/contributions/settings';
+import { resumeWritingSettingsContribution } from '@core/features/conversations/contributions/resume-settings';
 import { preferredConversationTypeSettingsContribution } from '@core/features/conversations/contributions/settings';
 import { filesSettingsContribution } from '@core/features/editor/contributions/settings';
 import { languageSettingsContribution } from '@core/features/localization/contributions/settings';
@@ -43,6 +44,7 @@ export const appSettingsSchemaContributions = {
   remoteAccess: remoteAccessSettingsContribution,
   agentLibrary: agentLibrarySettingsContribution,
   preferredConversationType: preferredConversationTypeSettingsContribution,
+  resumeWriting: resumeWritingSettingsContribution,
   keyboard: keyboardSettingsContribution,
   notifications: notificationSettingsContribution,
   theme: themeSettingsContribution,

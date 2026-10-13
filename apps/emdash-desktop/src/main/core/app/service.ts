@@ -639,6 +639,30 @@ class AppService implements Disposable {
     return result.filePath;
   }
 
+  async pickJsonSavePath(args: {
+    title: string;
+    defaultPath: string;
+  }): Promise<string | undefined> {
+    const result = await dialog.showSaveDialog(getMainWindow()!, {
+      title: args.title,
+      defaultPath: args.defaultPath,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    return result.canceled ? undefined : result.filePath;
+  }
+
+  async pickJsonOpenPath(args: { title: string }): Promise<string | undefined> {
+    const result = await dialog.showOpenDialog(getMainWindow()!, {
+      title: args.title,
+      properties: ['openFile'],
+      filters: [
+        { name: 'JSON', extensions: ['json'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    return result.canceled ? undefined : result.filePaths[0];
+  }
+
   async readAudioFileDataUrl(filePath: string): Promise<string> {
     if (!filePath || typeof filePath !== 'string') throw new Error('Invalid audio path');
 

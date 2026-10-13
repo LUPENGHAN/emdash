@@ -47,6 +47,7 @@ export const listItem = style({
 const headingBase = {
   fontWeight: 600,
   color: vars.foreground,
+  scrollMarginTop: '0.75rem',
 } as const;
 
 export const h1Full = style({

@@ -25,7 +25,9 @@ export const AgentRow = ({ agent }: { agent: AgentPayload }) => {
         <AgentIcon id={agent.id} size={16} />
       </div>
       <div className="flex w-full items-center justify-between">
-        <span className="text-sm text-foreground">{agent.name}</span>
+        <span translate="no" className="text-sm text-foreground">
+          {agent.name}
+        </span>
         <div className="flex items-center gap-2">
           {updateState.render && <UpdateAvailableBadge />}
           <AgentCapabilityIcons supportsChatUi={supportsChatUi} />

@@ -1,3 +1,4 @@
+import { continueWritingSettingsPage } from '@core/features/conversations/contributions/settings-page';
 import { promptsSettingsPage } from '@core/features/library/contributions/settings-page';
 import {
   conversationsSettingsPage,
@@ -29,6 +30,7 @@ export const settingsPageContributions = [
   repositorySettingsPage,
   promptsSettingsPage,
   usageSettingsPage,
+  continueWritingSettingsPage,
   systemSettingsPage,
   localWorkspacesSettingsPage,
   conversationsSettingsPage,

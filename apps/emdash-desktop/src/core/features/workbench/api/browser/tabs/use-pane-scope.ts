@@ -8,6 +8,7 @@ import type { TabNavigationProvider } from '@core/primitives/workbench-shell/bro
 export interface PaneScopeOptions {
   readonly canSplit?: boolean;
   readonly splitPane?: () => void;
+  readonly splitPaneDown?: () => void;
 }
 
 export function usePaneScope(
@@ -62,6 +63,15 @@ export function usePaneScope(
             : disabled('Open at least two tabs to split this pane')
           : hidden,
       execute: () => options.splitPane?.(),
+    }),
+    'workbench.splitPaneDown': () => ({
+      availability: () =>
+        options.splitPaneDown
+          ? options.canSplit
+            ? enabled
+            : disabled('Open at least two tabs to split this pane')
+          : hidden,
+      execute: () => options.splitPaneDown?.(),
     }),
     'workbench.tabCycleNext': () => ({
       execute: () => {

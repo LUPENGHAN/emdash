@@ -2,6 +2,7 @@ import { defineVersionedSchema } from '@emdash/core/primitives/versioned-schema/
 import { gitFilePathSchema } from '@emdash/core/runtimes/git/api';
 import { z } from 'zod';
 import { defineMemento } from '@core/primitives/mementos/api';
+import type { PaneLayoutNode } from '@core/primitives/workbench-shell/browser/tabs/persistence';
 import { taskSubject } from './subject';
 
 export const terminalDrawerActiveItemSchema = z.discriminatedUnion('kind', [
@@ -275,6 +276,18 @@ export const tabDescriptorSchema = z.discriminatedUnion('kind', [
 ]);
 export type TabDescriptor = z.infer<typeof tabDescriptorSchema>;
 
+const paneLayoutNodeSchema: z.ZodType<PaneLayoutNode> = z.lazy(() =>
+  z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('pane'), paneId: z.string().min(1) }),
+    z.object({
+      kind: z.literal('split'),
+      id: z.string().min(1),
+      orientation: z.enum(['horizontal', 'vertical']),
+      children: z.array(paneLayoutNodeSchema).min(1),
+    }),
+  ])
+);
+
 export const taskPaneLayoutSnapshotSchema = z.object({
   groups: z
     .array(
@@ -288,6 +301,7 @@ export const taskPaneLayoutSnapshotSchema = z.object({
     )
     .min(1),
   activeGroupId: z.string().min(1),
+  layout: paneLayoutNodeSchema.optional(),
 });
 
 export type TaskPaneLayoutSnapshot = z.infer<typeof taskPaneLayoutSnapshotSchema>;

@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs';
 import { open, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -113,33 +114,41 @@ async function readClaudeSession(
   cwds: Set<string>
 ): Promise<ImportableSession | null> {
   const { head, tail, mtimeMs } = await readHeadAndTail(file);
+  const recordedCwds = new Set<string>();
   let firstMessage: string | null = null;
-  let sessionCwd: string | null = null;
-  for (const record of parseJsonLines(head)) {
-    if (!sessionCwd && typeof record.cwd === 'string') sessionCwd = record.cwd;
-    if (record.type !== 'user' || record.isSidechain || record.isMeta) continue;
-    const text = claudeText(asRecord(record.message)?.content);
-    if (!isNoise(text)) {
-      firstMessage = text;
-      break;
-    }
-  }
-  // Directory names are lossy (a/b and a-b collide); trust the recorded cwd.
-  if (!firstMessage || (sessionCwd && !cwds.has(sessionCwd))) return null;
-
+  let lastMessage: string | null = null;
   let customTitle: string | null = null;
-  for (const record of parseJsonLines(tail)) {
-    if (record.type === 'custom-title' && typeof record.customTitle === 'string') {
-      customTitle = record.customTitle;
+  for (const [text, isTail] of [
+    [head, false],
+    [tail, true],
+  ] as const) {
+    for (const record of parseJsonLines(text)) {
+      if (typeof record.cwd === 'string') recordedCwds.add(record.cwd);
+      if (record.type === 'custom-title' && typeof record.customTitle === 'string') {
+        customTitle = record.customTitle;
+      }
+      if (record.type !== 'user' || record.isSidechain || record.isMeta) continue;
+      const message = claudeText(asRecord(record.message)?.content);
+      if (isNoise(message)) continue;
+      if (isTail) lastMessage = message;
+      else firstMessage ??= message;
     }
   }
+  // Directory names are lossy (a/b and a-b collide), so trust the cwds the file records —
+  // but any of them: a session resumed in another directory is copied into that cwd's
+  // project folder with its older records (and their cwd) intact. A long session also
+  // leads with metadata, so the head can end before the first thing the user said.
+  const recorded = [...recordedCwds];
+  const sessionCwd = recorded.find((cwd) => cwds.has(cwd)) ?? recorded[0] ?? dirCwd;
+  const message = firstMessage ?? lastMessage;
+  if (!message || !cwds.has(sessionCwd)) return null;
   return {
     providerId: 'claude',
     sessionId: path.basename(file, '.jsonl'),
-    title: clip(customTitle ?? firstMessage),
-    firstMessage: clip(firstMessage, 400),
+    title: clip(customTitle ?? message),
+    firstMessage: clip(message, 400),
     updatedAt: mtimeMs,
-    cwd: sessionCwd ?? dirCwd,
+    cwd: sessionCwd,
   };
 }
 
@@ -388,16 +397,46 @@ async function readHeadAndTail(
   }
 }
 
+/** One JSONL line as a record; a partial line at a read boundary, or bad JSON, is skipped. */
+function parseJsonLine(line: string): Record<string, unknown> | null {
+  if (!line.startsWith('{')) return null;
+  try {
+    return asRecord(JSON.parse(line));
+  } catch {
+    return null;
+  }
+}
+
 /** Parses complete JSON lines, skipping partial lines at buffer edges. */
 export function* parseJsonLines(text: string): Generator<Record<string, unknown>> {
   for (const line of text.split('\n')) {
-    if (!line.startsWith('{')) continue;
-    try {
-      const value = asRecord(JSON.parse(line));
-      if (value) yield value;
-    } catch {
-      // Truncated line at a read boundary.
+    const record = parseJsonLine(line);
+    if (record) yield record;
+  }
+}
+
+/**
+ * Streams a JSONL file's records. A session file runs to hundreds of megabytes, so a
+ * reader that wants all of them must not hold the file in memory. Throws when the file
+ * cannot be read.
+ */
+export async function* streamJsonLines(file: string): AsyncGenerator<Record<string, unknown>> {
+  const stream = createReadStream(file, { encoding: 'utf8' });
+  try {
+    let pending = '';
+    for await (const chunk of stream) {
+      const lines = `${pending}${chunk}`.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        const record = parseJsonLine(line);
+        if (record) yield record;
+      }
     }
+    const last = parseJsonLine(pending);
+    if (last) yield last;
+  } finally {
+    // Also reached when the reader stops early.
+    stream.destroy();
   }
 }
 

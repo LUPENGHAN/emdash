@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { cursorHome, readCursorTurns } from '../cursor-sessions';
@@ -12,8 +12,8 @@ import {
   isNoise,
   listFilesRecursive,
   openOpenCodeDb,
-  parseJsonLines,
   piSessionsDir,
+  streamJsonLines,
   type ExternalSessionEnv,
 } from '../external-sessions';
 
@@ -64,18 +64,18 @@ async function readClaude(
   const projectsRoot = path.join(env.CLAUDE_CONFIG_DIR ?? path.join(home, '.claude'), 'projects');
   for (const variant of await cwdVariants(cwd)) {
     const file = path.join(projectsRoot, claudeProjectDirName(variant), `${sessionId}.jsonl`);
-    let text: string;
+    let found = false;
     try {
-      text = await readFile(file, 'utf8');
+      for await (const record of streamJsonLines(file)) {
+        found = true;
+        if (record.isSidechain || record.isMeta) continue;
+        if (record.type !== 'user' && record.type !== 'assistant') continue;
+        turns.add(record.type, claudeText(asRecord(record.message)?.content));
+      }
     } catch {
-      continue;
+      // Unreadable file: try the next spelling of the cwd.
     }
-    for (const record of parseJsonLines(text)) {
-      if (record.isSidechain || record.isMeta) continue;
-      if (record.type !== 'user' && record.type !== 'assistant') continue;
-      turns.add(record.type, claudeText(asRecord(record.message)?.content));
-    }
-    return;
+    if (found) return;
   }
 }
 
@@ -92,7 +92,7 @@ async function readCodex(
   ];
   const file = candidates.find((candidate) => candidate.endsWith(suffix));
   if (!file) return;
-  for (const record of parseJsonLines(await readFile(file, 'utf8'))) {
+  for await (const record of streamJsonLines(file)) {
     const payload = asRecord(record.payload);
     if (!payload) continue;
     const userText = codexUserText(payload);
@@ -120,7 +120,7 @@ async function readPiFamily(
 ): Promise<void> {
   const file = await findPiFamilySessionFile(agent, env, sessionId);
   if (!file) return;
-  for (const record of parseJsonLines(await readFile(file, 'utf8'))) {
+  for await (const record of streamJsonLines(file)) {
     if (record.type !== 'message') continue;
     const message = asRecord(record.message);
     if (message?.role === 'user' || message?.role === 'assistant') {

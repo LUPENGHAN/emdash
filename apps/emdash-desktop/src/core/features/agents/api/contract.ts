@@ -26,7 +26,11 @@ import {
   procedure,
 } from '@emdash/wire/rpc';
 import { z } from 'zod';
-import type { AgentUsage, UsageLimits } from '@core/features/model-providers/api';
+import {
+  providerImportPreviewSchema,
+  type AgentUsage,
+  type UsageLimits,
+} from '@core/features/model-providers/api';
 import type {
   AgentInstallationStatus,
   AgentInstallError,
@@ -180,6 +184,31 @@ export const agentsContract = defineContract({
   clearModelProviderKey: procedure({
     input: z.object({ providerId: z.string() }),
     output: z.void(),
+  }),
+  /** Writes the chosen API providers (and, when asked, their keys) to a file the user picks. */
+  exportModelProviders: procedure({
+    input: z.object({ providerIds: z.array(z.string()).min(1), includeKeys: z.boolean() }),
+    output: z.object({ path: z.string().nullable(), count: z.number() }),
+  }),
+  /** Reads a provider export the user picks; null when they cancel. Keys stay in main. */
+  readModelProvidersImport: procedure({
+    input: z.object({}),
+    output: z
+      .object({
+        token: z.string(),
+        providers: z.array(providerImportPreviewSchema),
+        skipped: z.number(),
+      })
+      .nullable(),
+  }),
+  /** Adds (or replaces, by id) the chosen providers from the file last read for import. */
+  importModelProviders: procedure({
+    input: z.object({
+      token: z.string(),
+      providerIds: z.array(z.string()).min(1),
+      includeKeys: z.boolean(),
+    }),
+    output: z.object({ imported: z.number() }),
   }),
   /** The provider's upstream model ids (GET its models URL); doubles as a connection test. */
   listModelProviderModels: fallible({

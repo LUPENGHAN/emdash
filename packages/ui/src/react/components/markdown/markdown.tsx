@@ -8,6 +8,7 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { ExpandableImage } from '../image-viewer/expandable-image';
+import { rehypeHeadingIds, type MarkdownHeading } from './heading-ids';
 import { useHighlightedCode } from './highlight';
 import { normalizeLatexDelimiters } from './markdown-latex';
 import { MermaidBlock } from './mermaid-block';
@@ -40,6 +41,17 @@ export interface MarkdownProps {
    * not resolved.
    */
   resolveImage?: (src: string) => Promise<string | null>;
+  /**
+   * Prefix for heading ids. Headings get no id unless this is set. Use a
+   * different prefix per preview so two copies of the same document do not
+   * share document-wide ids.
+   */
+  headingIdPrefix?: string;
+  /**
+   * Called after commit with the rendered headings (h1–h6, non-empty text)
+   * whenever they change. Requires `headingIdPrefix`.
+   */
+  onHeadings?: (headings: MarkdownHeading[]) => void;
 }
 
 type RehypePlugins = NonNullable<ReactMarkdownOptions['rehypePlugins']>;
@@ -47,14 +59,32 @@ type RemarkPlugins = NonNullable<ReactMarkdownOptions['remarkPlugins']>;
 type Components = NonNullable<ReactMarkdownOptions['components']>;
 
 const REMARK_PLUGINS: RemarkPlugins = [remarkGfm, remarkMath];
+
 // Sanitize must run before rehype-katex: user input is sanitized while KaTeX's
-// trusted output passes through untouched (see sanitize-schema.ts).
-const FULL_REHYPE_PLUGINS: RehypePlugins = [
-  rehypeRaw,
-  [rehypeSanitize, sanitizeSchema],
-  rehypeKatex,
-];
-const COMPACT_REHYPE_PLUGINS: RehypePlugins = [[rehypeSanitize, sanitizeSchema], rehypeKatex];
+// trusted output passes through untouched (see sanitize-schema.ts). Heading ids
+// are assigned after sanitize, which would otherwise clobber them.
+function buildRehypePlugins(
+  allowHtml: boolean,
+  headingIds: Parameters<typeof rehypeHeadingIds>[0] | undefined
+): RehypePlugins {
+  const plugins: RehypePlugins = allowHtml ? [rehypeRaw] : [];
+  plugins.push([rehypeSanitize, sanitizeSchema]);
+  if (headingIds) plugins.push([rehypeHeadingIds, headingIds]);
+  plugins.push(rehypeKatex);
+  return plugins;
+}
+
+function sameHeadings(left: MarkdownHeading[], right: MarkdownHeading[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (heading, index) =>
+        heading.id === right[index]?.id &&
+        heading.text === right[index]?.text &&
+        heading.depth === right[index]?.depth
+    )
+  );
+}
 
 // ── Images ────────────────────────────────────────────────────────────────────
 
@@ -158,6 +188,7 @@ function isOnlyMermaidBlockChild(children: React.ReactNode): boolean {
 // ── Component maps ────────────────────────────────────────────────────────────
 
 type WithChildren = { children?: React.ReactNode };
+type HeadingProps = { children?: React.ReactNode; id?: string };
 type WithChildrenAndClass = { children?: React.ReactNode; className?: string };
 type AnchorProps = { href?: string; children?: React.ReactNode };
 type ImgProps = React.ComponentPropsWithoutRef<'img'> & ExtraProps;
@@ -174,17 +205,41 @@ function handleAnchorClick(
 }
 
 function useFullComponents(
-  resolveImage?: MarkdownProps['resolveImage'],
-  onOpenLink?: MarkdownProps['onOpenLink']
+  resolveImage: MarkdownProps['resolveImage'],
+  onOpenLink: MarkdownProps['onOpenLink']
 ): Components {
   return React.useMemo(
     () => ({
-      h1: ({ children }: WithChildren) => <h1 className={styles.h1Full}>{children}</h1>,
-      h2: ({ children }: WithChildren) => <h2 className={styles.h2Full}>{children}</h2>,
-      h3: ({ children }: WithChildren) => <h3 className={styles.h3Full}>{children}</h3>,
-      h4: ({ children }: WithChildren) => <h4 className={styles.h4Full}>{children}</h4>,
-      h5: ({ children }: WithChildren) => <h5 className={styles.h5Full}>{children}</h5>,
-      h6: ({ children }: WithChildren) => <h6 className={styles.h6Full}>{children}</h6>,
+      h1: ({ id, children }: HeadingProps) => (
+        <h1 id={id} className={styles.h1Full}>
+          {children}
+        </h1>
+      ),
+      h2: ({ id, children }: HeadingProps) => (
+        <h2 id={id} className={styles.h2Full}>
+          {children}
+        </h2>
+      ),
+      h3: ({ id, children }: HeadingProps) => (
+        <h3 id={id} className={styles.h3Full}>
+          {children}
+        </h3>
+      ),
+      h4: ({ id, children }: HeadingProps) => (
+        <h4 id={id} className={styles.h4Full}>
+          {children}
+        </h4>
+      ),
+      h5: ({ id, children }: HeadingProps) => (
+        <h5 id={id} className={styles.h5Full}>
+          {children}
+        </h5>
+      ),
+      h6: ({ id, children }: HeadingProps) => (
+        <h6 id={id} className={styles.h6Full}>
+          {children}
+        </h6>
+      ),
       p: ({ children }: WithChildren) => <p className={styles.paragraphFull}>{children}</p>,
       ul: ({ children }: WithChildren) => <ul className={styles.unorderedListFull}>{children}</ul>,
       ol: ({ children }: WithChildren) => <ol className={styles.orderedListFull}>{children}</ol>,
@@ -276,12 +331,24 @@ function useFullComponents(
   );
 }
 
-function useCompactComponents(onOpenLink?: MarkdownProps['onOpenLink']): Components {
+function useCompactComponents(onOpenLink: MarkdownProps['onOpenLink']): Components {
   return React.useMemo(
     () => ({
-      h1: ({ children }: WithChildren) => <h2 className={styles.h1Compact}>{children}</h2>,
-      h2: ({ children }: WithChildren) => <h3 className={styles.h1Compact}>{children}</h3>,
-      h3: ({ children }: WithChildren) => <h4 className={styles.h3Compact}>{children}</h4>,
+      h1: ({ id, children }: HeadingProps) => (
+        <h2 id={id} className={styles.h1Compact}>
+          {children}
+        </h2>
+      ),
+      h2: ({ id, children }: HeadingProps) => (
+        <h3 id={id} className={styles.h1Compact}>
+          {children}
+        </h3>
+      ),
+      h3: ({ id, children }: HeadingProps) => (
+        <h4 id={id} className={styles.h3Compact}>
+          {children}
+        </h4>
+      ),
       p: ({ children }: WithChildren) => <p className={styles.paragraphCompact}>{children}</p>,
       ul: ({ children }: WithChildren) => (
         <ul className={styles.unorderedListCompact}>{children}</ul>
@@ -361,13 +428,44 @@ export function Markdown({
   allowHtml = variant === 'full',
   resolveImage,
   onOpenLink,
+  headingIdPrefix,
+  onHeadings,
 }: MarkdownProps) {
+  const normalizedContent = React.useMemo(() => normalizeLatexDelimiters(content), [content]);
   const fullComponents = useFullComponents(resolveImage, onOpenLink);
   const compactComponents = useCompactComponents(onOpenLink);
 
+  // The heading plugin runs while ReactMarkdown renders; report after commit.
+  const renderedHeadings = React.useRef<MarkdownHeading[]>([]);
+  const reported = React.useRef<{
+    headings: MarkdownHeading[];
+    to: MarkdownProps['onHeadings'];
+  }>({ headings: [], to: undefined });
+  const rehypePlugins = React.useMemo(
+    () =>
+      buildRehypePlugins(
+        allowHtml,
+        headingIdPrefix === undefined
+          ? undefined
+          : {
+              prefix: headingIdPrefix,
+              onHeadings: (headings) => {
+                renderedHeadings.current = headings;
+              },
+            }
+      ),
+    [allowHtml, headingIdPrefix]
+  );
+
+  React.useEffect(() => {
+    const headings = headingIdPrefix === undefined ? [] : renderedHeadings.current;
+    const last = reported.current;
+    if (last.to === onHeadings && sameHeadings(last.headings, headings)) return;
+    reported.current = { headings, to: onHeadings };
+    onHeadings?.(headings);
+  });
+
   const components = variant === 'full' ? fullComponents : compactComponents;
-  const rehypePlugins = allowHtml ? FULL_REHYPE_PLUGINS : COMPACT_REHYPE_PLUGINS;
-  const normalizedContent = React.useMemo(() => normalizeLatexDelimiters(content), [content]);
 
   return (
     <div className={className}>

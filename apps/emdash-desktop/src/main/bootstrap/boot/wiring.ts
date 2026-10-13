@@ -7,6 +7,7 @@ import { provisionWorkspaceErrorToWorkspaceError } from '@core/features/workspac
 import type { DesktopControllerContext } from '@core/manifests/node/controllers';
 import { appOperations } from '@main/core/app/controller';
 import { terminalFileSources } from '@main/core/app/persist-terminal-attachment';
+import { appService } from '@main/core/app/service';
 import {
   createDependencyManagerResolver,
   ensureAgentDependenciesProbed,
@@ -126,6 +127,10 @@ export function createDesktopWireOptions(
     effectiveAgentConfig: services.effectiveAgentConfig,
     priceCatalog: services.priceCatalog,
     modelProviderKeys: services.modelProviderKeys,
+    jsonFileDialogs: {
+      pickSavePath: (input) => appService.pickJsonSavePath(input),
+      pickOpenPath: (input) => appService.pickJsonOpenPath(input),
+    },
     usageLimits: services.usageLimits,
     remoteAccess: services.remoteAccess,
     agentControl: services.agentControl,

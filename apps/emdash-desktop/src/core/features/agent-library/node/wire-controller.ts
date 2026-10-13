@@ -7,6 +7,12 @@ export function createAgentLibraryWireController(service: AgentLibraryService): 
     scanAgentSkills: () => service.scanAgentSkills(),
     importAgentSkills: () => service.importAgentSkills(),
     takeOverAgentSkills: () => service.takeOverAgentSkills(),
+    listSkillSources: () => service.listSkillSources(),
+    checkSkillUpdates: () => service.checkSkillUpdates(),
+    setSkillSource: ({ name, url }) => service.setSkillSource(name, url),
+    updateSkill: ({ name, force }) => service.updateSkill(name, force),
+    checkMcpServer: ({ name }) => service.checkMcpServer(name),
+    checkMcpHealth: ({ name }) => service.checkMcpHealth(name),
     effectiveFor: ({ projectId }) => service.effectiveFor(projectId),
   });
 }

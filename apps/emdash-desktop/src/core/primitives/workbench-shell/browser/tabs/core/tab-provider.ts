@@ -47,10 +47,11 @@ export interface TabResource {
 /**
  * Controls which pane a programmatic open targets.
  *   'active'           – focused pane (default)
- *   'right' | 'left'   – adjacent pane (split if needed)
+ *   'right' | 'left'   – adjacent pane in that direction (split if needed)
+ *   'up' | 'down'      – adjacent pane above / below (split if needed)
  *   { paneId: string } – explicit pane by ID
  */
-export type OpenTarget = 'active' | 'left' | 'right' | { paneId: string };
+export type OpenTarget = 'active' | 'left' | 'right' | 'up' | 'down' | { paneId: string };
 
 /**
  * Capability handle given to resources at initialize time.

@@ -22,7 +22,9 @@ export const AgentSheetHeaderSection = observer(function AgentSheetHeaderSection
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-lg text-foreground">{agent.name}</span>
+            <span translate="no" className="truncate text-lg text-foreground">
+              {agent.name}
+            </span>
           </div>
 
           {agent.websiteUrl && (

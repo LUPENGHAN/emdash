@@ -27,6 +27,7 @@ import {
   type ModelProvider,
   type ProviderProtocol,
 } from '../api';
+import { ProviderTransfer } from './provider-transfer';
 
 const keyStatusQueryKey = (providerId: string) => ['modelProviderKeyStatus', providerId];
 
@@ -107,6 +108,7 @@ export function ProvidersSettingsPage() {
             Add provider
           </Button>
         ) : null}
+        {!editing ? <ProviderTransfer providers={apis} /> : null}
       </section>
       <OfficialAccounts providers={providers} saveProviders={saveProviders} />
       <AgentDefaults providers={providers} />

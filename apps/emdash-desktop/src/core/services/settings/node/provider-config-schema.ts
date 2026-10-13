@@ -6,6 +6,7 @@ export const providerCustomConfigEntrySchema: z.ZodType<ProviderCustomConfig> = 
   env: z.record(z.string(), z.string()).optional(),
   modelSource: z.string().optional(),
   sourceModel: z.string().optional(),
+  contextWindow: z.number().int().positive().optional(),
 });
 
 export const providerConfigDefaults: Record<string, ProviderCustomConfig> = {};
