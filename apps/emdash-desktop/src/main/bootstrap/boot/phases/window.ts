@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { app } from 'electron';
 import { installDesktopWire } from '@main/gateway/desktop-wire';
 import { setupApplicationMenu } from '@main/host/menu';
+import { restorePopoutWindows } from '@main/host/popout-windows';
 import { setupAppProtocol } from '@main/host/protocol';
 import { createMainWindow } from '@main/host/window';
 import { registerQuitHandler } from '../../shutdown';
@@ -15,6 +16,7 @@ export function bootWindow(signals: BootSignals): void {
   // must be live before loadURL; traffic queues until controllers register.
   installDesktopWire();
   createMainWindow();
+  restorePopoutWindows();
   registerQuitHandler();
   signals.windowPhaseReady = true;
 }

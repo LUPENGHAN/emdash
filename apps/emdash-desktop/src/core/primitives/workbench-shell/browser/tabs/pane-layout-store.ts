@@ -20,7 +20,11 @@ import {
   splitWouldDuplicateSinglePane,
   type PaneLayoutNode,
 } from './pane-layout-tree';
-import type { PaneLayoutSnapshotMemento, TabGroupsSnapshot } from './persistence';
+import type {
+  PaneLayoutSnapshotMemento,
+  TabGroupsSnapshot,
+  TabManagerSnapshot,
+} from './persistence';
 
 const MAX_PANE_COUNT = 8;
 
@@ -130,6 +134,8 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
       setViewActive: action,
       restoreSnapshot: action,
       open: action,
+      takeTabsForTransfer: action,
+      receiveTabs: action,
     });
 
     // Push focused pane's active tab changes to the history callback.
@@ -175,6 +181,28 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
     );
     this._orderGroups();
     return newGroup.paneId;
+  }
+
+  /**
+   * Takes tabs out of a pane (all of them when `tabIds` is omitted) to show them in
+   * another window. Null when the pane has none of them.
+   */
+  takeTabsForTransfer(paneId: string, tabIds?: readonly string[]): TabManagerSnapshot | null {
+    const pane = this.groups.find((group) => group.paneId === paneId)?.pane;
+    if (!pane) return null;
+    const snapshot = pane.takeForTransfer(tabIds ?? [...pane.tabOrder]);
+    return snapshot.tabs.length > 0 ? snapshot : null;
+  }
+
+  /** Adds tabs coming back from another window: to `paneId` when it still exists. */
+  receiveTabs(groups: readonly Partial<TabManagerSnapshot>[], paneId?: string): void {
+    const target =
+      this.groups.find((group) => group.paneId === paneId) ??
+      this.groups.find((group) => group.paneId === this.activePaneId) ??
+      this.groups[0];
+    if (!target) return;
+    for (const group of groups) target.pane.receiveTransferred(group);
+    this.activePaneId = target.paneId;
   }
 
   closePane(paneId: string): void {

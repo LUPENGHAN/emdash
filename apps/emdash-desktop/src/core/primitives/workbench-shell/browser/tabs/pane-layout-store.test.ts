@@ -96,3 +96,60 @@ describe('PaneLayoutStore.restoreSnapshot', () => {
     });
   });
 });
+
+describe('PaneLayoutStore tab transfer', () => {
+  function storeWithTabs() {
+    const events: string[] = [];
+    const registry = createTabRegistry([
+      {
+        kind: 'test',
+        resourceKey: (state: { id: string }) => state.id,
+        initialize: (entry: { state: { id: string } }) => {
+          events.push(`init:${entry.state.id}`);
+          return {
+            dispose: () => events.push(`dispose:${entry.state.id}`),
+            onClose: () => events.push(`close:${entry.state.id}`),
+          };
+        },
+        dispose() {},
+        TabBarItem: () => null,
+        TabBarItemDragPreview: () => null,
+        TabContent: () => null,
+      },
+    ]);
+    const store = new PaneLayoutStore(registry, { viewId: 'test-view' });
+    stores.push(store);
+    const tab = (id: string) => ({ kind: 'test', tabId: `t-${id}`, isPreview: false, id });
+    store.restoreSnapshot({
+      groups: [{ groupId: 'a', tabManager: { tabs: [tab('1'), tab('2')], activeTabId: 't-2' } }],
+      activeGroupId: 'a',
+    });
+    events.length = 0;
+    return { store, events, tab };
+  }
+
+  it('takes tabs out without running their close hooks', () => {
+    const { store, events } = storeWithTabs();
+    const taken = store.takeTabsForTransfer('a', ['t-2']);
+    expect(taken?.tabs.map((tab) => tab.tabId)).toEqual(['t-2']);
+    expect(taken?.activeTabId).toBe('t-2');
+    expect(events).toEqual(['dispose:2']);
+    expect(store.groups[0]?.pane.tabOrder).toEqual(['t-1']);
+    expect(store.takeTabsForTransfer('a', ['missing'])).toBeNull();
+  });
+
+  it('receives tabs into the given pane, skipping ones it already shows', () => {
+    const { store, events, tab } = storeWithTabs();
+    store.receiveTabs([{ tabs: [tab('1'), tab('3')], activeTabId: 't-3' }], 'a');
+    const pane = store.groups[0]!.pane;
+    expect(pane.tabOrder).toEqual(['t-1', 't-2', 't-3']);
+    expect(pane.activeTabId).toBe('t-3');
+    expect(events).toEqual(['init:3']);
+  });
+
+  it('falls back to the focused pane when the original one is gone', () => {
+    const { store, tab } = storeWithTabs();
+    store.receiveTabs([{ tabs: [tab('4')] }], 'closed-pane');
+    expect(store.groups[0]?.pane.tabOrder).toContain('t-4');
+  });
+});

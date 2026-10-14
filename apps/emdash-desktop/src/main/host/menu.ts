@@ -1,4 +1,4 @@
-import { app, clipboard, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, Menu, shell } from 'electron';
 import { desktopHostEvents } from '@core/features/workbench/node';
 import { MENU_ITEMS } from '@core/manifests/shared/menu-items';
 import {
@@ -11,6 +11,7 @@ import {
   EMDASH_ISSUES_NEW_URL,
   EMDASH_RELEASES_URL,
 } from '@core/primitives/urls/api/urls';
+import { popoutIdOfWindow } from '@main/host/popout-windows';
 import { telemetryService } from '@main/lib/telemetry';
 
 export interface MenuKeybindingSnapshotEntry {
@@ -33,8 +34,14 @@ let currentKeybindings: readonly MenuKeybindingSnapshotEntry[] = MENU_ITEMS.map(
   };
 });
 
+/** Shortcuts act on the window in front: a pop-out runs them itself. */
 function emitCommand(commandId: string): void {
-  desktopHostEvents.emit(undefined, { type: 'menu-command', commandId });
+  const popoutId = popoutIdOfWindow(BrowserWindow.getFocusedWindow());
+  desktopHostEvents.emit(undefined, {
+    type: 'menu-command',
+    commandId,
+    ...(popoutId ? { popoutId } : {}),
+  });
 }
 
 function copyInstallationId(): void {

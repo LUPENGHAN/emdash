@@ -1,13 +1,19 @@
 import { ContextMenu } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { BoundShortcut, Shortcut } from '@core/primitives/keybindings/browser/shortcut';
 import type { TabHost } from '@core/primitives/workbench-shell/browser/tabs/core/tab-host';
 import type {
   ResolvedTab,
   TabViewContext,
 } from '@core/primitives/workbench-shell/browser/tabs/core/tab-provider';
+import { PaneContext } from '../pane-context';
 import type { TabCommand } from './tab-commands';
+
+/** Commands that move a tab, or its pane, to another window; given by the view hosting the panes. */
+export type TabWindowCommands = (tab: ResolvedTab, paneId: string) => TabCommand[];
+
+export const TabWindowCommandsContext = createContext<TabWindowCommands | null>(null);
 
 /** Renders a shortcut hint from a command or raw chord getter. */
 function CmdShortcut({ shortcut }: { shortcut?: TabCommand['shortcut'] }) {
@@ -63,6 +69,12 @@ export const TabContextMenu = observer(function TabContextMenu({
     },
   ];
 
+  const windowCommandsFor = useContext(TabWindowCommandsContext);
+  const pane = useContext(PaneContext);
+  const windowCommands =
+    windowCommandsFor && pane
+      ? windowCommandsFor(tab, pane.paneId).filter((c) => c.isAvailable?.() !== false)
+      : [];
   const visibleEngine = engineCommands.filter((c) => c.isAvailable?.() !== false);
   const visibleKind = kindCommands.filter((c) => c.isAvailable?.() !== false);
 
@@ -83,6 +95,13 @@ export const TabContextMenu = observer(function TabContextMenu({
             {cmd.icon ? <cmd.icon className="size-4" /> : null}
             {cmd.label}
             <CmdShortcut shortcut={cmd.shortcut} />
+          </ContextMenu.Item>
+        ))}
+        {windowCommands.length > 0 && <ContextMenu.Separator />}
+        {windowCommands.map((cmd) => (
+          <ContextMenu.Item key={cmd.id} onClick={() => void cmd.run()}>
+            {cmd.icon ? <cmd.icon className="size-4" /> : null}
+            {cmd.label}
           </ContextMenu.Item>
         ))}
       </ContextMenu.Content>

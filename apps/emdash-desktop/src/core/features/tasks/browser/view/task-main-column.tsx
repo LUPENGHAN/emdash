@@ -36,6 +36,9 @@ import {
   type TerminalDrawerDragData,
 } from '@core/features/terminals/api/browser/task-terminal/terminal-drag';
 import { TerminalsPanel } from '@core/features/terminals/contributions/browser/task-terminal/terminal-panel';
+import { isPopoutWindow } from '@core/features/workbench/api/browser/popout-mode';
+import { popOutTabs } from '@core/features/workbench/api/browser/popout/popout-actions';
+import { taskTabWindowCommands } from '@core/features/workbench/api/browser/popout/popout-commands';
 import { useTaskComposition } from '@core/features/workbench/api/browser/task-composition-context';
 import { PaneProvider } from '@core/features/workbench/contributions/browser/tabs/pane-provider';
 import { createLayoutStorage, type MementoLayoutStorage } from '@core/primitives/mementos/browser';
@@ -44,6 +47,7 @@ import { isPaneSplitDropTargetId } from '@core/primitives/workbench-shell/browse
 import type { Pane as PaneGroup } from '@core/primitives/workbench-shell/browser/tabs/pane-layout-store';
 import { layoutSplitIds } from '@core/primitives/workbench-shell/browser/tabs/pane-layout-tree';
 import type { PaneLayoutNode } from '@core/primitives/workbench-shell/browser/tabs/persistence';
+import { TabWindowCommandsContext } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/tab-context-menu';
 import { TabDragPreview } from '@core/primitives/workbench-shell/browser/tabs/tab-bar/tab-drag-preview';
 import { NewConversationTabButton } from '../new-conversation-tab-button';
 import { PaneEmptyState } from '../pane-empty-state';
@@ -96,10 +100,25 @@ export const TaskMainColumn = observer(function TaskMainColumn() {
       return;
     }
     setActiveDrag({ kind: 'tab', tabId: event.active.id as string });
+    trackPointer();
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
     setActiveDrag(null);
+    const pointer = stopTrackingPointer();
+    // A tab dropped outside the window opens in a window of its own, there.
+    if (
+      pointer &&
+      isOutsideWindow(pointer) &&
+      !isTerminalDrawerDragData(event.active.data.current)
+    ) {
+      const tabId = event.active.id as string;
+      const from = paneLayout.groups.find((group) => group.pane.entries.has(tabId));
+      if (from && !isPopoutWindow()) {
+        void popOutTabs(taskView, from.paneId, [tabId], { x: pointer.screenX, y: pointer.screenY });
+      }
+      return;
+    }
     if (!event.over) return;
 
     const terminalDragData = event.active.data.current;
@@ -125,7 +144,10 @@ export const TaskMainColumn = observer(function TaskMainColumn() {
       collisionDetection={collisionDetection}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveDrag(null)}
+      onDragCancel={() => {
+        stopTrackingPointer();
+        setActiveDrag(null);
+      }}
     >
       <Resizable.Group orientation="vertical" id="task-main-vertical" {...drawerBinding.groupProps}>
         <Resizable.Panel id="task-main-content" minSize="30%">
@@ -317,6 +339,7 @@ const SplitPaneLayout = observer(function SplitPaneLayout({
 }) {
   const taskView = useTaskComposition();
   const { root, groups } = taskView.paneLayout;
+  const windowCommands = useMemo(() => taskTabWindowCommands(taskView), [taskView]);
   const [hosts] = useState(() => new Map<string, HTMLDivElement>());
   const hostFor = useCallback(
     (paneId: string) => {
@@ -341,14 +364,16 @@ const SplitPaneLayout = observer(function SplitPaneLayout({
   usePruneRemovedSplitSizes(root, storage);
 
   return (
-    <PaneHostContext.Provider value={hostFor}>
-      <SplitNodeView node={root} storage={storage} />
-      {groups.map((group) => (
-        <Fragment key={group.paneId}>
-          {createPortal(<SplitPane group={group} />, hostFor(group.paneId))}
-        </Fragment>
-      ))}
-    </PaneHostContext.Provider>
+    <TabWindowCommandsContext.Provider value={windowCommands}>
+      <PaneHostContext.Provider value={hostFor}>
+        <SplitNodeView node={root} storage={storage} />
+        {groups.map((group) => (
+          <Fragment key={group.paneId}>
+            {createPortal(<SplitPane group={group} />, hostFor(group.paneId))}
+          </Fragment>
+        ))}
+      </PaneHostContext.Provider>
+    </TabWindowCommandsContext.Provider>
   );
 });
 
@@ -371,6 +396,40 @@ function usePruneRemovedSplitSizes(root: PaneLayoutNode, storage: MementoLayoutS
       if (key.split(':').some((segment) => segments.has(segment))) storage.deleteEntry(key);
     }
   }, [root, storage, taskView.space]);
+}
+
+type PointerPoint = { clientX: number; clientY: number; screenX: number; screenY: number };
+
+/** Where the pointer was last seen during a tab drag (the browser keeps reporting it outside the window). */
+let lastPointer: PointerPoint | null = null;
+const onPointerMove = (event: PointerEvent) => {
+  lastPointer = {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    screenX: event.screenX,
+    screenY: event.screenY,
+  };
+};
+
+function trackPointer(): void {
+  lastPointer = null;
+  window.addEventListener('pointermove', onPointerMove, true);
+}
+
+function stopTrackingPointer(): PointerPoint | null {
+  window.removeEventListener('pointermove', onPointerMove, true);
+  const point = lastPointer;
+  lastPointer = null;
+  return point;
+}
+
+function isOutsideWindow(point: PointerPoint): boolean {
+  return (
+    point.clientX < 0 ||
+    point.clientY < 0 ||
+    point.clientX > window.innerWidth ||
+    point.clientY > window.innerHeight
+  );
 }
 
 function TerminalDragPreview({ label }: { label: string }) {

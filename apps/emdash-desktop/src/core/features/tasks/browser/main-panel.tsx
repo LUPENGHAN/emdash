@@ -12,6 +12,7 @@ import {
 } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
 import { taskPanelLayoutsMemento } from '@core/features/tasks/contributions/mementos';
+import { isPopoutWindow } from '@core/features/workbench/api/browser/popout-mode';
 import { useTaskComposition } from '@core/features/workbench/api/browser/task-composition-context';
 import { taskTabView } from '@core/features/workbench/api/browser/task-tab-registry';
 import { useWorkspaceLayoutContext } from '@core/features/workbench/contributions/browser/layout-provider';
@@ -379,6 +380,15 @@ const ReadyTaskMainPanel = observer(function ReadyTaskMainPanel() {
     onCloseRequest: () => taskView.chrome.commands.collapseSidebar(),
     closeThreshold: SIDEBAR_CLOSE_THRESHOLD,
   });
+
+  if (isPopoutWindow()) {
+    // A pop-out window shows only the panes it was given.
+    return (
+      <taskTabView.TabLayoutProvider layout={taskView.paneLayout}>
+        <TaskMainColumn />
+      </taskTabView.TabLayoutProvider>
+    );
+  }
 
   if (compact) {
     // Phone layout: the side panel (changes, files, conversations) covers the task.

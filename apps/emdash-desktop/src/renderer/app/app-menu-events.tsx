@@ -1,5 +1,6 @@
 import { toast } from '@emdash/ui/react/primitives';
 import { useEffect } from 'react';
+import { takePopoutReturns } from '@core/features/workbench/api/browser/popout/popout-actions';
 import { useRegisterNotificationOpenHandlers } from '@core/features/workbench/contributions/browser/notification-open-handlers';
 import { COMMAND_CATALOG } from '@core/manifests/shared/command-catalog';
 import { scopes } from '@core/primitives/view-scopes/browser';
@@ -8,13 +9,20 @@ import { getDesktopWireClient } from '@renderer/lib/runtime/desktop-wire-client'
 export function AppMenuEvents({ onOpenSettings }: { onOpenSettings?: () => boolean | void }) {
   useRegisterNotificationOpenHandlers();
 
+  // Tabs handed back while this window was not listening (or before a restart).
+  useEffect(() => {
+    void takePopoutReturns().catch(() => {});
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     let unsubscribe: (() => void) | undefined;
     void getDesktopWireClient().then(async (client) => {
       const nextUnsubscribe = await client.host.events.subscribe(undefined, {
         onEvent: (event) => {
-          if (event.type === 'menu-command') {
+          if (event.type === 'popout-returns-pending') void takePopoutReturns();
+          // A pop-out window in front runs its shortcuts itself.
+          if (event.type === 'menu-command' && !event.popoutId) {
             const command = COMMAND_CATALOG.byId(event.commandId);
             if (!command) return;
             if (command.id === 'app.settings' && onOpenSettings?.() === false) return;

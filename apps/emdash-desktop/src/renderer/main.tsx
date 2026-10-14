@@ -7,6 +7,7 @@ import {
   createChatView,
   pinTopMode,
 } from '@emdash/chat-ui';
+import { when } from 'mobx';
 import ReactDOM from 'react-dom/client';
 import { installAgentControl } from '@core/features/agent-control/contributions/browser/install-agent-control';
 import { installChatUiRuntime } from '@core/features/conversations/api/browser/chat/chat-ui-runtime';
@@ -16,6 +17,9 @@ import { monacoBootstrap } from '@core/features/editor/browser/monaco/monaco-boo
 import { getProjectManagerStore } from '@core/features/projects/api/browser/stores/project-selectors';
 import { prefetchAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { initSoundPlayer, soundPlayer } from '@core/features/settings/browser/sound-player';
+import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
+import { taskViewDef } from '@core/features/tasks/contributions/views';
+import { popoutWindowId } from '@core/features/workbench/api/browser/popout-mode';
 import { getSidebarStore } from '@core/features/workbench/contributions/browser/app-stores';
 import { workbenchSidebarMemento } from '@core/features/workbench/contributions/mementos';
 import { appStoreContributions } from '@core/manifests/browser/app-scoped-stores';
@@ -59,6 +63,7 @@ import { seedRendererNavigationHost } from '@renderer/lib/runtime/seed-navigatio
 import { initRendererPerfVitals } from '@renderer/utils/perf-vitals';
 import { initNotificationDeliveryListener } from '@root/src/core/services/notifications/browser';
 import { App } from './App';
+import { PopoutApp, preparePopout } from './app/popout-app';
 import { wireNavigationTelemetry } from './lib/stores/navigation-telemetry';
 
 const bootstrapStartedAt = performance.now();
@@ -95,8 +100,15 @@ async function bootstrap() {
     createChatView,
     pinTopMode,
   });
-  wireExternalLinkRequests();
-  installAgentControl();
+  // A pop-out window shows one task's panes; app-wide duties (agent control, link
+  // prompts, notification sounds, navigation history) stay with the main window.
+  const popoutId = popoutWindowId;
+  if (!popoutId) {
+    wireExternalLinkRequests();
+    installAgentControl();
+  }
+  // Its layout must be in place before the task's view is built.
+  const popout = popoutId ? await preparePopout(popoutId) : null;
 
   // Builds and activates all app-scoped stores (projects, machines, sidebar,
   // updates) before React mounts.
@@ -113,7 +125,9 @@ async function bootstrap() {
     })
     .then(() => bootMark('monaco-ready'));
   initSoundPlayer();
-  initNotificationDeliveryListener((sound, dedupeKey) => soundPlayer.play(sound, dedupeKey));
+  if (!popoutId) {
+    initNotificationDeliveryListener((sound, dedupeKey) => soundPlayer.play(sound, dedupeKey));
+  }
   initRendererPerfVitals();
   configureDevPerfClient(async () => (await getDesktopWireClient()).devPerf);
 
@@ -144,14 +158,31 @@ async function bootstrap() {
   // controllers, so navigation restore is a gate condition rather than a
   // render prerequisite. On the timeout path the restore lands after render;
   // the stores are observable, so the last-active view snaps in when ready.
-  const navigationRestored = appSpace.ready.then(() => {
-    bootMark('memento-handles-ready');
-    getNavigation().attachMemento(historyHandle, legacyNavigationHandle);
-    getSidebarStore().attachMemento(sidebarHandle);
-    wireNavigationTelemetry(getNavigation());
-  });
+  const navigationRestored = popout
+    ? projectsLoaded
+        .then(() => getProjectManagerStore().hydrateProjectContext(popout.projectId))
+        // The project's tasks load after its context; the task view needs this one.
+        .then(() =>
+          when(() => getTaskStore(popout.projectId, popout.taskId) !== undefined, {
+            timeout: 30_000,
+          }).catch(() => {})
+        )
+        // Editors create themselves once, with Monaco already loaded; the main window's
+        // splash gate gives it time, a pop-out shows its panes at once.
+        .then(() => monacoBootstrap.init().catch(() => {}))
+        .then(() =>
+          getNavigation().navigate(
+            taskViewDef({ projectId: popout.projectId, taskId: popout.taskId })
+          )
+        )
+    : appSpace.ready.then(() => {
+        bootMark('memento-handles-ready');
+        getNavigation().attachMemento(historyHandle, legacyNavigationHandle);
+        getSidebarStore().attachMemento(sidebarHandle);
+        wireNavigationTelemetry(getNavigation());
+      });
   const sidebarInitialized = Promise.all([navigationRestored, projectsLoaded]).then(() => {
-    if (!sidebarHandle.hasStoredValue) getSidebarStore().expandAllProjects();
+    if (!popout && !sidebarHandle.hasStoredValue) getSidebarStore().expandAllProjects();
   });
 
   // The gate below awaits only desktop context for the Project required by the restored view.
@@ -178,7 +209,7 @@ async function bootstrap() {
     <ErrorBoundary>
       <MementoClientProvider client={mementoClient}>
         <SubjectProvider subject={appSubject({})}>
-          <App />
+          {popout ? <PopoutApp popoutId={popout.id} /> : <App />}
         </SubjectProvider>
       </MementoClientProvider>
     </ErrorBoundary>
@@ -188,7 +219,7 @@ async function bootstrap() {
   const outcome = await gate;
   dismissBootSplash();
   bootMark('app-content-ready', { gate: outcome });
-  window.electronAPI.reportBootUsable();
+  if (!popout) window.electronAPI.reportBootUsable();
 }
 
 bootstrap().catch((error: unknown) => {

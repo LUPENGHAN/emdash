@@ -64,6 +64,8 @@ import {
 import { getMementoClient } from '@core/primitives/mementos/browser';
 import { getNavigation } from '@core/primitives/navigation/browser/navigation-selectors';
 import { focusTracker } from '@core/primitives/telemetry/browser/focus-tracker';
+import type { PaneLayoutSnapshotMemento } from '@core/primitives/workbench-shell/browser/tabs/persistence';
+import { popoutPaneLayoutFor } from './popout-mode';
 
 export type RendererKind =
   | 'monaco'
@@ -134,19 +136,22 @@ export class TaskComposition {
 
     const taskRef = taskViewDef({ projectId, taskId });
     const getWorkspacePath = () => this._workspace?.path;
-    const paneLayoutMemento = sanitizedMemento(
-      sanitizedMemento(this.space.handle(taskPaneLayoutMemento), {
-        deps: () =>
-          this._conversations.list.data
-            ? new Set(this._conversations.conversations.keys())
-            : undefined,
-        sanitize: sanitizePaneLayoutConversations,
-      }),
-      {
-        deps: getWorkspacePath,
-        sanitize: resolvePaneLayoutFilePaths,
-      }
-    );
+    // A pop-out window keeps its own layout; the main window owns the task's memento.
+    const paneLayoutMemento: PaneLayoutSnapshotMemento =
+      popoutPaneLayoutFor(taskId) ??
+      sanitizedMemento(
+        sanitizedMemento(this.space.handle(taskPaneLayoutMemento), {
+          deps: () =>
+            this._conversations.list.data
+              ? new Set(this._conversations.conversations.keys())
+              : undefined,
+          sanitize: sanitizePaneLayoutConversations,
+        }),
+        {
+          deps: getWorkspacePath,
+          sanitize: resolvePaneLayoutFilePaths,
+        }
+      );
     const taskCtx: TaskTabContext = {
       viewId: taskId,
       projectId,

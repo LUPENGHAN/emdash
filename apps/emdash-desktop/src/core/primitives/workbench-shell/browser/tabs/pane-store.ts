@@ -148,6 +148,8 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
       reopenClosedTab: action,
       restoreSnapshot: action,
       detachTab: action,
+      takeForTransfer: action,
+      receiveTransferred: action,
       adoptEntry: action,
       retargetEntry: action,
       renameRequest: observable,
@@ -516,6 +518,45 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
     this._onActivateDisposer();
     for (const id of [...this.tabOrder]) {
       this._disposeEntry(id);
+    }
+  }
+
+  /**
+   * Removes tabs to show them in another window. Their resources here are disposed, but
+   * no close hook runs (a terminal or conversation keeps going) and nothing is kept for
+   * reopening: the tabs live on elsewhere.
+   */
+  takeForTransfer(ids: readonly string[]): TabManagerSnapshot {
+    const tabs: TabDescriptor[] = [];
+    for (const id of this.tabOrder.filter((tabId) => ids.includes(tabId))) {
+      const entry = this.entries.get(id);
+      if (!entry) continue;
+      tabs.push(descriptorOf(entry));
+      this._disposeEntry(id);
+      this.entries.delete(id);
+      this._resources.delete(id);
+      removeTabId(this, id);
+    }
+    const active = tabs.some((tab) => tab.tabId === this.activeTabId)
+      ? this.activeTabId
+      : undefined;
+    return { tabs, activeTabId: active ?? tabs[0]?.tabId };
+  }
+
+  /** Adds tabs moved in from another window, skipping any this pane already shows. */
+  receiveTransferred(snapshot: Partial<TabManagerSnapshot>): void {
+    for (const desc of snapshot.tabs ?? []) {
+      if (!this.registry.has(desc.kind) || this.entries.has(desc.tabId)) continue;
+      const { kind, tabId, isPreview, state } = stateFromDescriptor(desc);
+      const def = this.registry.get(kind);
+      if ((def.mount ?? 'multi') === 'single') {
+        const existing = this.findSingleMountEntry(kind, def.resourceKey(state as never));
+        if (existing) continue;
+      }
+      this._attachEntryAndInitialize(new TabEntryImpl(kind, tabId, isPreview, state));
+    }
+    if (snapshot.activeTabId && this.entries.has(snapshot.activeTabId)) {
+      this.activeTabId = snapshot.activeTabId;
     }
   }
 

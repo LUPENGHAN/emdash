@@ -21,6 +21,15 @@ import { browserWebContentsRegistry } from '@main/host/browser/browser-webconten
 import { browserOperations } from '@main/host/browser/controller';
 import { createDevPerfOperations } from '@main/host/dev-perf/controller-operations';
 import { writeRendererLogEntry } from '@main/host/file-logger';
+import {
+  getPopoutWindow,
+  openPopoutWindow,
+  returnPopoutTabs,
+  returnPopoutWindow,
+  setPopoutAlwaysOnTop,
+  takePopoutReturns,
+  updatePopoutWindow,
+} from '@main/host/popout-windows';
 import { setTrayVisible } from '@main/host/tray';
 import { updateOperations } from '@main/host/updates/controller-operations';
 import { applyNativeTheme } from '@main/host/window';
@@ -89,6 +98,13 @@ export function createDesktopWireOptions(
       showTerminalContextMenu: (input) => appOperations.showTerminalContextMenu(input),
       setMenuKeybindings: (input) => appOperations.setMenuKeybindings(input),
       quit: () => appOperations.quit(),
+      openPopoutWindow: (input) => openPopoutWindow({ ...input, layout: input.layout ?? null }),
+      getPopoutWindow: ({ id }) => getPopoutWindow(id),
+      updatePopoutWindow: (input) => updatePopoutWindow(input),
+      setPopoutAlwaysOnTop: (input) => setPopoutAlwaysOnTop(input),
+      returnPopoutWindow: (input) => returnPopoutWindow(input),
+      returnPopoutTabs: (input) => returnPopoutTabs(input),
+      takePopoutReturns: () => takePopoutReturns(),
       resolveQuitConfirmation: (input) => appOperations.resolveQuitConfirmation(input),
       ackShutdownFlush: () => appOperations.ackShutdownFlush(),
       shutdownReady: () => appOperations.shutdownReady(),
