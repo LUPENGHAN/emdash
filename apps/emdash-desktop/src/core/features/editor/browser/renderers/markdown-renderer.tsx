@@ -1,7 +1,15 @@
 import { Markdown, type MarkdownHeading } from '@emdash/ui/react/components';
-import { PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { List, PanelRightClose, PanelRightOpen, X } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react';
 import { resolveWorkspaceResourcePath } from '@core/features/editor/api/browser/renderers/workspace-resource-path';
 import type { FileTabResource } from '@core/features/editor/api/browser/task-editor/stores/file-tab-resource';
 import { readImageFile } from '@core/features/files/api/browser/file-content';
@@ -117,8 +125,8 @@ export const MarkdownEditorRenderer = observer(function MarkdownEditorRenderer({
   );
 
   return (
-    // Sized by the pane, not the window: a narrow split hides the outline.
-    <div className="@container flex h-full min-h-0 bg-(--em-surface)">
+    // Sized by the pane, not the window: a narrow split floats the outline over the file.
+    <div className="@container relative flex h-full min-h-0 bg-(--em-surface)">
       {/* File content: the interface translation leaves it (and its headings) alone. */}
       <div
         ref={scrollRef}
@@ -136,76 +144,143 @@ export const MarkdownEditorRenderer = observer(function MarkdownEditorRenderer({
         />
       </div>
       {headings.length > 0 ? (
-        <MarkdownOutline
-          headings={headings}
-          activeId={activeId}
-          collapsed={outlineCollapsed}
-          onSelect={scrollToHeading}
-        />
+        <>
+          <MarkdownOutline
+            headings={headings}
+            activeId={activeId}
+            collapsed={outlineCollapsed}
+            onSelect={scrollToHeading}
+          />
+          <FloatingMarkdownOutline
+            headings={headings}
+            activeId={activeId}
+            onSelect={scrollToHeading}
+          />
+        </>
       ) : null}
     </div>
   );
 });
 
-function MarkdownOutline({
-  headings,
-  activeId,
-  collapsed,
-  onSelect,
-}: {
+type OutlineProps = {
   headings: MarkdownHeading[];
   activeId: string | null;
-  collapsed: boolean;
   onSelect: (id: string) => void;
-}) {
+};
+
+/** The outline beside the file, in a pane wide enough for both. */
+function MarkdownOutline({ collapsed, ...props }: OutlineProps & { collapsed: boolean }) {
   if (collapsed) {
     return (
-      <div className="hidden w-8 shrink-0 justify-center border-l border-border pt-2 @3xl:flex">
-        <button
-          type="button"
-          aria-label="Show outline"
-          title="Show outline"
-          className="hover:bg-muted flex size-6 items-center justify-center rounded text-foreground-muted hover:text-foreground"
-          onClick={() => writeOutlineCollapsed(false)}
-        >
+      <div className="hidden w-8 shrink-0 justify-center border-l border-border pt-2 @2xl:flex">
+        <OutlineButton label="Show outline" onClick={() => writeOutlineCollapsed(false)}>
           <PanelRightOpen className="size-3.5" />
-        </button>
+        </OutlineButton>
       </div>
     );
   }
   return (
     <nav
       aria-label="Outline"
-      className="hidden w-56 shrink-0 flex-col border-l border-border pr-3 pl-3 @3xl:flex"
+      className="hidden w-56 shrink-0 flex-col border-l border-border pr-3 pl-3 @2xl:flex"
     >
-      <div className="flex items-center justify-between py-2 pl-2">
-        <span className="text-xs font-medium text-foreground-muted">Outline</span>
-        <button
-          type="button"
-          aria-label="Hide outline"
-          title="Hide outline"
-          className="hover:bg-muted flex size-6 items-center justify-center rounded text-foreground-muted hover:text-foreground"
-          onClick={() => writeOutlineCollapsed(true)}
-        >
+      <OutlineHeader>
+        <OutlineButton label="Hide outline" onClick={() => writeOutlineCollapsed(true)}>
           <PanelRightClose className="size-3.5" />
-        </button>
-      </div>
-      <ul translate="no" className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pb-6">
-        {headings.map((heading) => (
-          <li key={heading.id}>
-            <button
-              type="button"
-              className={`hover:bg-muted block w-full truncate rounded px-2 py-1 text-left text-xs ${
-                heading.depth === 2 ? 'pl-4' : heading.depth === 3 ? 'pl-6' : ''
-              } ${activeId === heading.id ? 'text-foreground' : 'text-foreground-muted'}`}
-              onClick={() => onSelect(heading.id)}
-            >
-              {heading.text}
-            </button>
-          </li>
-        ))}
-      </ul>
+        </OutlineButton>
+      </OutlineHeader>
+      <OutlineList {...props} />
     </nav>
+  );
+}
+
+/** In a narrow pane: a button that opens the outline over the file. */
+function FloatingMarkdownOutline({ onSelect, ...props }: OutlineProps) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <div className="absolute top-2 right-4 @2xl:hidden">
+        <OutlineButton label="Show outline" onClick={() => setOpen(true)}>
+          <List className="size-3.5" />
+        </OutlineButton>
+      </div>
+    );
+  }
+  return (
+    <div className="absolute inset-0 z-10 @2xl:hidden" onClick={() => setOpen(false)}>
+      <nav
+        aria-label="Outline"
+        className="absolute top-0 right-0 bottom-0 flex w-56 max-w-[80%] flex-col border-l border-border bg-(--em-surface) pr-3 pl-3 shadow-lg"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setOpen(false);
+        }}
+      >
+        <OutlineHeader>
+          <OutlineButton label="Hide outline" onClick={() => setOpen(false)}>
+            <X className="size-3.5" />
+          </OutlineButton>
+        </OutlineHeader>
+        <OutlineList
+          {...props}
+          onSelect={(id) => {
+            setOpen(false);
+            onSelect(id);
+          }}
+        />
+      </nav>
+    </div>
+  );
+}
+
+function OutlineHeader({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between py-2 pl-2">
+      <span className="text-xs font-medium text-foreground-muted">Outline</span>
+      {children}
+    </div>
+  );
+}
+
+function OutlineButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      className="hover:bg-muted flex size-6 items-center justify-center rounded text-foreground-muted hover:text-foreground"
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function OutlineList({ headings, activeId, onSelect }: OutlineProps) {
+  return (
+    <ul translate="no" className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pb-6">
+      {headings.map((heading) => (
+        <li key={heading.id}>
+          <button
+            type="button"
+            className={`hover:bg-muted block w-full truncate rounded px-2 py-1 text-left text-xs ${
+              heading.depth === 2 ? 'pl-4' : heading.depth === 3 ? 'pl-6' : ''
+            } ${activeId === heading.id ? 'text-foreground' : 'text-foreground-muted'}`}
+            onClick={() => onSelect(heading.id)}
+          >
+            {heading.text}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
