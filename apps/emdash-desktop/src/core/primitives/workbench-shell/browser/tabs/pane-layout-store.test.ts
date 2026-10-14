@@ -1,3 +1,4 @@
+import { isObservable } from 'mobx';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTabRegistry } from './core/tab-provider-registry';
 import { PaneLayoutStore } from './pane-layout-store';
@@ -136,6 +137,14 @@ describe('PaneLayoutStore tab transfer', () => {
     expect(events).toEqual(['dispose:2']);
     expect(store.groups[0]?.pane.tabOrder).toEqual(['t-1']);
     expect(store.takeTabsForTransfer('a', ['missing'])).toBeNull();
+  });
+
+  it('takes tabs out as plain data another window can receive', () => {
+    const { store, tab } = storeWithTabs();
+    store.receiveTabs([{ tabs: [{ ...tab('5'), ref: { kind: 'branch', name: 'main' } }] }], 'a');
+    const taken = store.takeTabsForTransfer('a', ['t-5']);
+    expect(isObservable((taken?.tabs[0] as { ref?: object } | undefined)?.ref)).toBe(false);
+    expect(structuredClone(taken)).toEqual(taken);
   });
 
   it('receives tabs into the given pane, skipping ones it already shows', () => {

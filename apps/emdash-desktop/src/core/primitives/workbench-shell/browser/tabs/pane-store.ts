@@ -1,4 +1,4 @@
-import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx';
+import { action, computed, makeObservable, observable, reaction, runInAction, toJS } from 'mobx';
 import type { Snapshottable } from '@core/primitives/workbench-shell/browser/tabs/snapshottable';
 import {
   addTabId,
@@ -19,13 +19,17 @@ import type {
 import type { KindOf, OpenArgsOf, TabOpenOptions, TabRegistry } from './core/tab-provider-registry';
 import type { PersistedTabDescriptor as TabDescriptor, TabManagerSnapshot } from './persistence';
 
-/** Serialize a live entry to the flat TabDescriptor shape used in snapshots and history. */
+/**
+ * Serialize a live entry to the flat TabDescriptor shape used in snapshots and history.
+ * Plain data only: a tab's state can hold observables (a diff's refs), which cannot cross
+ * to another window.
+ */
 function descriptorOf(entry: TabEntry): TabDescriptor {
   return {
     kind: entry.kind,
     tabId: entry.tabId,
     isPreview: entry.isPreview,
-    ...(entry.state as object),
+    ...toJS(entry.state as object),
   } as TabDescriptor;
 }
 
