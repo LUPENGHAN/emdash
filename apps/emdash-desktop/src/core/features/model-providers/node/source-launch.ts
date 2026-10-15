@@ -157,10 +157,13 @@ export function buildSourceLaunch(
                 models: Object.fromEntries(
                   provider.models.map((id) => {
                     const contextWindow = provider.contextWindows?.[id];
-                    return [
-                      id,
-                      { name: id, ...(contextWindow && { limit: { context: contextWindow } }) },
-                    ];
+                    // OpenCode rejects a limit without both sizes; its own cap for an
+                    // unknown model's output is 32k.
+                    const limit = contextWindow && {
+                      context: contextWindow,
+                      output: Math.min(contextWindow, OPENCODE_OUTPUT_LIMIT),
+                    };
+                    return [id, { name: id, ...(limit && { limit }) }];
                   })
                 ),
               },
@@ -209,6 +212,7 @@ export function buildSourceLaunch(
 
 /** Claude Code's context for an ID it strips `[1m]` from before calling the provider. */
 const CLAUDE_1M = 1_000_000;
+const OPENCODE_OUTPUT_LIMIT = 32_000;
 
 /**
  * Which provider model Claude Code runs for the session, for each alias, and for

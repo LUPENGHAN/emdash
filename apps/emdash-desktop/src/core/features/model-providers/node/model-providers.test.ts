@@ -272,7 +272,10 @@ describe('buildSourceLaunch', () => {
     );
 
     expect(config.provider['emdash-newapi'].models).toEqual({
-      'moonshotai/kimi-k3': { name: 'moonshotai/kimi-k3', limit: { context: 1_000_000 } },
+      'moonshotai/kimi-k3': {
+        name: 'moonshotai/kimi-k3',
+        limit: { context: 1_000_000, output: 32_000 },
+      },
       'z-ai/glm-5.3-flash': { name: 'z-ai/glm-5.3-flash' },
     });
   });

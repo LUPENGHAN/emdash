@@ -104,6 +104,9 @@ async function sessionPaths(
       return found;
     }
     case 'opencode': {
+      // OpenCode names its sessions ses_…; any other id is Emdash's own placeholder for a
+      // conversation whose OpenCode never started a session, so there is nothing to delete.
+      if (!sessionId.startsWith('ses')) return [];
       const run =
         deps.runOpenCode ??
         (async (args: string[]) => {

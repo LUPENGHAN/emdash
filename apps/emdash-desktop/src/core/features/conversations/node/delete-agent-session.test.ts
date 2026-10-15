@@ -84,6 +84,13 @@ describe('deleteAgentSession', () => {
     expect(runOpenCode).toHaveBeenCalledWith(['session', 'delete', 'ses_1']);
   });
 
+  it('leaves OpenCode alone for a conversation it never started a session for', async () => {
+    const runOpenCode = vi.fn(async () => {});
+    const placeholder = '2cc2dc41-e80c-4340-8033-61c55b08cd6e';
+    expect(await deleteAgentSession('opencode', placeholder, { ...deps(), runOpenCode })).toBe(0);
+    expect(runOpenCode).not.toHaveBeenCalled();
+  });
+
   it('refuses ids that could name other files, and reports nothing found', async () => {
     await expect(deleteAgentSession('claude', '../x', deps())).rejects.toThrow('Invalid');
     await expect(deleteAgentSession('claude', '..', deps())).rejects.toThrow('Invalid');
