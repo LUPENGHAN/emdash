@@ -42,8 +42,8 @@ $env:PSExecutionPolicyPreference = 'Bypass'
 # workspace packages, where its code does not find them: say it is pnpm's.
 $env:npm_config_user_agent = 'pnpm/10.28.2'
 $builder = Join-Path $repoRoot 'node_modules\.bin\electron-builder.CMD'
-# Windows Defender scanning the freshly unpacked Electron can refuse its rename (EPERM):
-# a later attempt goes through.
+# A file held open for a moment (antivirus, the search indexer) can fail a step: a later
+# attempt goes through.
 for ($attempt = 1; ; $attempt++) {
   & $builder --win nsis --x64 --publish never --config electron-builder.fork.config.ts
   if ($LASTEXITCODE -eq 0) { break }

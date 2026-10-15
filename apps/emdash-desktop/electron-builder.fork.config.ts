@@ -12,6 +12,10 @@ const config: Configuration = {
   executableName: PRODUCT_NAME,
   artifactName: 'emdash-fork-${arch}.${ext}',
   publish: null,
+  // Windows: package the Electron pnpm already unpacked. Unpacking the downloaded zip ends
+  // in renaming a fresh folder, which Windows refuses (EPERM) while anything still holds a
+  // file in it, and retrying does not always get past that.
+  ...(process.platform === 'win32' && { electronDist: '../../node_modules/electron/dist' }),
   // Windows: one installer the install script runs silently (`/S`) for this user,
   // unsigned (the official build's Azure signing is not ours to use).
   win: {
