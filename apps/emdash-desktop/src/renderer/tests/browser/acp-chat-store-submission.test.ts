@@ -375,7 +375,7 @@ describe('AcpChatStore prompt submission', () => {
           { description: 'Effort: effort temporarily unavailable' }
         )
       );
-      expect(setOption).toHaveBeenCalledWith('model', 'b');
+      expect(setOption).toHaveBeenCalledWith('model', 'b', true);
       expect(errorToast).not.toHaveBeenCalled();
     } finally {
       store.dispose();
@@ -992,7 +992,7 @@ describe('AcpChatStore prompt submission', () => {
     const store = createStore(idleState(), vi.fn(), { setOption });
     store.setOption('native-mode', 'agent-full-access');
     await vi.waitFor(() =>
-      expect(setOption).toHaveBeenCalledWith('native-mode', 'agent-full-access')
+      expect(setOption).toHaveBeenCalledWith('native-mode', 'agent-full-access', true)
     );
     expect(toastError).toHaveBeenCalled();
     toastError.mockRestore();
@@ -1009,8 +1009,8 @@ describe('AcpChatStore prompt submission', () => {
     store.setOption('collaboration_mode', 'default');
     await vi.waitFor(() => expect(setOption).toHaveBeenCalledTimes(2));
     expect(setOption.mock.calls).toEqual([
-      ['collaboration_mode', 'plan'],
-      ['collaboration_mode', 'default'],
+      ['collaboration_mode', 'plan', true],
+      ['collaboration_mode', 'default', true],
     ]);
     store.dispose();
   });

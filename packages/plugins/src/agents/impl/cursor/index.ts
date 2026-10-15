@@ -7,6 +7,7 @@ import {
   cursorMcpAdapter,
 } from '@emdash/core/services/agent-plugins/api/plugins/helpers';
 import { createNativeAcpBehavior } from '../../helpers/acp-stdio';
+import { buildCursorHookConfig } from './hooks';
 import { icon } from './icon';
 import { buildCursorTrustBehavior } from './trust';
 
@@ -24,6 +25,14 @@ export const plugin = definePlugin(
     },
     autoApprove: {
       kind: 'supported',
+    },
+    hooks: {
+      kind: 'config',
+      scope: 'global',
+      // beforeSubmitPrompt → start, stop → stop, sessionStart → session.
+      // Declaring start suppresses Enter→working when hooks are installed; if
+      // hook setup fails the runtime keeps the input fallback (see prepareHookEnv).
+      supportedEvents: ['session', 'start', 'stop'],
     },
     hostDependency: {
       id: 'cursor',
@@ -86,6 +95,7 @@ export const provider = registerPluginBehavior(plugin, {
         sessionIdFlag: '--resume',
       }),
   },
+  hooks: buildCursorHookConfig(),
   mcp: cursorMcpAdapter(),
   trust: buildCursorTrustBehavior(),
 });

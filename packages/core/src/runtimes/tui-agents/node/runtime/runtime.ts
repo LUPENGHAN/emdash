@@ -81,6 +81,8 @@ type TuiAgentSession = {
   pty: PtySession | null;
   config: TuiSessionConfig | null;
   provider: ResolvedTuiProvider | null;
+  /** True when installed start hooks + hook server are expected to drive working status. */
+  startHooksActive: boolean;
 };
 
 type RetainedOutput = {
@@ -414,7 +416,12 @@ export class TuiAgentsRuntime {
     if (!active?.pty) return err({ type: 'not-found', conversationId });
     active.pty.write(data);
     this.lifecycle.recordInput(conversationId);
-    this.agentStates.markInputSubmitted(conversationId, active.provider, data);
+    this.agentStates.markInputSubmitted(
+      conversationId,
+      active.provider,
+      data,
+      active.startHooksActive
+    );
     return ok(undefined);
   }
 
@@ -548,7 +555,8 @@ export class TuiAgentsRuntime {
         workspacePath: config.input.cwd,
       });
     }
-    const hookEnv = await this.prepareHookEnv(config.input, provider);
+    const { env: hookEnv, startHooksActive } = await this.prepareHookEnv(config.input, provider);
+    session.startHooksActive = startHooksActive;
     if (!this.isCurrentGeneration(config.input.conversationId, generation)) {
       return this.cancelledSpawn(config.input.conversationId);
     }
@@ -681,7 +689,8 @@ export class TuiAgentsRuntime {
         config.input.conversationId,
         config.input.providerId,
         provider,
-        config.input.initialPrompt
+        config.input.initialPrompt,
+        session.startHooksActive
       );
     }
     this.syncSessionState({
@@ -705,6 +714,7 @@ export class TuiAgentsRuntime {
       pty: null,
       config: null,
       provider: null,
+      startHooksActive: false,
     };
   }
 
@@ -832,8 +842,10 @@ export class TuiAgentsRuntime {
   private async prepareHookEnv(
     input: TuiAgentStartInput,
     provider: ResolvedTuiProvider
-  ): Promise<Record<string, string>> {
-    if (provider.hooks.kind === 'none') return {};
+  ): Promise<{ env: Record<string, string>; startHooksActive: boolean }> {
+    const declaresStart =
+      provider.hooks.kind !== 'none' && provider.hooks.supportedEvents.includes('start');
+    if (provider.hooks.kind === 'none') return { env: {}, startHooksActive: false };
 
     const hooksAvailable = await this.hookInstaller.ensureHooksInstalled({
       providerId: input.providerId,
@@ -859,14 +871,18 @@ export class TuiAgentsRuntime {
         providerId: input.providerId,
         error: String(error),
       });
-      return {};
+      return { env: {}, startHooksActive: false };
     }
 
     return {
-      EMDASH_HOOK_PORT: String(hook.port),
-      EMDASH_PTY_ID: input.conversationId,
-      EMDASH_HOOK_NONCE: hook.token,
-      EMDASH_HOOK_TOKEN: hook.token,
+      env: {
+        EMDASH_HOOK_PORT: String(hook.port),
+        EMDASH_PTY_ID: input.conversationId,
+        EMDASH_HOOK_NONCE: hook.token,
+        EMDASH_HOOK_TOKEN: hook.token,
+      },
+      // Suppress Enter→working only when start hooks were actually installed.
+      startHooksActive: declaresStart && hooksAvailable,
     };
   }
 

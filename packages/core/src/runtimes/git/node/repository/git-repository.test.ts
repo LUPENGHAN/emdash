@@ -181,6 +181,8 @@ describe('GitRepository', () => {
 
         const headRef = `refs/remotes/${remoteName}/HEAD`;
         const staleTarget = `refs/remotes/${remoteName}/main`;
+        // Fetch may refresh remote HEAD; explicitly create the dangling ref under test.
+        await git(repo, ['symbolic-ref', headRef, staleTarget]);
         expect((await git(repo, ['symbolic-ref', headRef])).trim()).toBe(staleTarget);
         await expect(git(repo, ['rev-parse', '--verify', headRef])).rejects.toThrow();
 

@@ -21,6 +21,7 @@ vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
 
 vi.mock('@core/primitives/navigation/browser/navigation-hooks', () => ({
   useCurrentViewParams: () => ({ params: { projectId: 'project-1' } }),
+  useNavigate: () => vi.fn(),
 }));
 
 vi.mock('@core/features/projects/browser/components/pr-view/pr-view', () => ({

@@ -90,6 +90,9 @@ describe('createAgentLibraryService', () => {
       expect(await linked(workspaces[0]!.path)).toEqual(['archify', 'grill-me'])
     );
     expect(await linked(workspaces[1]!.path)).toEqual(['archify', 'grill-me']);
+    // Symlinks appear before the background sync finishes updating Git excludes.
+    // Drain the per-workspace queues before the fixture directory is removed.
+    await library.resyncAll();
     library.dispose();
   });
 });

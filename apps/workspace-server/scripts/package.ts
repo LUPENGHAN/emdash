@@ -469,7 +469,17 @@ async function installDarwinRuntimeDependencies(
       },
     }
   );
-  return join(stagingDirectory, 'node_modules');
+  const nodeModules = join(stagingDirectory, 'node_modules');
+  // Upstream node-pty tarballs ship the macOS spawn-helper prebuild without the executable bit;
+  // without it every PTY spawn fails with "posix_spawnp failed".
+  const spawnHelper = join(
+    nodeModules,
+    'node-pty/prebuilds',
+    `darwin-${process.arch}`,
+    'spawn-helper'
+  );
+  await chmod(spawnHelper, 0o755);
+  return nodeModules;
 }
 
 async function buildLinuxRuntimeDependencies(
@@ -552,6 +562,17 @@ async function assembleArtifact(options: {
     );
   }
   await cp(runtimeNodeModules, join(artifactDirectory, 'node_modules'), { recursive: true });
+  // Servers and their standard libraries must be present without a global install.
+  await stat(join(artifactDirectory, 'node_modules/typescript-language-server/lib/cli.mjs'));
+  const compilerLib = join(artifactDirectory, 'node_modules/typescript/lib');
+  await stat(join(compilerLib, 'tsserver.js'));
+  await stat(join(compilerLib, '_tsserver.js'));
+  await stat(join(compilerLib, 'typescript.js'));
+  await stat(join(compilerLib, 'lib.d.ts'));
+  await stat(join(artifactDirectory, 'node_modules/pyright/langserver.index.js'));
+  await stat(
+    join(artifactDirectory, 'node_modules/pyright/dist/typeshed-fallback/stdlib/builtins.pyi')
+  );
 
   for (const bundleName of bundleNames) {
     await copyFile(join(appDirectory, 'dist', bundleName), join(distDirectory, bundleName));
@@ -617,6 +638,11 @@ async function verifyLocalArtifact(extractedArtifact: string): Promise<void> {
       '--quiet',
       'bundled-ripgrep-smoke',
       searchDirectory,
+    ]);
+    await runCommand(join(extractedArtifact, 'node'), [
+      '-e',
+      `require(${JSON.stringify(join(extractedArtifact, 'node_modules/node-pty'))})` +
+        `.spawn('/bin/sh', ['-c', 'exit 0'], {}).onExit((e) => process.exit(e.exitCode));`,
     ]);
     await runCommand(launcherPath, ['start', ...lifecycleArgs]);
     await runCommand(launcherPath, ['status', ...lifecycleArgs]);

@@ -130,6 +130,12 @@ vi.mock('@core/features/integrations/api/browser/use-connected-issue-providers',
 vi.mock('@core/features/integrations/contributions/browser/integration-icon', () => ({
   IntegrationIcon: () => null,
 }));
+vi.mock('@core/features/conversations/browser/conversation-cost', () => ({
+  useConversationCost: () => ({ data: undefined }),
+}));
+vi.mock('@core/features/agent-library/contributions/browser/use-session-skills', () => ({
+  useSessionSkills: () => [],
+}));
 vi.mock('@core/features/library/api/browser/prompts/use-prompt-library', () => ({
   usePromptLibrary: () => ({ value: [] }),
 }));

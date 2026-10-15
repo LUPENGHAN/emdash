@@ -99,7 +99,8 @@ it('keeps Finder usable and omits unknown or pending apps from the real dropdown
   await act(async () => root.render(<OpenInMenu path="/test/project" />));
   await page.getByRole('button', { name: 'Open in Finder', exact: true }).click();
   expect(mocks.openIn).toHaveBeenCalledWith(
-    expect.objectContaining({ app: 'finder', path: '/test/project' })
+    expect.objectContaining({ app: 'finder', path: '/test/project' }),
+    { timeoutMs: 75_000 }
   );
   await page.getByRole('button', { name: 'Open in options', exact: true }).click();
   await expect

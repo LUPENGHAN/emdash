@@ -114,6 +114,9 @@ describe('BorderlessTitlebar', () => {
 
     expect(host.querySelector('[data-borderless-titlebar]')).not.toBeNull();
     expect(host.querySelector('[data-window-controls]')).not.toBeNull();
-    expect(host.querySelectorAll('button')).toHaveLength(0);
+    expect(host.querySelector('button[aria-label="Show left sidebar"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Go back"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Go forward"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Usage statistics"]')).not.toBeNull();
   });
 });

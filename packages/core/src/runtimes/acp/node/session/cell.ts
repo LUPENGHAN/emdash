@@ -71,6 +71,7 @@ export class SessionCell {
   private lastRunningAgentCount = 0;
   private readonly effectDriver: MachineEffectDriver<Effect>;
   private preparedPromptEffects: Effect[] | null = null;
+  private disposed = false;
 
   constructor(private readonly deps: SessionCellDeps) {
     this._acpSessionId = deps.acpSessionId;
@@ -447,6 +448,7 @@ export class SessionCell {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.clearQuiesce();
     this.preparedPromptEffects = null;
     this.effectDriver.dispose();
@@ -501,14 +503,22 @@ export class SessionCell {
           break;
         }
         this.deps.callbacks?.onSendQueuedPrompt?.(effect.prompt);
-        void this.sendPromptInternal(effect.prompt).then((result) => {
-          if (!result.success) {
-            this.deps.logger.warn('SessionCell: failed to send queued prompt', {
+        void this.sendPromptInternal(effect.prompt).then(
+          (result) => {
+            if (!result.success) {
+              this.deps.logger.warn('SessionCell: failed to send queued prompt', {
+                conversationId: this.conversationId,
+                error: result.error,
+              });
+            }
+          },
+          (error: unknown) => {
+            this.deps.logger.error('SessionCell: queued prompt execution failed', {
               conversationId: this.conversationId,
-              error: result.error,
+              error,
             });
           }
-        });
+        );
         break;
       case 'warn':
         this.deps.logger.warn(`SessionCell: ${effect.message}`, {
@@ -553,6 +563,8 @@ export class SessionCell {
     });
     this.emitTranscriptChanged();
 
+    let outcome: TranscriptTurnOutcome;
+    let result: Result<SessionPromptResult, AcpSendPromptError>;
     try {
       const resolvedAttachments =
         acceptance?.resolvedAttachments ??
@@ -587,18 +599,27 @@ export class SessionCell {
         sessionId: this.acpSessionId,
         stopReason: response.stopReason,
       });
-      this.settleTurn(outcomeFromStopReason(response.stopReason));
-      return ok({ queued: false });
+      outcome = outcomeFromStopReason(response.stopReason);
+      result = ok({ queued: false });
     } catch (e) {
-      const err = acpErr.promptFailed(toSerializedError(e));
       this.rawLog.record({
         kind: 'prompt_result',
         sessionId: this.acpSessionId,
         stopReason: null,
       });
-      this.settleTurn({ kind: 'error', reason: 'prompt_failed' });
-      return err;
+      outcome = { kind: 'error', reason: 'prompt_failed' };
+      result = acpErr.promptFailed(toSerializedError(e));
     }
+    // Teardown is bounded, so the provider can answer after this activation was disposed.
+    if (this.disposed) {
+      this.deps.logger.debug('SessionCell: provider answered after the activation ended', {
+        conversationId: this.conversationId,
+        outcome,
+      });
+      return result;
+    }
+    this.settleTurn(outcome);
+    return result;
   }
 
   private seedTranscriptMeta(
@@ -674,6 +695,7 @@ export class SessionCell {
 
   private isTranscriptEvent(event: NormalizedEvent): boolean {
     switch (event.kind) {
+      case 'notification':
       case 'message':
       case 'thinking':
       case 'tool_call':
