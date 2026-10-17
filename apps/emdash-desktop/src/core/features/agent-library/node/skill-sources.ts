@@ -486,7 +486,8 @@ async function defaultBranch(repo: string): Promise<string> {
   return branch;
 }
 
-async function folderHash(dir: string): Promise<string> {
+/** Content hash of a skill folder (dot-files excluded), for change detection. */
+export async function folderHash(dir: string): Promise<string> {
   const files = await walk(dir, dir);
   const hash = createHash('sha256');
   for (const file of files.sort()) {

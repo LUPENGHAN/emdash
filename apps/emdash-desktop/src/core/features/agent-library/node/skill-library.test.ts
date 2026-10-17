@@ -6,6 +6,7 @@ import {
   readFile,
   readlink,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -87,6 +88,59 @@ describe('skill library', () => {
     expect((await lstat(path.join(agentsDir, 'archify'))).isDirectory()).toBe(true);
     const exclude = await readFile(path.join(workspace, '.git', 'info', 'exclude'), 'utf8');
     expect(exclude).not.toContain('emdash skills');
+  });
+
+  it('copies wanted skills into .cursor/skills for Cursor, refreshing only changed ones', async () => {
+    const cursorDir = path.join(workspace, '.cursor', 'skills');
+    // The repository's own skill with a library name wins over the library there.
+    await skill(cursorDir, 'archify', 'repo version');
+    await writeFile(path.join(cursorDir, 'archify', 'owned.txt'), 'untouched');
+
+    const first = await syncWorkspaceSkills({
+      workspacePath: workspace,
+      libraryDir: library,
+      names: ['grill-me', 'archify'],
+    });
+    expect(first).toEqual({ linked: ['grill-me', 'archify'], shadowed: ['archify'] });
+
+    // Cursor needs a real folder, not a link, stamped with the library source's hash.
+    const copy = path.join(cursorDir, 'grill-me');
+    expect((await lstat(copy)).isSymbolicLink()).toBe(false);
+    expect(await readFile(path.join(copy, 'SKILL.md'), 'utf8')).toContain('grill-me does things');
+    await expect(readFile(path.join(copy, '.emdash-library-copy'), 'utf8')).resolves.toMatch(
+      /^[0-9a-f]{64}$/
+    );
+    // The repository's own folder was left alone.
+    expect(await readFile(path.join(cursorDir, 'archify', 'owned.txt'), 'utf8')).toBe('untouched');
+    const exclude = await readFile(path.join(workspace, '.git', 'info', 'exclude'), 'utf8');
+    expect(exclude).toContain('/.cursor/skills/grill-me');
+
+    // An unchanged library skill is not recopied.
+    const stamp = (await stat(path.join(copy, 'SKILL.md'))).mtimeMs;
+    await syncWorkspaceSkills({
+      workspacePath: workspace,
+      libraryDir: library,
+      names: ['grill-me', 'archify'],
+    });
+    expect((await stat(path.join(copy, 'SKILL.md'))).mtimeMs).toBe(stamp);
+
+    // A changed library skill is copied anew.
+    await writeFile(
+      path.join(library, 'grill-me', 'SKILL.md'),
+      '---\nname: grill-me\ndescription: changed\n---\n'
+    );
+    await syncWorkspaceSkills({
+      workspacePath: workspace,
+      libraryDir: library,
+      names: ['grill-me', 'archify'],
+    });
+    expect(await readFile(path.join(copy, 'SKILL.md'), 'utf8')).toContain('changed');
+
+    // Dropping a skill removes only Emdash's marked copy, never the repository's folder.
+    await syncWorkspaceSkills({ workspacePath: workspace, libraryDir: library, names: [] });
+    await expect(lstat(copy)).rejects.toThrow();
+    expect((await lstat(path.join(cursorDir, 'archify'))).isDirectory()).toBe(true);
+    expect(await readFile(path.join(cursorDir, 'archify', 'owned.txt'), 'utf8')).toBe('untouched');
   });
 
   it('finds, imports (through links) and takes over the agents’ own skills', async () => {
