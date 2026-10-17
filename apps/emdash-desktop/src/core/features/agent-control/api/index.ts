@@ -56,6 +56,9 @@ export type AgentControlAction =
       providerId?: string;
       ui?: 'terminal' | 'chat';
     }
+  | { kind: 'list_tasks'; includeArchived: boolean }
+  | { kind: 'archive_task'; taskId: string }
+  | { kind: 'delete_task'; taskId: string }
   | { kind: 'open'; target: OpenTarget }
   | { kind: 'read_terminal'; name?: string; lines: number }
   | { kind: 'run_in_terminal'; command: string }
