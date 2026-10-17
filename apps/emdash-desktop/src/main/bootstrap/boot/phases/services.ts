@@ -31,10 +31,15 @@ import {
   type AgentLibraryService,
 } from '@core/features/agent-library/node/agent-library-service';
 import {
+  pruneCursorPluginDirs,
+  writeCursorPluginDir,
+} from '@core/features/agent-library/node/cursor-plugin';
+import {
   acpMcpServers,
   launchableMcpServers,
   terminalLaunchForMcp,
 } from '@core/features/agent-library/node/mcp-launch';
+import { SKILL_LIBRARY_DIRNAME } from '@core/features/agent-library/node/skill-library';
 import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registry';
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
@@ -212,6 +217,7 @@ import { applyNativeTheme, isAppFocused, setWindowComputer } from '@main/host/wi
 import { log } from '@main/lib/logger';
 import { telemetryService } from '@main/lib/telemetry';
 import { appScope } from '../../core/app-scope';
+import { runInBackground } from '../../core/background';
 import { step } from '../../core/phase';
 import { setCoreServiceInstances } from '../../core/service-instances';
 import { registerProviderTokenHandlers, wireAccountTelemetry } from '../wiring';
@@ -588,6 +594,10 @@ export async function bootServices(
     await desktopKeyValueStore.set(key, now.toISOString());
     return now;
   })();
+  // Cursor plugin folders live under the skill library's own metadata dir: a root of
+  // our own that never carries spaces, holding per-conversation MCP configs.
+  const cursorPluginRoot = join(homedir(), SKILL_LIBRARY_DIRNAME, '.emdash', 'cursor-plugins');
+  runInBackground('cursor-plugin-prune', () => pruneCursorPluginDirs(cursorPluginRoot));
   const tuiConversationDependencies = {
     db,
     getProviderConfig: (providerId: string, override?: ModelSourceOverride) =>
@@ -605,6 +615,7 @@ export async function bootServices(
       workspacePath: string;
       host: HostRef;
       env: Record<string, string>;
+      autoApprove: boolean;
     }) => {
       // Skills and MCP servers live on this computer; remote agents keep their own.
       if (!isLocalHostRef(params.host)) return null;
@@ -612,11 +623,17 @@ export async function bootServices(
         projectId: params.projectId,
         path: params.workspacePath,
       });
-      return terminalLaunchForMcp(
-        params.providerId,
-        await launchMcpServers(params.conversationId, params.projectId),
-        params.env
-      );
+      const servers = await launchMcpServers(params.conversationId, params.projectId);
+      if (params.providerId === 'cursor') {
+        if (servers.length === 0) return null;
+        const dir = await writeCursorPluginDir(cursorPluginRoot, params.conversationId, servers);
+        // Cursor asks before it starts a plugin's MCP servers unless told to approve them.
+        return {
+          args: ['--plugin-dir', dir, ...(params.autoApprove ? ['--approve-mcps'] : [])],
+          env: {},
+        };
+      }
+      return terminalLaunchForMcp(params.providerId, servers, params.env);
     },
     beforeResume: async (params: {
       conversationId: string;

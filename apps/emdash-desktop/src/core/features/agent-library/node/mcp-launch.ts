@@ -7,8 +7,8 @@ export type McpLaunch = { args: string[]; env: Record<string, string> };
 
 /**
  * How a terminal-launched agent gets extra MCP servers for one session, without
- * touching its own config: a flag or an inline config per agent. Pi has no MCP and
- * Cursor only reads config files, so they get nothing.
+ * touching its own config: a flag or an inline config per agent. Pi has no MCP;
+ * Cursor gets a plugin folder instead (see cursor-plugin.ts).
  */
 export function terminalLaunchForMcp(
   providerId: string,
