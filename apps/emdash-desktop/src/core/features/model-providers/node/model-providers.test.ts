@@ -212,15 +212,19 @@ describe('buildSourceLaunch', () => {
     expect(launch.env.APP_SERVER_LOGS).toBe('');
   });
 
-  it("gives Codex the model's context window when the provider sets one", () => {
+  it("gives Codex the model's context window and a catalog of every provider model", () => {
     const sized = { ...provider, contextWindows: { 'moonshotai/kimi-k3': 1_000_000 } };
     const launch = buildSourceLaunch('codex', sized, 'sk-1', 'moonshotai/kimi-k3')!;
     expect(launch.args).toContain('model_context_window=1000000');
     expect(JSON.parse(launch.env.CODEX_CONFIG!).model_context_window).toBe(1_000_000);
-    // Codex caps the context at its metadata's maximum, so a catalog comes with it.
+    // The catalog lists every provider model, sized only where a window is set;
+    // without one Codex would list OpenAI's own models instead.
     expect(launch.codexCatalog).toEqual({
       providerKey: 'emdash-newapi',
-      models: [{ id: 'moonshotai/kimi-k3', contextWindow: 1_000_000 }],
+      models: [
+        { id: 'moonshotai/kimi-k3', contextWindow: 1_000_000 },
+        { id: 'z-ai/glm-5.3-flash' },
+      ],
     });
     const catalogArg = launch.args.find((arg) => arg.startsWith('model_catalog_json='));
     expect(catalogArg).toMatch(/emdash-model-catalog-emdash-newapi\.json"$/);
@@ -228,18 +232,38 @@ describe('buildSourceLaunch', () => {
       JSON.parse(catalogArg!.slice('model_catalog_json='.length))
     );
     // The chat UI's Codex reads it at startup, through the wrapper.
-    if (process.platform !== 'win32') {
-      expect(launch.env.CODEX_PATH).toMatch(/emdash-codex-app-server\.sh$/);
-      expect(launch.env.EMDASH_CODEX_MODEL_CATALOG).toBe(
-        JSON.parse(catalogArg!.slice('model_catalog_json='.length))
-      );
-    }
-    // Another model of the same provider keeps Codex's own default.
-    const other = buildSourceLaunch('codex', sized, 'sk-1', 'x-ai/grok-4.7')!;
+    expect(launch.env.CODEX_PATH).toMatch(
+      process.platform === 'win32'
+        ? /emdash-codex-app-server\.cmd$/
+        : /emdash-codex-app-server\.sh$/
+    );
+    expect(launch.env.EMDASH_CODEX_MODEL_CATALOG).toBe(
+      JSON.parse(catalogArg!.slice('model_catalog_json='.length))
+    );
+    // Another model without a set window keeps Codex's own context default but
+    // still gets the catalog of all provider models.
+    const other = buildSourceLaunch('codex', sized, 'sk-1', 'z-ai/glm-5.3-flash')!;
     expect(other.args.join(' ')).not.toContain('model_context_window');
     expect(JSON.parse(other.env.CODEX_CONFIG!).model_context_window).toBeUndefined();
-    expect(other.codexCatalog).toBeUndefined();
-    expect(other.env.CODEX_PATH).toBeUndefined();
+    expect(other.codexCatalog).toEqual(launch.codexCatalog);
+    expect(other.args.find((arg) => arg.startsWith('model_catalog_json='))).toMatch(
+      /emdash-model-catalog-emdash-newapi\.json"$/
+    );
+  });
+
+  it('lists every provider model in the catalog even when none has a window', () => {
+    const three: ModelProvider = {
+      ...provider,
+      models: ['a/one', 'a/two', 'a/three'],
+      contextWindows: { 'a/two': 200_000 },
+    };
+    const launch = buildSourceLaunch('codex', three, 'sk-1', 'a/three')!;
+    expect(launch.codexCatalog).toEqual({
+      providerKey: 'emdash-newapi',
+      models: [{ id: 'a/one' }, { id: 'a/two', contextWindow: 200_000 }, { id: 'a/three' }],
+    });
+    expect(launch.args.find((arg) => arg.startsWith('model_catalog_json='))).toBeDefined();
+    expect(launch.args.every((arg) => !/\s/.test(arg))).toBe(true);
   });
 
   it("keeps Codex's web search tool off unless the model has it", () => {

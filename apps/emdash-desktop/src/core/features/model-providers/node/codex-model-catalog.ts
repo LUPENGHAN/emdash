@@ -5,10 +5,10 @@ import path from 'node:path';
 // codex-rs/models-manager/prompt.md at 2cf2a6a844, Apache-2.0).
 import codexBaseInstructions from './codex-base-instructions.md?raw';
 
-/** The models (with their context windows) a Codex model catalog describes. */
+/** The models a Codex model catalog describes; context windows only where set. */
 export type CodexModelCatalog = {
   providerKey: string;
-  models: { id: string; contextWindow: number }[];
+  models: { id: string; contextWindow?: number }[];
 };
 
 export function codexHome(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
@@ -27,10 +27,17 @@ export function codexModelCatalogPath(providerKey: string, home = codexHome()): 
  * What the chat UI adapter (codex-acp) runs as `codex`: it starts `codex app-server` with
  * no arguments of its own and hands config over only per thread, after Codex has already
  * read its model metadata. This passes the catalog at startup, then runs the real CLI
- * (the Codex plugin names it in EMDASH_CODEX_BIN).
+ * (the Codex plugin names it in EMDASH_CODEX_BIN). Windows needs a `.cmd` wrapper: the
+ * adapter spawns it through the shell.
  */
-export function codexAppServerWrapperPath(home = codexHome()): string {
-  return path.join(home, 'emdash-codex-app-server.sh');
+export function codexAppServerWrapperPath(
+  home = codexHome(),
+  platform: NodeJS.Platform = process.platform
+): string {
+  return path.join(
+    home,
+    platform === 'win32' ? 'emdash-codex-app-server.cmd' : 'emdash-codex-app-server.sh'
+  );
 }
 
 const APP_SERVER_WRAPPER = `#!/bin/sh
@@ -38,13 +45,22 @@ const APP_SERVER_WRAPPER = `#!/bin/sh
 exec "\${EMDASH_CODEX_BIN:-codex}" -c "model_catalog_json=\\"$EMDASH_CODEX_MODEL_CATALOG\\"" "$@"
 `;
 
+// TOML literal string ('…'): a Windows path's backslashes are not escapes there.
+const APP_SERVER_WRAPPER_CMD = [
+  '@echo off',
+  'rem Written by Emdash for its Codex chat conversations on a model provider.',
+  `"%EMDASH_CODEX_BIN%" -c "model_catalog_json='%EMDASH_CODEX_MODEL_CATALOG%'" %*`,
+  '',
+].join('\r\n');
+
 type ModelInfo = Record<string, unknown>;
 
 /**
  * Codex caps a model's context at the `max_context_window` of its metadata, and models
- * it does not know get 272k; a catalog (`model_catalog_json`) is the only way past that.
- * A model Codex knows (by id, or by the id after a `vendor/` prefix) keeps all of its
- * metadata; others get Codex's own fallback for unknown models. Only the context changes.
+ * it does not know get 272k. The catalog lists every provider model; a context window
+ * is written only where the provider sets one (Codex accepts a missing one). A model
+ * Codex knows (by id, or by the id after a `vendor/` prefix) keeps all of its metadata;
+ * others get Codex's own fallback for unknown models. Only the context changes.
  */
 export function buildCodexModelCatalog(
   catalog: CodexModelCatalog,
@@ -58,8 +74,10 @@ export function buildCodexModelCatalog(
       return {
         ...(base ?? fallbackModelInfo(id)),
         slug: id,
-        context_window: contextWindow,
-        max_context_window: contextWindow,
+        ...(contextWindow !== undefined && {
+          context_window: contextWindow,
+          max_context_window: contextWindow,
+        }),
       };
     }),
   };
@@ -106,7 +124,8 @@ function fallbackModelInfo(slug: string): ModelInfo {
 /** Writes (only when changed) the catalog a Codex launch on a provider points at. */
 export async function ensureCodexModelCatalog(
   catalog: CodexModelCatalog,
-  home = codexHome()
+  home = codexHome(),
+  platform: NodeJS.Platform = process.platform
 ): Promise<void> {
   let known: ModelInfo[] = [];
   try {
@@ -120,9 +139,9 @@ export async function ensureCodexModelCatalog(
   const file = codexModelCatalogPath(catalog.providerKey, home);
   const next = `${JSON.stringify(buildCodexModelCatalog(catalog, known), null, 2)}\n`;
   await writeIfChanged(file, next);
-  const wrapper = codexAppServerWrapperPath(home);
-  await writeIfChanged(wrapper, APP_SERVER_WRAPPER);
-  await chmod(wrapper, 0o755);
+  const wrapper = codexAppServerWrapperPath(home, platform);
+  await writeIfChanged(wrapper, platform === 'win32' ? APP_SERVER_WRAPPER_CMD : APP_SERVER_WRAPPER);
+  if (platform !== 'win32') await chmod(wrapper, 0o755);
 }
 
 async function writeIfChanged(file: string, content: string): Promise<void> {
