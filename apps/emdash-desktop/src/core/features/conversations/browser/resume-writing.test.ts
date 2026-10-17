@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RESUME_WRITING_SETTINGS } from '@core/features/conversations/contributions/resume-settings';
+import {
+  resumeJobSchema,
+  type ResumeJob,
+} from '@core/features/conversations/contributions/resume-settings';
 import { decideResume, type ResumeUsage } from './resume-writing';
 
 const now = new Date(2026, 9, 10, 9, 0, 30);
 
-function settings(patch: Partial<typeof DEFAULT_RESUME_WRITING_SETTINGS>) {
-  return {
-    ...DEFAULT_RESUME_WRITING_SETTINGS,
+function job(patch: Partial<ResumeJob>): ResumeJob {
+  return resumeJobSchema.parse({
+    id: 'j1',
     enabled: true,
     projectId: 'p',
     taskId: 't',
     conversationId: 'c',
     ...patch,
-  };
+  });
 }
 
 const claude = (accountId: string | null, used: number): ResumeUsage => ({
@@ -25,7 +28,7 @@ describe('decideResume', () => {
   it('sends once when the clock time arrives', () => {
     const first = decideResume({
       now,
-      settings: settings({ clockTime: '09:00' }),
+      job: job({ clockTime: '09:00' }),
       providerId: 'claude',
       accounts: [],
     });
@@ -36,7 +39,7 @@ describe('decideResume', () => {
     });
     const again = decideResume({
       now,
-      settings: settings({ clockTime: '09:00', clockDay: '2026-10-10' }),
+      job: job({ clockTime: '09:00', clockDay: '2026-10-10' }),
       providerId: 'claude',
       accounts: [],
     });
@@ -49,7 +52,7 @@ describe('decideResume', () => {
       providerId: 'claude',
       modelSource: null as string | null,
       accounts: [claude(null, 80)],
-      settings: settings({ onWindowReset: true }),
+      job: job({ onWindowReset: true }),
     };
     expect(decideResume(base)).toMatchObject({
       type: 'remember',
@@ -58,16 +61,16 @@ describe('decideResume', () => {
     const reset = decideResume({
       ...base,
       accounts: [claude(null, 10)],
-      settings: { ...base.settings, usagePercents: 'default#5h=80' },
+      job: { ...base.job, usagePercents: 'default#5h=80' },
     });
     expect(reset).toMatchObject({ type: 'send', reason: 'window-reset' });
   });
 
   it('does not count a failed usage check or a small drop as a reset', () => {
-    const remembered = settings({ onWindowReset: true, usagePercents: 'default#5h=80' });
+    const remembered = job({ onWindowReset: true, usagePercents: 'default#5h=80' });
     const empty = decideResume({
       now,
-      settings: remembered,
+      job: remembered,
       providerId: 'claude',
       modelSource: null,
       accounts: [{ agent: 'claude', accountId: null, windows: [] }],
@@ -75,7 +78,7 @@ describe('decideResume', () => {
     expect(empty.type).toBe('none');
     const small = decideResume({
       now,
-      settings: remembered,
+      job: remembered,
       providerId: 'claude',
       modelSource: null,
       accounts: [claude(null, 70)],
@@ -86,7 +89,7 @@ describe('decideResume', () => {
   it('does not compare a reading from another login', () => {
     const decision = decideResume({
       now,
-      settings: settings({ onWindowReset: true, usagePercents: 'main#5h=95' }),
+      job: job({ onWindowReset: true, usagePercents: 'main#5h=95' }),
       providerId: 'claude',
       modelSource: 'alt',
       accounts: [claude('alt', 5)],
@@ -97,7 +100,7 @@ describe('decideResume', () => {
   it('switches to the official account with room left and forgets the old reading', () => {
     const decision = decideResume({
       now,
-      settings: settings({ quotaPercent: 90, usagePercents: 'main#5h=95' }),
+      job: job({ quotaPercent: 90, usagePercents: 'main#5h=95' }),
       providerId: 'claude',
       modelSource: 'main',
       accounts: [claude('main', 95), claude('alt', 20), claude('other', 40)],
@@ -112,7 +115,7 @@ describe('decideResume', () => {
   it('does not switch twice from the same full login', () => {
     const decision = decideResume({
       now,
-      settings: settings({ quotaPercent: 90, quotaKey: 'main->alt' }),
+      job: job({ quotaPercent: 90, quotaKey: 'main->alt' }),
       providerId: 'claude',
       modelSource: 'main',
       accounts: [claude('main', 95), claude('alt', 20)],
@@ -123,7 +126,7 @@ describe('decideResume', () => {
   it('switches once a login opens up after none had room', () => {
     const decision = decideResume({
       now,
-      settings: settings({ quotaPercent: 90, quotaKey: 'main->stuck' }),
+      job: job({ quotaPercent: 90, quotaKey: 'main->stuck' }),
       providerId: 'claude',
       modelSource: 'main',
       accounts: [claude('main', 95), claude('alt', 20)],
@@ -134,7 +137,7 @@ describe('decideResume', () => {
   it('clears the handoff record once the login is under the limit again', () => {
     const decision = decideResume({
       now,
-      settings: settings({ quotaPercent: 90, quotaKey: 'main->alt' }),
+      job: job({ quotaPercent: 90, quotaKey: 'main->alt' }),
       providerId: 'claude',
       modelSource: 'main',
       accounts: [claude('main', 10)],

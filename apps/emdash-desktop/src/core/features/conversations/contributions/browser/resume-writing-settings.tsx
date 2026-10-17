@@ -1,23 +1,66 @@
 import { PageLayout, SettingsSection } from '@emdash/ui/react/patterns';
-import { Field, Input, Select, Switch, toast } from '@emdash/ui/react/primitives';
+import { Button, Field, Input, Select, Switch, toast } from '@emdash/ui/react/primitives';
 import { useQuery } from '@tanstack/react-query';
+import { Plus, X } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { libraryProjects } from '@core/features/agent-library/contributions/browser/scope-picker';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { agentDisplayName } from '@core/features/conversations/browser/handoff';
 import {
-  DEFAULT_RESUME_WRITING_SETTINGS,
-  type ResumeWritingSettings,
+  addResumeJob,
+  patchResumeJob,
+  removeResumeJob,
+} from '@core/features/conversations/browser/resume-jobs-store';
+import {
+  resumeJobSchema,
+  type ResumeJob,
 } from '@core/features/conversations/contributions/resume-settings';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { getTaskManagerStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
+import { useOpenModal } from '@core/manifests/browser/modal-api';
 
 type Choice = { id: string; label: string };
 
 export const ResumeWritingSettingsPage = observer(function ResumeWritingSettingsPage() {
-  const { value, updateAsync } = useAppSettingsKey('resumeWriting');
-  const settings = value ?? DEFAULT_RESUME_WRITING_SETTINGS;
-  const { projectId, taskId, conversationId } = settings;
+  const { value } = useAppSettingsKey('resumeWriting');
+  const jobs = value?.jobs ?? [];
+
+  const add = () => {
+    void addResumeJob(resumeJobSchema.parse({ id: crypto.randomUUID() })).catch((error) => {
+      toast.error(error instanceof Error ? error.message : String(error));
+    });
+  };
+
+  return (
+    <div className="space-y-8 pb-10">
+      <PageLayout.Header
+        sticky
+        draggable
+        title="Continue writing"
+        description="Emdash sends a follow-up to a conversation by itself, or moves it to another official account when the current one runs out. The app has to be open."
+        actions={
+          <Button variant="primary" onClick={add}>
+            <Plus className="size-4" />
+            Add
+          </Button>
+        }
+      />
+      {jobs.length === 0 ? (
+        <SettingsSection>
+          <p className="text-muted-foreground text-sm">
+            No conversations yet. Add one to have Emdash continue it.
+          </p>
+        </SettingsSection>
+      ) : (
+        jobs.map((job) => <ResumeJobCard key={job.id} job={job} />)
+      )}
+    </div>
+  );
+});
+
+const ResumeJobCard = observer(function ResumeJobCard({ job }: { job: ResumeJob }) {
+  const openConfirmActionModal = useOpenModal('confirmActionModal');
+  const { projectId, taskId, conversationId } = job;
 
   const { data: projectConversations = [] } = useQuery({
     queryKey: ['resume-writing', 'conversations', projectId],
@@ -36,11 +79,15 @@ export const ResumeWritingSettingsPage = observer(function ResumeWritingSettings
       id: conversation.id,
       label: `${agentDisplayName(conversation.providerId)} · ${conversation.title || conversation.id}`,
     }));
+  const conversation = projectConversations.find((item) => item.id === conversationId);
+  const title = conversation
+    ? `${agentDisplayName(conversation.providerId)} · ${conversation.title || conversation.id}`
+    : 'New job';
 
-  const save = (patch: Partial<ResumeWritingSettings>) => {
-    const next: Partial<ResumeWritingSettings> = { ...patch };
+  const save = (patch: Partial<ResumeJob>) => {
+    const next: Partial<ResumeJob> = { ...patch };
     if (patch.clockTime !== undefined || patch.enabled) {
-      next.clockDay = clockDayIfPassed(patch.clockTime ?? settings.clockTime);
+      next.clockDay = clockDayIfPassed(patch.clockTime ?? job.clockTime);
     }
     const retargets = (
       ['projectId', 'taskId', 'conversationId', 'onWindowReset', 'enabled'] as const
@@ -49,26 +96,37 @@ export const ResumeWritingSettingsPage = observer(function ResumeWritingSettings
       next.usagePercents = null;
       next.quotaKey = null;
     }
-    updateAsync(next).catch((error: unknown) => {
+    patchResumeJob(job.id, next).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : String(error));
+    });
+  };
+
+  const remove = () => {
+    void (async () => {
+      const outcome = await openConfirmActionModal({
+        title: 'Remove this job?',
+        variant: 'destructive',
+        description: 'Its automatic continue messages stop.',
+        confirmLabel: 'Remove',
+      });
+      if (outcome.success) await removeResumeJob(job.id);
+    })().catch((error: unknown) => {
       toast.error(error instanceof Error ? error.message : String(error));
     });
   };
 
   return (
-    <div className="space-y-8 pb-10">
-      <PageLayout.Header
-        sticky
-        draggable
-        title="Continue writing"
-        description="Emdash sends a follow-up to a conversation by itself, or moves it to another official account when the current one runs out. The app has to be open."
-      />
-      <SettingsSection>
+    <SettingsSection title={title}>
+      <div className="space-y-8">
         <label className="flex items-center justify-between gap-4 text-sm">
           On
-          <Switch checked={settings.enabled} onCheckedChange={(enabled) => save({ enabled })} />
+          <span className="flex items-center gap-3">
+            <Switch checked={job.enabled} onCheckedChange={(enabled) => save({ enabled })} />
+            <Button variant="ghost" icon aria-label="Remove" onClick={remove}>
+              <X className="text-muted-foreground size-4" />
+            </Button>
+          </span>
         </label>
-      </SettingsSection>
-      <SettingsSection title="Conversation">
         <div className="space-y-4">
           <ChoiceField
             label="Project"
@@ -101,30 +159,26 @@ export const ResumeWritingSettingsPage = observer(function ResumeWritingSettings
           />
           <Field.Root>
             <Field.Label>Message</Field.Label>
-            <Input value={settings.text} onChange={(event) => save({ text: event.target.value })} />
+            <Input value={job.text} onChange={(event) => save({ text: event.target.value })} />
           </Field.Root>
         </div>
-      </SettingsSection>
-      <SettingsSection title="Send in the same conversation">
         <div className="space-y-4">
           <Field.Root>
             <Field.Label>Clock time</Field.Label>
             <Input
               type="time"
-              value={settings.clockTime}
+              value={job.clockTime}
               onChange={(event) => save({ clockTime: event.target.value })}
             />
           </Field.Root>
           <label className="flex items-center justify-between gap-4 text-sm">
             When the usage window resets
             <Switch
-              checked={settings.onWindowReset}
+              checked={job.onWindowReset}
               onCheckedChange={(onWindowReset) => save({ onWindowReset })}
             />
           </label>
         </div>
-      </SettingsSection>
-      <SettingsSection title="Hand off to another official account">
         <Field.Root>
           <Field.Label>When the current account reaches (%)</Field.Label>
           <Input
@@ -132,7 +186,7 @@ export const ResumeWritingSettingsPage = observer(function ResumeWritingSettings
             min={1}
             max={100}
             placeholder="Off"
-            value={settings.quotaPercent ?? ''}
+            value={job.quotaPercent ?? ''}
             onChange={(event) => {
               const parsed = Math.round(Number(event.target.value));
               if (event.target.value === '' || !Number.isFinite(parsed)) {
@@ -147,14 +201,12 @@ export const ResumeWritingSettingsPage = observer(function ResumeWritingSettings
             left, and sends it the handoff.
           </Field.Description>
         </Field.Root>
-      </SettingsSection>
-      <SettingsSection>
         <label className="flex items-center justify-between gap-4 text-sm">
           Ask before sending
-          <Switch checked={settings.confirm} onCheckedChange={(confirm) => save({ confirm })} />
+          <Switch checked={job.confirm} onCheckedChange={(confirm) => save({ confirm })} />
         </label>
-      </SettingsSection>
-    </div>
+      </div>
+    </SettingsSection>
   );
 });
 
