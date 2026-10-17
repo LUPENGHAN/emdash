@@ -12,6 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { frontmatterField } from './skill-library';
 
 export type SkillSourceRecord = {
   name: string;
@@ -30,11 +31,30 @@ export type SkillSourceView = SkillSourceRecord & {
   updateAvailable: boolean;
 };
 
+/** The signed-in github.com account's token, or null to go anonymous. */
+export type GitHubTokenSource = () => Promise<string | null>;
+
 type RemoteSnapshot = {
   commit: string;
   rootTree: string;
   entries: { path: string; type: string; sha: string | null; mode: string | null }[];
 };
+
+export type GitHubSkillCandidate = {
+  /** Folder inside the repository holding SKILL.md; empty for the root. */
+  path: string;
+  /** The name it installs under: SKILL.md's `name`, else the folder's name. */
+  name: string;
+  description: string;
+  /** isSafeSkillName(name); unsafe ones are listed but cannot be picked. */
+  valid: boolean;
+  existsInLibrary: boolean;
+  /** Symlinks and submodules inside it that will not be copied. */
+  skipped: string[];
+};
+
+/** Repositories can hold thousands of skills; a scan lists at most this many. */
+const MAX_SCAN_SKILLS = 50;
 
 const SOURCES_FILE = path.join('.emdash', 'sources.json');
 const UPDATE_DIR = path.join('.emdash', 'skill-update');
@@ -115,13 +135,14 @@ export async function listSkillSources(libraryDir: string): Promise<SkillSourceV
 export async function setSkillSource(
   libraryDir: string,
   name: string,
-  url: string
+  url: string,
+  token: string | null = null
 ): Promise<SkillSourceView> {
   const folder = skillFolder(libraryDir, name);
   const parsed = parseGitHubSkillUrl(url);
   if (!parsed)
     throw new Error('Paste a GitHub link, like https://github.com/owner/repo/tree/main/path');
-  const resolved = await resolveRefAndPath(parsed);
+  const resolved = await resolveRefAndPath(parsed, token);
   const hash = await folderHash(folder).catch(() => null);
   const localTree = hash ? await gitTreeId(folder).catch(() => null) : null;
   return mutateSources(libraryDir, (records) => {
@@ -141,7 +162,10 @@ export async function setSkillSource(
   });
 }
 
-export async function checkSkillUpdates(libraryDir: string): Promise<SkillSourceView[]> {
+export async function checkSkillUpdates(
+  libraryDir: string,
+  token: string | null = null
+): Promise<SkillSourceView[]> {
   const records = await mutateSources(libraryDir, async (current) => {
     await importKnownSources(libraryDir, current);
     return Object.values(current).map((record) => ({ ...record }));
@@ -156,7 +180,7 @@ export async function checkSkillUpdates(libraryDir: string): Promise<SkillSource
     [...byRepo.values()].map(async (group) => {
       const first = group[0];
       if (!first) return [];
-      const snapshot = await remoteSnapshot(first.repo, first.ref);
+      const snapshot = await remoteSnapshot(first.repo, first.ref, token);
       return group.map((record) => ({ record, tree: treeAt(snapshot, record.path) }));
     })
   );
@@ -181,7 +205,8 @@ export async function checkSkillUpdates(libraryDir: string): Promise<SkillSource
 export async function updateSkill(
   libraryDir: string,
   name: string,
-  force: boolean
+  force: boolean,
+  token: string | null = null
 ): Promise<{ updated: boolean; dirty: boolean; files: string[] }> {
   const folder = skillFolder(libraryDir, name);
   const record = await mutateSources(libraryDir, (records) =>
@@ -190,7 +215,7 @@ export async function updateSkill(
   if (!record) throw new Error(`No source is set for ${name}`);
   const hash = await folderHash(folder).catch(() => null);
   const dirty = Boolean(record.installedHash && hash && hash !== record.installedHash);
-  const snapshot = await remoteSnapshot(record.repo, record.ref);
+  const snapshot = await remoteSnapshot(record.repo, record.ref, token);
   const tree = treeAt(snapshot, record.path);
   const files = filesUnder(snapshot, record.path);
   const names = files.map((file) => file.path);
@@ -201,18 +226,7 @@ export async function updateSkill(
   const scratch = await mkdtemp(path.join(updateRoot, `${name}-`));
   try {
     const download = path.join(scratch, 'download');
-    for (const file of files) {
-      const target = remoteFileTarget(download, file.path);
-      const response = await fetch(
-        `https://raw.githubusercontent.com/${record.repo}/${snapshot.commit}/${encodePath(record.path ? `${record.path}/${file.path}` : file.path)}`,
-        { signal: AbortSignal.timeout(20000), headers: { 'user-agent': 'emdash' } }
-      );
-      if (!response.ok) throw new Error(`Could not download ${file.path} (${response.status})`);
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, Buffer.from(await response.arrayBuffer()));
-      // Scripts stay runnable (and the folder's Git tree id matches the remote's).
-      if (file.mode === '100755') await chmod(target, 0o755);
-    }
+    await downloadSkillFiles(record.repo, files, download, token);
     return await mutateSources(libraryDir, async (records) => {
       await replaceFolder(download, folder, path.join(scratch, 'previous'));
       const stored = records[name];
@@ -348,7 +362,8 @@ function blank(name: string, repo: string, skillPath: string, ref: string): Skil
 
 /** The shortest leading run of segments GitHub knows as a ref; branch names can hold `/`. */
 async function resolveRefAndPath(
-  parsed: Pick<SkillSourceRecord, 'repo' | 'path' | 'ref'>
+  parsed: Pick<SkillSourceRecord, 'repo' | 'path' | 'ref'>,
+  token: string | null
 ): Promise<Pick<SkillSourceRecord, 'repo' | 'path' | 'ref'>> {
   if (parsed.ref === 'HEAD' || !parsed.path) return parsed;
   const segments = [parsed.ref, ...parsed.path.split('/')];
@@ -356,30 +371,62 @@ async function resolveRefAndPath(
     const ref = segments.slice(0, count).join('/');
     const commit = await fetchGitHub(
       `https://api.github.com/repos/${parsed.repo}/commits/${encodeURIComponent(ref)}`,
-      { missingOk: true }
+      { missingOk: true, token }
     );
     if (commit) return { repo: parsed.repo, ref, path: segments.slice(count).join('/') };
   }
   return parsed;
 }
 
-async function remoteSnapshot(repo: string, ref: string): Promise<RemoteSnapshot> {
-  const branch = ref === 'HEAD' ? await defaultBranch(repo) : ref;
+async function remoteSnapshot(
+  repo: string,
+  ref: string,
+  token: string | null
+): Promise<RemoteSnapshot> {
+  const branch = ref === 'HEAD' ? await defaultBranch(repo, token) : ref;
   const commit = await fetchGitHub(
-    `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(branch)}`
+    `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(branch)}`,
+    { token }
   );
   const commitSha = typeof commit?.sha === 'string' ? commit.sha : null;
   const rootTree = (commit?.commit as { tree?: { sha?: string } } | undefined)?.tree?.sha;
   if (!commitSha || !rootTree) throw new Error(`Could not read ${branch} in ${repo}`);
+  return readTree(repo, commitSha, rootTree, token);
+}
+
+/** The snapshot of one exact commit — installs read what the scan showed. */
+async function snapshotAtCommit(
+  repo: string,
+  commit: string,
+  token: string | null
+): Promise<RemoteSnapshot> {
   const body = await fetchGitHub(
-    `https://api.github.com/repos/${repo}/git/trees/${rootTree}?recursive=1`
+    `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(commit)}`,
+    { token }
+  );
+  const rootTree = (body?.commit as { tree?: { sha?: string } } | undefined)?.tree?.sha;
+  if (typeof body?.sha !== 'string' || !rootTree) {
+    throw new Error(`Could not read commit ${commit} in ${repo}`);
+  }
+  return readTree(repo, body.sha, rootTree, token);
+}
+
+async function readTree(
+  repo: string,
+  commit: string,
+  rootTree: string,
+  token: string | null
+): Promise<RemoteSnapshot> {
+  const body = await fetchGitHub(
+    `https://api.github.com/repos/${repo}/git/trees/${rootTree}?recursive=1`,
+    { token }
   );
   if (body?.truncated === true) {
     throw new Error(`${repo} has too many files for GitHub to list in one request`);
   }
   const list = Array.isArray(body?.tree) ? body.tree : [];
   return {
-    commit: commitSha,
+    commit,
     rootTree,
     entries: list.flatMap((entry) => {
       const row = entry as { path?: unknown; type?: unknown; sha?: unknown; mode?: unknown };
@@ -407,13 +454,14 @@ function treeAt(snapshot: RemoteSnapshot, treePath: string): string | null {
 function filesUnder(
   snapshot: RemoteSnapshot,
   treePath: string
-): { path: string; mode: string | null }[] {
+): { path: string; mode: string | null; sha: string | null }[] {
   const prefix = treePath ? `${treePath}/` : '';
   return snapshot.entries.flatMap((entry) => {
-    if (entry.type !== 'blob') return [];
+    // Symlinks (120000) are not files to copy; submodules are not blobs at all.
+    if (entry.type !== 'blob' || entry.mode === '120000') return [];
     if (prefix && !entry.path.startsWith(prefix)) return [];
     const relative = entry.path.slice(prefix.length);
-    return relative ? [{ path: relative, mode: entry.mode }] : [];
+    return relative ? [{ path: relative, mode: entry.mode, sha: entry.sha }] : [];
   });
 }
 
@@ -477,10 +525,10 @@ function gitObjectId(type: 'blob' | 'tree', content: Buffer): Buffer {
 
 const branches = new Map<string, string>();
 
-async function defaultBranch(repo: string): Promise<string> {
+async function defaultBranch(repo: string, token: string | null): Promise<string> {
   const cached = branches.get(repo);
   if (cached) return cached;
-  const body = await fetchGitHub(`https://api.github.com/repos/${repo}`);
+  const body = await fetchGitHub(`https://api.github.com/repos/${repo}`, { token });
   const branch = typeof body?.default_branch === 'string' ? body.default_branch : 'main';
   branches.set(repo, branch);
   return branch;
@@ -519,16 +567,25 @@ async function readJson(file: string): Promise<Record<string, unknown>> {
   }
 }
 
-/** Throws on HTTP errors; with `missingOk`, a 404 or 422 (unknown ref) is null instead. */
+/**
+ * Throws on HTTP errors; with `missingOk`, a 404 or 422 (unknown ref) is null instead.
+ * A token goes only to `api.github.com`, never to a URL that arrived by accident.
+ */
 async function fetchGitHub(
   url: string,
-  options: { missingOk?: boolean } = {}
+  options: { missingOk?: boolean; token?: string | null } = {}
 ): Promise<Record<string, unknown> | null> {
+  const token =
+    options.token && new URL(url).origin === 'https://api.github.com' ? options.token : null;
   let response: Response;
   try {
     response = await fetch(url, {
       signal: AbortSignal.timeout(15000),
-      headers: { accept: 'application/vnd.github+json', 'user-agent': 'emdash' },
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'emdash',
+        ...(token && { authorization: `Bearer ${token}` }),
+      },
     });
   } catch (error) {
     throw new Error(
@@ -543,6 +600,15 @@ async function fetchGitHub(
     ) {
       throw new Error('GitHub rate limit reached; try again later');
     }
+    if (response.status === 404) {
+      throw new Error(
+        `GitHub returned 404 for ${new URL(url).pathname}. ${
+          token
+            ? 'The repository does not exist, or this account cannot see it.'
+            : 'If the repository is private, sign in to GitHub in Settings → Accounts.'
+        }`
+      );
+    }
     throw new Error(`GitHub returned ${response.status} for ${new URL(url).pathname}`);
   }
   const body = (await response.json()) as unknown;
@@ -554,6 +620,188 @@ function dirnamePosix(file: string): string {
   return index === -1 ? '' : file.slice(0, index);
 }
 
-function encodePath(file: string): string {
-  return file.split('/').map(encodeURIComponent).join('/');
+/** A file's content from the GitHub blobs API; raw URLs do not serve private repositories. */
+async function downloadBlob(repo: string, sha: string, token: string | null): Promise<Buffer> {
+  const body = await fetchGitHub(`https://api.github.com/repos/${repo}/git/blobs/${sha}`, {
+    token,
+  });
+  if (body?.encoding !== 'base64' || typeof body.content !== 'string') {
+    throw new Error(`GitHub sent an unreadable file (${sha})`);
+  }
+  return Buffer.from(body.content, 'base64');
+}
+
+/** Writes a skill's files from a snapshot into `dest`; returns the paths written. */
+async function downloadSkillFiles(
+  repo: string,
+  files: { path: string; sha: string | null; mode: string | null }[],
+  dest: string,
+  token: string | null
+): Promise<string[]> {
+  const written: string[] = [];
+  for (const file of files) {
+    if (!file.sha) throw new Error(`GitHub did not list a content hash for ${file.path}`);
+    const target = remoteFileTarget(dest, file.path);
+    const content = await downloadBlob(repo, file.sha, token);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, content);
+    // Scripts stay runnable (and the folder's Git tree id matches the remote's).
+    if (file.mode === '100755') await chmod(target, 0o755);
+    written.push(file.path);
+  }
+  return written;
+}
+
+/**
+ * Lists the skills inside a GitHub link — every folder under the linked path that
+ * holds a SKILL.md. Nested SKILL.md files belong to the outer skill. Names come
+ * from frontmatter (else the folder's), so the UI can show and validate them.
+ */
+export async function scanGitHubSkills(
+  libraryDir: string,
+  url: string,
+  token: string | null
+): Promise<{
+  repo: string;
+  ref: string;
+  commit: string;
+  truncated: boolean;
+  skills: GitHubSkillCandidate[];
+}> {
+  const parsed = parseGitHubSkillUrl(url);
+  if (!parsed) throw new Error('Paste a GitHub link, like https://github.com/owner/repo');
+  const { repo, ref, path: rootPath } = await resolveRefAndPath(parsed, token);
+  const snapshot = await remoteSnapshot(repo, ref, token);
+  const prefix = rootPath ? `${rootPath}/` : '';
+  const skillFolders = snapshot.entries
+    .filter(
+      (entry) =>
+        entry.type === 'blob' &&
+        (entry.path === 'SKILL.md' || entry.path.endsWith('/SKILL.md')) &&
+        (!prefix || entry.path.startsWith(prefix))
+    )
+    .map((entry) => (entry.path === 'SKILL.md' ? '' : entry.path.slice(0, -'/SKILL.md'.length)))
+    .sort();
+  if (skillFolders.length === 0) {
+    throw new Error(`No SKILL.md found under ${repo}/${rootPath}`);
+  }
+  // A folder inside another skill's folder is that skill's own file, not a second one.
+  const outermost: string[] = [];
+  for (const folder of skillFolders) {
+    if (outermost.some((kept) => kept === '' || folder.startsWith(`${kept}/`))) continue;
+    outermost.push(folder);
+  }
+  const truncated = outermost.length > MAX_SCAN_SKILLS;
+  const skills: GitHubSkillCandidate[] = [];
+  for (const folder of outermost.slice(0, MAX_SCAN_SKILLS)) {
+    const skillMd = folder ? `${folder}/SKILL.md` : 'SKILL.md';
+    const entry = snapshot.entries.find((candidate) => candidate.path === skillMd);
+    if (!entry?.sha) continue;
+    const markdown = (await downloadBlob(repo, entry.sha, token)).toString('utf8');
+    const folderPrefix = folder ? `${folder}/` : prefix;
+    const skipped = snapshot.entries
+      .filter(
+        (candidate) =>
+          candidate.path.startsWith(folderPrefix) &&
+          candidate.path.slice(folderPrefix.length) &&
+          (candidate.mode === '120000' || candidate.type === 'commit')
+      )
+      .map((candidate) => candidate.path.slice(folderPrefix.length));
+    const frontName = frontmatterField(markdown, 'name').trim();
+    const folderName = folder
+      ? folder.slice(folder.lastIndexOf('/') + 1)
+      : repo.slice(repo.lastIndexOf('/') + 1);
+    const name = frontName || folderName;
+    const existsInLibrary = await lstat(path.join(libraryDir, name))
+      .then(() => true)
+      .catch(() => false);
+    skills.push({
+      path: folder,
+      name,
+      description: frontmatterField(markdown, 'description'),
+      valid: isSafeSkillName(name),
+      existsInLibrary,
+      skipped,
+    });
+  }
+  return { repo, ref, commit: snapshot.commit, truncated, skills };
+}
+
+/**
+ * Installs picked skills from the commit the scan saw, through a scratch folder so a
+ * failed download never leaves half a skill in the library. One failure does not
+ * stop the others.
+ */
+export async function installGitHubSkills(
+  libraryDir: string,
+  input: {
+    repo: string;
+    ref: string;
+    /** The commit the scan saw, so the install matches what the user picked from. */
+    commit: string;
+    picks: { path: string; name: string; overwrite: boolean }[];
+  },
+  token: string | null
+): Promise<{ installed: string[]; skipped: { name: string; reason: string }[] }> {
+  const snapshot = await snapshotAtCommit(input.repo, input.commit, token);
+  const installed: string[] = [];
+  const skipped: { name: string; reason: string }[] = [];
+  for (const pick of input.picks) {
+    try {
+      if (!isSafeSkillName(pick.name)) {
+        skipped.push({ name: pick.name, reason: 'invalid name' });
+        continue;
+      }
+      const folder = skillFolder(libraryDir, pick.name);
+      const currentHash = await folderHash(folder).catch(() => null);
+      if (currentHash !== null && !pick.overwrite) {
+        skipped.push({ name: pick.name, reason: 'already in the library' });
+        continue;
+      }
+      if (currentHash !== null && pick.overwrite) {
+        const record = await mutateSources(libraryDir, (records) =>
+          records[pick.name] ? { ...records[pick.name] } : null
+        );
+        if (record?.installedHash && currentHash !== record.installedHash) {
+          skipped.push({ name: pick.name, reason: 'has local edits' });
+          continue;
+        }
+      }
+      const tree = treeAt(snapshot, pick.path);
+      const files = filesUnder(snapshot, pick.path);
+      if (!tree || files.length === 0) {
+        throw new Error(`No files found under ${pick.path || 'the repository root'}`);
+      }
+      const updateRoot = path.join(libraryDir, UPDATE_DIR);
+      await mkdir(updateRoot, { recursive: true });
+      const scratch = await mkdtemp(path.join(updateRoot, `${pick.name}-`));
+      let installedHash: string;
+      try {
+        const download = path.join(scratch, 'download');
+        await downloadSkillFiles(input.repo, files, download, token);
+        await replaceFolder(download, folder, path.join(scratch, 'previous'));
+        installedHash = await folderHash(folder);
+      } finally {
+        await rm(scratch, { recursive: true, force: true });
+      }
+      await mutateSources(libraryDir, (records) => {
+        records[pick.name] = {
+          name: pick.name,
+          repo: input.repo,
+          path: pick.path,
+          ref: input.ref,
+          installedTree: tree,
+          remoteTree: tree,
+          installedHash,
+        };
+      });
+      installed.push(pick.name);
+    } catch (error) {
+      skipped.push({
+        name: pick.name,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { installed, skipped };
 }

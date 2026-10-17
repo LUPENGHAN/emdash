@@ -228,7 +228,8 @@ async function writeExcludeBlock(workspacePath: string, entries: readonly string
   await writeFile(excludeFile, next);
 }
 
-function frontmatterField(markdown: string, field: string): string {
+/** Reads one `field: value` line from a skill's frontmatter, unquoted. */
+export function frontmatterField(markdown: string, field: string): string {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
   if (!match) return '';
   const line = match[1]!.split(/\r?\n/).find((l) => l.startsWith(`${field}:`));

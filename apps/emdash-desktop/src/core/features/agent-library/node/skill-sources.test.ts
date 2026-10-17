@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   checkSkillUpdates,
   gitTreeId,
+  installGitHubSkills,
   isSafeSkillName,
   parseGitHubSkillUrl,
   remoteFileTarget,
+  scanGitHubSkills,
   setSkillSource,
   skillFolder,
   updateSkill,
@@ -88,7 +90,9 @@ describe('skill name and path safety', () => {
 describe('updateSkill', () => {
   let home: string;
   let libraryDir: string;
-  let tree: { path: string; type: string; sha?: string }[];
+  let requests: { url: string; authorization?: string }[];
+  let blobs: Record<string, string>;
+  let tree: { path: string; type: string; sha?: string; mode?: string }[];
   let truncated: boolean;
 
   beforeEach(async () => {
@@ -97,27 +101,44 @@ describe('updateSkill', () => {
     await mkdir(path.join(libraryDir, 'demo'), { recursive: true });
     await writeFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'old');
     truncated = false;
+    requests = [];
+    blobs = { 'sha-skill': 'new SKILL.md', 'sha-guide': 'new guide' };
     tree = [
       { path: 'skills', type: 'tree', sha: 'tree-skills' },
       { path: 'skills/demo', type: 'tree', sha: 'tree-demo' },
-      { path: 'skills/demo/SKILL.md', type: 'blob' },
-      { path: 'skills/demo/docs/guide.md', type: 'blob' },
+      { path: 'skills/demo/SKILL.md', type: 'blob', sha: 'sha-skill' },
+      { path: 'skills/demo/docs/guide.md', type: 'blob', sha: 'sha-guide' },
     ];
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: string) => {
+      vi.fn(async (input: string, init?: RequestInit) => {
         const url = new URL(input);
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        requests.push({ url: url.toString(), authorization: headers.authorization });
         if (url.pathname === '/repos/o/r/commits/main') {
+          return Response.json({ sha: 'commit-1', commit: { tree: { sha: 'root' } } });
+        }
+        if (url.pathname === '/repos/o/r/commits/commit-1') {
           return Response.json({ sha: 'commit-1', commit: { tree: { sha: 'root' } } });
         }
         if (url.pathname.startsWith('/repos/o/r/commits/')) {
           return new Response('{}', { status: 422 });
         }
+        if (url.pathname === '/repos/o/r') {
+          return Response.json({ default_branch: 'main' });
+        }
         if (url.pathname === '/repos/o/r/git/trees/root') {
           return Response.json({ tree, truncated });
         }
-        if (url.hostname === 'raw.githubusercontent.com') {
-          return new Response(`new ${url.pathname}`);
+        const blob = /^\/repos\/o\/r\/git\/blobs\/([^/]+)$/.exec(url.pathname);
+        if (blob) {
+          const content = blobs[blob[1]!];
+          return content === undefined
+            ? new Response('{}', { status: 404 })
+            : Response.json({
+                encoding: 'base64',
+                content: Buffer.from(content, 'utf8').toString('base64'),
+              });
         }
         return new Response('{}', { status: 404 });
       })
@@ -137,9 +158,7 @@ describe('updateSkill', () => {
       dirty: false,
       files: ['SKILL.md', 'docs/guide.md'],
     });
-    expect(await readFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'utf8')).toBe(
-      'new /o/r/commit-1/skills/demo/SKILL.md'
-    );
+    expect(await readFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'utf8')).toBe('new SKILL.md');
     const sources = JSON.parse(
       await readFile(path.join(libraryDir, '.emdash', 'sources.json'), 'utf8')
     ) as { skills: Record<string, { installedTree: string; ref: string; path: string }> };
@@ -171,7 +190,7 @@ describe('updateSkill', () => {
   });
 
   it('leaves the folder alone when the remote tree escapes it', async () => {
-    tree.push({ path: 'skills/demo/../../evil.md', type: 'blob' });
+    tree.push({ path: 'skills/demo/../../evil.md', type: 'blob', sha: 'sha-evil' });
     await expect(updateSkill(libraryDir, 'demo', false)).rejects.toThrow(/outside/);
     expect(await readFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'utf8')).toBe('old');
   });
@@ -186,5 +205,353 @@ describe('updateSkill', () => {
     await expect(
       setSkillSource(libraryDir, '../x', 'https://github.com/o/r/tree/main/skills/demo')
     ).rejects.toThrow(/not a valid skill name/);
+  });
+
+  it('sends the account token only when there is one', async () => {
+    requests.length = 0;
+    await checkSkillUpdates(libraryDir, 'tok-1');
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      expect(request.authorization).toBe('Bearer tok-1');
+    }
+    requests.length = 0;
+    await checkSkillUpdates(libraryDir, null);
+    for (const request of requests) {
+      expect(request.authorization).toBeUndefined();
+    }
+  });
+});
+
+type StubEntry = { path: string; type: string; sha?: string; mode?: string };
+
+/** Stubs api.github.com: the repo, commits, one recursive tree, and blobs. */
+function stubGitHub(input: {
+  tree: StubEntry[];
+  blobs: Record<string, string>;
+  truncated?: boolean;
+}) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (urlText: string) => {
+      const url = new URL(urlText);
+      if (url.pathname === '/repos/o/r') return Response.json({ default_branch: 'main' });
+      if (url.pathname === '/repos/o/r/commits/main') {
+        return Response.json({ sha: 'commit-1', commit: { tree: { sha: 'root' } } });
+      }
+      if (url.pathname === '/repos/o/r/commits/commit-1') {
+        return Response.json({ sha: 'commit-1', commit: { tree: { sha: 'root' } } });
+      }
+      if (url.pathname === '/repos/o/r/git/trees/root') {
+        return Response.json({ tree: input.tree, truncated: input.truncated ?? false });
+      }
+      const blob = /^\/repos\/o\/r\/git\/blobs\/([^/]+)$/.exec(url.pathname);
+      if (blob) {
+        const content = input.blobs[blob[1]!];
+        return content === undefined
+          ? new Response('{}', { status: 404 })
+          : Response.json({
+              encoding: 'base64',
+              content: Buffer.from(content, 'utf8').toString('base64'),
+            });
+      }
+      return new Response('{}', { status: 404 });
+    })
+  );
+}
+
+const skillMd = (name: string | null, description: string) =>
+  name === null
+    ? `---\ndescription: ${description}\n---\nBody\n`
+    : `---\nname: ${name}\ndescription: ${description}\n---\nBody\n`;
+
+describe('scanGitHubSkills', () => {
+  let home: string;
+  let libraryDir: string;
+  let tree: StubEntry[];
+  const blobs: Record<string, string> = {
+    'b-root': skillMd('rooty', 'The repository root skill'),
+    'b-cust': skillMd('customer-analysis', 'Analyzes customers'),
+    'b-outer': skillMd(null, 'No name in frontmatter'),
+    'b-inner': skillMd('inner', 'Nested'),
+    'b-weird': skillMd('bad name!', 'Weird'),
+  };
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'skill-scan-'));
+    libraryDir = path.join(home, '.agentskills');
+    // A skill the library already has under the same name.
+    await mkdir(path.join(libraryDir, 'customer-analysis'), { recursive: true });
+    await writeFile(path.join(libraryDir, 'customer-analysis', 'SKILL.md'), 'existing');
+    tree = [
+      { path: '.agents/skills/customer-analysis', type: 'tree', sha: 't-cust' },
+      { path: '.agents/skills/customer-analysis/SKILL.md', type: 'blob', sha: 'b-cust' },
+      {
+        path: '.agents/skills/customer-analysis/linked.md',
+        type: 'blob',
+        sha: 'b-link',
+        mode: '120000',
+      },
+      { path: 'tools/outer', type: 'tree', sha: 't-outer' },
+      { path: 'tools/outer/SKILL.md', type: 'blob', sha: 'b-outer' },
+      { path: 'tools/outer/inner/SKILL.md', type: 'blob', sha: 'b-inner' },
+      { path: 'weird name/SKILL.md', type: 'blob', sha: 'b-weird' },
+    ];
+    stubGitHub({ tree, blobs });
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('lists the outermost skills with names from frontmatter or the folder', async () => {
+    const result = await scanGitHubSkills(libraryDir, 'https://github.com/o/r', null);
+    expect(result).toMatchObject({ repo: 'o/r', ref: 'HEAD', commit: 'commit-1' });
+    expect(result.truncated).toBe(false);
+    expect(result.skills).toEqual([
+      {
+        path: '.agents/skills/customer-analysis',
+        name: 'customer-analysis',
+        description: 'Analyzes customers',
+        valid: true,
+        existsInLibrary: true,
+        skipped: ['linked.md'],
+      },
+      {
+        path: 'tools/outer',
+        name: 'outer',
+        description: 'No name in frontmatter',
+        valid: true,
+        existsInLibrary: false,
+        skipped: [],
+      },
+      {
+        path: 'weird name',
+        name: 'bad name!',
+        description: 'Weird',
+        valid: false,
+        existsInLibrary: false,
+        skipped: [],
+      },
+    ]);
+  });
+
+  it('treats the repository root as one skill when it holds a SKILL.md', async () => {
+    const result = await scanGitHubSkills(libraryDir, 'https://github.com/o/r', null);
+    stubGitHub({
+      tree: [{ path: 'SKILL.md', type: 'blob', sha: 'b-root' }, ...tree],
+      blobs,
+    });
+    const rooted = await scanGitHubSkills(libraryDir, 'https://github.com/o/r', null);
+    expect(result.skills.length).toBeGreaterThan(1);
+    expect(rooted.skills).toEqual([
+      {
+        path: '',
+        name: 'rooty',
+        description: 'The repository root skill',
+        valid: true,
+        existsInLibrary: false,
+        skipped: ['.agents/skills/customer-analysis/linked.md'],
+      },
+    ]);
+  });
+
+  it('throws when the linked folder holds no SKILL.md', async () => {
+    await expect(
+      scanGitHubSkills(libraryDir, 'https://github.com/o/r/tree/main/docs', null)
+    ).rejects.toThrow(/No SKILL.md found under o\/r\/docs/);
+  });
+
+  it('caps the list at fifty skills', async () => {
+    tree = Array.from({ length: 60 }, (_, index) => ({
+      path: `skill-${String(index).padStart(2, '0')}/SKILL.md`,
+      type: 'blob',
+      sha: 'b-root',
+    }));
+    stubGitHub({ tree, blobs });
+    const result = await scanGitHubSkills(libraryDir, 'https://github.com/o/r', null);
+    expect(result.truncated).toBe(true);
+    expect(result.skills).toHaveLength(50);
+  });
+
+  it('names a private-looking 404 differently before and after signing in', async () => {
+    await expect(
+      scanGitHubSkills(libraryDir, 'https://github.com/o/missing', null)
+    ).rejects.toThrow(/sign in to GitHub in Settings → Accounts/);
+    await expect(
+      scanGitHubSkills(libraryDir, 'https://github.com/o/missing', 'tok-1')
+    ).rejects.toThrow(/cannot see it/);
+  });
+});
+
+describe('installGitHubSkills', () => {
+  let home: string;
+  let libraryDir: string;
+  const blobs: Record<string, string> = {
+    'b-cust': skillMd('customer-analysis', 'Analyzes customers'),
+    'b-notes': 'notes body',
+  };
+  const tree: StubEntry[] = [
+    { path: '.agents/skills/customer-analysis', type: 'tree', sha: 't-cust' },
+    { path: '.agents/skills/customer-analysis/SKILL.md', type: 'blob', sha: 'b-cust' },
+    {
+      path: '.agents/skills/customer-analysis/notes.md',
+      type: 'blob',
+      sha: 'b-notes',
+      mode: '100755',
+    },
+    {
+      path: '.agents/skills/customer-analysis/linked.md',
+      type: 'blob',
+      sha: 'b-link',
+      mode: '120000',
+    },
+  ];
+  const picks = { path: '.agents/skills/customer-analysis', name: 'customer-analysis' };
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'skill-install-'));
+    libraryDir = path.join(home, '.agentskills');
+    stubGitHub({ tree, blobs });
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('installs at the scanned commit, without symlinks, and records the source', async () => {
+    const result = await installGitHubSkills(
+      libraryDir,
+      {
+        repo: 'o/r',
+        ref: 'main',
+        commit: 'commit-1',
+        picks: [{ ...picks, overwrite: false }],
+      },
+      null
+    );
+    expect(result.installed).toEqual(['customer-analysis']);
+    expect(result.skipped).toEqual([]);
+    const folder = path.join(libraryDir, 'customer-analysis');
+    expect(await readFile(path.join(folder, 'SKILL.md'), 'utf8')).toContain(
+      'name: customer-analysis'
+    );
+    expect(await readFile(path.join(folder, 'notes.md'), 'utf8')).toBe('notes body');
+    // Symlinks are not copied.
+    await expect(readFile(path.join(folder, 'linked.md'))).rejects.toThrow();
+    const sources = JSON.parse(
+      await readFile(path.join(libraryDir, '.emdash', 'sources.json'), 'utf8')
+    ) as { skills: Record<string, Record<string, unknown>> };
+    expect(sources.skills['customer-analysis']).toMatchObject({
+      repo: 'o/r',
+      path: '.agents/skills/customer-analysis',
+      ref: 'main',
+      installedTree: 't-cust',
+      remoteTree: 't-cust',
+    });
+    expect(sources.skills['customer-analysis']?.installedHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('skips a name the library already has unless overwrite is set', async () => {
+    await mkdir(path.join(libraryDir, 'customer-analysis'), { recursive: true });
+    await writeFile(path.join(libraryDir, 'customer-analysis', 'SKILL.md'), 'existing');
+    const refused = await installGitHubSkills(
+      libraryDir,
+      {
+        repo: 'o/r',
+        ref: 'main',
+        commit: 'commit-1',
+        picks: [{ ...picks, overwrite: false }],
+      },
+      null
+    );
+    expect(refused).toEqual({
+      installed: [],
+      skipped: [{ name: 'customer-analysis', reason: 'already in the library' }],
+    });
+    expect(await readFile(path.join(libraryDir, 'customer-analysis', 'SKILL.md'), 'utf8')).toBe(
+      'existing'
+    );
+    const replaced = await installGitHubSkills(
+      libraryDir,
+      {
+        repo: 'o/r',
+        ref: 'main',
+        commit: 'commit-1',
+        picks: [{ ...picks, overwrite: true }],
+      },
+      null
+    );
+    expect(replaced.installed).toEqual(['customer-analysis']);
+  });
+
+  it('skips an overwrite of a skill with local edits', async () => {
+    await mkdir(path.join(libraryDir, 'customer-analysis'), { recursive: true });
+    await writeFile(
+      path.join(libraryDir, 'customer-analysis', 'SKILL.md'),
+      skillMd('customer-analysis', 'local copy')
+    );
+    await setSkillSource(
+      libraryDir,
+      'customer-analysis',
+      'https://github.com/o/r/tree/main/.agents/skills/customer-analysis'
+    );
+    await writeFile(path.join(libraryDir, 'customer-analysis', 'SKILL.md'), 'edited');
+    const result = await installGitHubSkills(
+      libraryDir,
+      {
+        repo: 'o/r',
+        ref: 'main',
+        commit: 'commit-1',
+        picks: [{ ...picks, overwrite: true }],
+      },
+      null
+    );
+    expect(result.skipped).toEqual([{ name: 'customer-analysis', reason: 'has local edits' }]);
+    expect(await readFile(path.join(libraryDir, 'customer-analysis', 'SKILL.md'), 'utf8')).toBe(
+      'edited'
+    );
+  });
+
+  it('skips invalid names and keeps installing the others', async () => {
+    const result = await installGitHubSkills(
+      libraryDir,
+      {
+        repo: 'o/r',
+        ref: 'main',
+        commit: 'commit-1',
+        picks: [
+          { path: 'x', name: 'bad name!', overwrite: false },
+          { ...picks, overwrite: false },
+        ],
+      },
+      null
+    );
+    expect(result.installed).toEqual(['customer-analysis']);
+    expect(result.skipped).toEqual([{ name: 'bad name!', reason: 'invalid name' }]);
+  });
+
+  it('leaves the previous folder when a download fails mid-way', async () => {
+    await mkdir(path.join(libraryDir, 'customer-analysis'), { recursive: true });
+    await writeFile(path.join(libraryDir, 'customer-analysis', 'SKILL.md'), 'existing');
+    const broken = [...tree];
+    broken[1] = { path: '.agents/skills/customer-analysis/SKILL.md', type: 'blob', sha: 'gone' };
+    stubGitHub({ tree: broken, blobs });
+    const result = await installGitHubSkills(
+      libraryDir,
+      {
+        repo: 'o/r',
+        ref: 'main',
+        commit: 'commit-1',
+        picks: [{ ...picks, overwrite: true }],
+      },
+      null
+    );
+    expect(result.installed).toEqual([]);
+    expect(result.skipped[0]?.name).toBe('customer-analysis');
+    expect(await readFile(path.join(libraryDir, 'customer-analysis', 'SKILL.md'), 'utf8')).toBe(
+      'existing'
+    );
   });
 });
