@@ -64,6 +64,7 @@ async function createDiffSides(binder: MonacoFacetBinder, name: string, modified
     status: { kind: 'ready' },
     dirty: false,
     conflicted: false,
+    recoveredStale: false,
     saving: false,
     readOnly: false,
     handleFor: (facet) => (facet.kind === 'git' ? originalHandle : modifiedHandle),
@@ -280,6 +281,7 @@ it.each([true, false])(
       status: { kind: 'ready' },
       dirty: false,
       conflicted: false,
+      recoveredStale: false,
       saving: false,
       get readOnly() {
         return permissions.readOnly;

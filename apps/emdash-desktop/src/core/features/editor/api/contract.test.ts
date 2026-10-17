@@ -13,14 +13,18 @@ describe('editorContract', () => {
       'lsp',
       'saveBuffer',
       'clearBuffer',
+      'clearBuffers',
       'listBuffers',
     ]);
   });
 
   it('keys buffers by ResourceUri with no workspace identity', () => {
-    expect(editorContract.saveBuffer.input.parse({ uri, content: 'draft' })).toEqual({
+    expect(
+      editorContract.saveBuffer.input.parse({ uri, content: 'draft', baseHash: null })
+    ).toEqual({
       uri,
       content: 'draft',
+      baseHash: null,
     });
     expect(() =>
       editorContract.saveBuffer.input.parse({
@@ -37,6 +41,7 @@ describe('editorContract', () => {
   it('scopes recovery enumeration by an optional root ResourceUri', () => {
     expect(editorContract.listBuffers.input.parse({ root: rootUri })).toEqual({ root: rootUri });
     expect(editorContract.listBuffers.input.parse({})).toEqual({});
+    expect(editorContract.clearBuffers.input.parse({ root: rootUri })).toEqual({ root: rootUri });
   });
 });
 

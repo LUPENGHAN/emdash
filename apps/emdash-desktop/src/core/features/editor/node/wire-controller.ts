@@ -11,8 +11,10 @@ export type CreateEditorWireControllerOptions = Readonly<{
 export function createEditorWireController(options: CreateEditorWireControllerOptions): Controller {
   return createController(editorContract, {
     lsp: createEditorLspImpl(options, editorContract.lsp),
-    saveBuffer: ({ uri, content }) => options.editorBuffer.saveBuffer(uri, content),
+    saveBuffer: ({ uri, content, baseHash }) =>
+      options.editorBuffer.saveBuffer(uri, content, baseHash),
     clearBuffer: ({ uri }) => options.editorBuffer.clearBuffer(uri),
+    clearBuffers: ({ root }) => options.editorBuffer.clearBuffers(root),
     listBuffers: ({ root }) => options.editorBuffer.listBuffers(root),
   });
 }

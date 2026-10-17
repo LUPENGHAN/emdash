@@ -11,21 +11,21 @@ describe('createEditorWireController', () => {
     const editorBuffer = {
       saveBuffer: vi.fn(async () => undefined),
       clearBuffer: vi.fn(async () => undefined),
-      listBuffers: vi.fn(async () => [{ uri, content: 'recovered' }]),
+      listBuffers: vi.fn(async () => [{ uri, content: 'recovered', baseHash: null, updatedAt: 1 }]),
     };
     const controller = createEditorWireController({
       editorBuffer: editorBuffer as never,
       runtimes: { client: vi.fn() },
     });
 
-    await controller.call('saveBuffer', { uri, content: 'draft' });
-    expect(editorBuffer.saveBuffer).toHaveBeenCalledWith(uri, 'draft');
+    await controller.call('saveBuffer', { uri, content: 'draft', baseHash: null });
+    expect(editorBuffer.saveBuffer).toHaveBeenCalledWith(uri, 'draft', null);
 
     await controller.call('clearBuffer', { uri });
     expect(editorBuffer.clearBuffer).toHaveBeenCalledWith(uri);
 
     await expect(controller.call('listBuffers', { root: rootUri })).resolves.toEqual([
-      { uri, content: 'recovered' },
+      { uri, content: 'recovered', baseHash: null, updatedAt: 1 },
     ]);
     expect(editorBuffer.listBuffers).toHaveBeenCalledWith(rootUri);
 
