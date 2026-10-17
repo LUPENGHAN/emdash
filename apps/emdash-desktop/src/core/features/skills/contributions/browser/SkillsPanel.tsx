@@ -21,6 +21,7 @@ export function SkillsPanel({ host, header }: SkillsPanelProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const skills = useSkills({ host, searchQuery });
   const openCreateSkillModal = useOpenModal('createSkillModal');
+  const openImportGitHubSkillModal = useOpenModal('importGitHubSkillModal');
   const sshConnectionId = sshConnectionIdOf(host);
 
   const handleOpenTerminal = useCallback(
@@ -44,6 +45,7 @@ export function SkillsPanel({ host, header }: SkillsPanelProps) {
       onRefresh={skills.refresh}
       isRefreshing={skills.isRefreshing}
       onCreateSkill={() => void openCreateSkillModal({ host })}
+      onImportFromGitHub={() => void openImportGitHubSkillModal()}
     />
   );
 
