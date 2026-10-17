@@ -242,6 +242,27 @@ describe('buildSourceLaunch', () => {
     expect(other.env.CODEX_PATH).toBeUndefined();
   });
 
+  it("keeps Codex's web search tool off unless the model has it", () => {
+    // Default: nothing listed with web search — disabled in both launch paths.
+    const launch = buildSourceLaunch('codex', provider, 'sk-1', 'moonshotai/kimi-k3')!;
+    expect(launch.args).toContain('web_search="disabled"');
+    expect(JSON.parse(launch.env.CODEX_CONFIG!).web_search).toBe('disabled');
+    expect(launch.args.every((arg) => !/\s/.test(arg))).toBe(true);
+
+    // A model listed in webSearchModels keeps the tool.
+    const searching: ModelProvider = { ...provider, webSearchModels: ['moonshotai/kimi-k3'] };
+    const enabled = buildSourceLaunch('codex', searching, 'sk-1', 'moonshotai/kimi-k3')!;
+    expect(enabled.args.join(' ')).not.toContain('web_search');
+    expect(JSON.parse(enabled.env.CODEX_CONFIG!).web_search).toBeUndefined();
+    expect(enabled.args.every((arg) => !/\s/.test(arg))).toBe(true);
+
+    // No model chosen is still disabled: the launch must not depend on which
+    // model the conversation ends up with.
+    const bare = buildSourceLaunch('codex', searching, 'sk-1')!;
+    expect(bare.args).toContain('web_search="disabled"');
+    expect(JSON.parse(bare.env.CODEX_CONFIG!).web_search).toBe('disabled');
+  });
+
   it('reads and writes context windows the way people type them', () => {
     expect(parseContextWindow('1m')).toBe(1_000_000);
     expect(parseContextWindow(' 256K ')).toBe(256_000);

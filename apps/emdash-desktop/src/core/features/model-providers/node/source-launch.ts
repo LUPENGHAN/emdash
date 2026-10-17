@@ -91,6 +91,11 @@ export function buildSourceLaunch(
         env_key: PROVIDER_KEY_ENV,
         wire_api: 'responses',
       };
+
+      // Codex sends a web_search tool with every request; gateways that lack it
+      // reject the whole request ("no deployment compatible"), so it stays off
+      // unless the model has it.
+      const webSearch = model && provider.webSearchModels?.includes(model) ? null : 'disabled';
       return {
         env: {
           [PROVIDER_KEY_ENV]: apiKey,
@@ -99,6 +104,7 @@ export function buildSourceLaunch(
             model_provider: key,
             model_providers: { [key]: providerConfig },
             ...(model && { model }),
+            ...(webSearch && { web_search: webSearch }),
             ...(contextWindow && { model_context_window: contextWindow }),
             ...(catalog && { model_catalog_json: catalogFile }),
           }),
@@ -131,6 +137,7 @@ export function buildSourceLaunch(
             codexOverride(`model_providers.${key}.${field}`, value)
           ),
           ...(model ? codexOverride('model', model) : []),
+          ...(webSearch ? codexOverride('web_search', webSearch) : []),
           ...(contextWindow ? codexOverride('model_context_window', contextWindow) : []),
           ...(catalog ? codexOverride('model_catalog_json', catalogFile!) : []),
         ],
