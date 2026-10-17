@@ -1,5 +1,14 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -566,7 +575,7 @@ describe('GitCheckout', () => {
     try {
       await writeFile(path.join(repo, 'tracked.txt'), 'dirty\n', 'utf8');
       await writeFile(path.join(repo, 'junk.txt'), 'junk\n', 'utf8');
-      const revertResult = await checkout.revertAll();
+      const revertResult = await checkout.revertAll({ includeUntracked: true });
       expect(revertResult.success).toBe(true);
       const model = okStatus(await checkout.getStatus());
       expect(model.entries).toEqual({});
@@ -574,4 +583,39 @@ describe('GitCheckout', () => {
       await cleanup();
     }
   });
+
+  it('keeps untracked files when includeUntracked is false', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      await writeFile(path.join(repo, 'tracked.txt'), 'dirty\n', 'utf8');
+      await writeFile(path.join(repo, 'junk.txt'), 'junk\n', 'utf8');
+      const revertResult = await checkout.revertAll({ includeUntracked: false });
+      expect(revertResult.success).toBe(true);
+      await expect(readFile(path.join(repo, 'tracked.txt'), 'utf8')).resolves.toBe('before\n');
+      await expect(readFile(path.join(repo, 'junk.txt'), 'utf8')).resolves.toBe('junk\n');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'keeps untracked symlinks while cleaning other untracked files',
+    async () => {
+      const { repo, checkout, cleanup } = await makeCheckout();
+      try {
+        await writeFile(path.join(repo, 'junk.txt'), 'junk\n', 'utf8');
+        await symlink(tmpdir(), path.join(repo, 'linked'));
+        const revertResult = await checkout.revertAll({ includeUntracked: true });
+        expect(revertResult.success).toBe(true);
+        await expect(readFile(path.join(repo, 'junk.txt'), 'utf8')).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+        // An untracked `node_modules`-style link survives the clean.
+        const stats = await lstat(path.join(repo, 'linked'));
+        expect(stats.isSymbolicLink()).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    }
+  );
 });

@@ -177,8 +177,10 @@ export class CheckoutResource {
     return result;
   }
 
-  async revertAll(_context: CheckoutMutationContext<'revertAll'>) {
-    const result = await this.execute(() => this.commands.revertAll());
+  async revertAll(context: CheckoutMutationContext<'revertAll'>) {
+    const result = await this.execute(() =>
+      this.commands.revertAll({ includeUntracked: context.input.includeUntracked })
+    );
     if (result.success) this.contentChanged();
     return result;
   }

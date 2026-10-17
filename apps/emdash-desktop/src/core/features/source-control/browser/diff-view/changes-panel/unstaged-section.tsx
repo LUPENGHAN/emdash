@@ -1,8 +1,11 @@
+import { encodeResourceUri } from '@emdash/core/primitives/path/api';
 import type { GitChange } from '@emdash/core/runtimes/git/api';
 import { EmptyState } from '@emdash/ui/react/components';
 import { Button, toast } from '@emdash/ui/react/primitives';
 import { Plus, Undo2 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
+import { getEditorClient } from '@core/features/editor/api/browser/client';
+import { openFileStore } from '@core/features/editor/api/browser/open-file-store/open-file-store';
 import { gitCheckoutStoreToken } from '@core/features/source-control/contributions/browser/workspace-store-tokens';
 import { formatErrorType } from '@core/features/tasks/api/browser/utils';
 import {
@@ -10,8 +13,8 @@ import {
   useWorkspace,
 } from '@core/features/workbench/api/browser/task-composition-context';
 import { useOpenModal } from '@core/manifests/browser/modal-api';
-import { HEAD_REF } from '@core/primitives/git/api';
-import { commitRef } from '@core/primitives/git/api';
+import { hostFileRefFromNativePath } from '@core/primitives/desktop-runtime/api';
+import { commitRef, HEAD_REF } from '@core/primitives/git/api';
 import { activeDiffEntry } from '../pane-selectors';
 import { ActionCard } from './components/action-card';
 import { ChangesListOrTree } from './components/changes-list-or-tree';
@@ -121,17 +124,58 @@ export const UnstagedSectionBody = observer(function UnstagedSectionBody() {
 
   const handleDiscardAll = () => {
     void (async () => {
+      // Same untracked heuristic the line-count enrichment uses: an "added"
+      // entry with no additions has no git content yet.
+      const untracked = changes.filter(
+        (change) => change.status === 'added' && change.additions === 0
+      );
+      const trackedCount = changes.length - untracked.length;
+      const shown = untracked.slice(0, 20);
+      const description = (
+        <div className="flex flex-col gap-2">
+          <p>Are you sure you want to discard all changes? This can not be undone.</p>
+          <p>{`Restores ${trackedCount} tracked ${trackedCount === 1 ? 'file' : 'files'}.`}</p>
+          {shown.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p>
+                {`Also deletes ${untracked.length} untracked ${
+                  untracked.length === 1 ? 'file' : 'files'
+                }:`}
+              </p>
+              <ul className="list-inside list-disc">
+                {shown.map((change) => (
+                  <li key={change.path}>{change.path}</li>
+                ))}
+                {untracked.length > shown.length && (
+                  <li>{`and ${untracked.length - shown.length} more`}</li>
+                )}
+              </ul>
+            </div>
+          )}
+        </div>
+      );
       const outcome = await openConfirmActionModal({
         title: 'Discard All Changes',
         variant: 'destructive',
-        description: 'Are you sure you want to discard all changes? This can not be undone.',
+        description,
+        confirmLabel: 'Discard',
+        checkbox: { label: 'Also delete untracked files', defaultChecked: false },
       });
       if (!outcome.success) return;
+      const includeUntracked = outcome.data?.checked ?? false;
 
-      const result = await git.discardAllFiles();
+      const result = await git.discardAllFiles({ includeUntracked });
       if (!result.success) {
         toast.error(`Failed to discard changes: ${formatErrorType(result.error)} `);
+        return;
       }
+      // The editor's unsaved drafts under this workspace are part of the
+      // discarded changes: reload open buffers and drop the persisted rows.
+      const root = encodeResourceUri(
+        hostFileRefFromNativePath(workspace.path, workspace.sshConnectionId)
+      );
+      openFileStore.discardDirtyUnder(root);
+      await (await getEditorClient()).clearBuffers({ root });
     })();
   };
 

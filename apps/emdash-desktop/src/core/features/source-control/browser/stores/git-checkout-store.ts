@@ -323,9 +323,11 @@ export class GitCheckoutStore {
     return settleMutation(model.mutations.revert({ paths: paths.map(gitFilePath) }));
   }
 
-  async discardAllFiles() {
+  async discardAllFiles(options: { includeUntracked: boolean }) {
     const model = await this.requireModel();
-    return settleMutation(model.mutations.revertAll({}));
+    return settleMutation(
+      model.mutations.revertAll({ includeUntracked: options.includeUntracked })
+    );
   }
 
   async commit(message: string) {

@@ -62,7 +62,14 @@ export const gitCheckoutContract = defineContract({
         data: z.void(),
         error: gitCommandErrorSchema,
       }),
-      revertAll: mutation({ input: z.object({}), data: z.void(), error: gitCommandErrorSchema }),
+      // `includeUntracked` defaults on so existing callers keep the old
+      // reset+clean behavior; the changes panel opts out unless the user
+      // checks the untracked box in its confirm dialog.
+      revertAll: mutation({
+        input: z.object({ includeUntracked: z.boolean().default(true) }),
+        data: z.void(),
+        error: gitCommandErrorSchema,
+      }),
       commit: mutation({
         input: z.object({ message: z.string(), options: commitOptionsSchema.optional() }),
         data: z.object({ hash: z.string() }),
