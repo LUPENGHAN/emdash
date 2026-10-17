@@ -49,6 +49,7 @@ describe('createAgentLibraryService', () => {
       },
       listLocalWorkspaces: async () => workspaces,
       refreshSkillCatalog: vi.fn(async () => {}),
+      getGitHubToken: async () => null,
     });
   const linked = async (workspace: string) =>
     (await readdir(path.join(workspace, '.claude', 'skills')).catch(() => [])).sort((a, b) =>

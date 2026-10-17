@@ -120,6 +120,26 @@ export const mcpHealthSchema = z.object({
 });
 export type McpHealth = z.infer<typeof mcpHealthSchema>;
 
+/** One skill found inside a GitHub link (see `scanGitHubSkills`). */
+export const scannedGitHubSkillSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  description: z.string(),
+  valid: z.boolean(),
+  existsInLibrary: z.boolean(),
+  skipped: z.array(z.string()),
+});
+
+/** One scan of a GitHub link: what was found, and what to install from it. */
+export const githubSkillScanSchema = z.object({
+  repo: z.string(),
+  ref: z.string(),
+  commit: z.string(),
+  truncated: z.boolean(),
+  skills: z.array(scannedGitHubSkillSchema),
+});
+export type GitHubSkillScan = z.infer<typeof githubSkillScanSchema>;
+
 export const agentLibraryContract = defineContract({
   /** Skills in the agents' own folders (~/.claude/skills and the like). */
   scanAgentSkills: procedure({ input: z.void(), output: z.custom<AgentSkillFound[]>() }),
@@ -148,6 +168,32 @@ export const agentLibraryContract = defineContract({
       updated: z.boolean(),
       dirty: z.boolean(),
       files: z.array(z.string()),
+    }),
+  }),
+  /** Lists the skills inside a GitHub link; the account's token is used, never shown. */
+  scanGitHubSkills: procedure({
+    input: z.object({ url: z.string().min(1) }),
+    output: githubSkillScanSchema,
+  }),
+  installGitHubSkills: procedure({
+    input: z.object({
+      repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+      ref: z.string().min(1),
+      commit: z.string().regex(/^[0-9a-f]{40}$/),
+      picks: z
+        .array(
+          z.object({
+            path: z.string(),
+            name: z.string().min(1),
+            overwrite: z.boolean(),
+          })
+        )
+        .min(1)
+        .max(50),
+    }),
+    output: z.object({
+      installed: z.array(z.string()),
+      skipped: z.array(z.object({ name: z.string(), reason: z.string() })),
     }),
   }),
   /** Checks the library's stored definition of the named server. */

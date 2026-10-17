@@ -24,7 +24,15 @@ import {
   syncWorkspaceSkills,
   takeOverSkills,
 } from './skill-library';
-import { checkSkillUpdates, listSkillSources, setSkillSource, updateSkill } from './skill-sources';
+import {
+  checkSkillUpdates,
+  installGitHubSkills,
+  listSkillSources,
+  scanGitHubSkills,
+  setSkillSource,
+  updateSkill,
+  type GitHubTokenSource,
+} from './skill-sources';
 
 export type LocalWorkspace = { projectId: string; path: string };
 
@@ -36,6 +44,8 @@ export type AgentLibraryServiceDeps = {
   listLocalWorkspaces: () => Promise<LocalWorkspace[]>;
   /** Tells the skill catalog UI that the library folder changed. */
   refreshSkillCatalog: () => Promise<void>;
+  /** The signed-in github.com account's token; null means anonymous requests. */
+  getGitHubToken: GitHubTokenSource;
   warn?: (message: string, details: Record<string, unknown>) => void;
 };
 
@@ -48,6 +58,8 @@ export function createAgentLibraryService(deps: AgentLibraryServiceDeps) {
   const libraryDir = path.join(deps.home, SKILL_LIBRARY_DIRNAME);
   const backupRoot = path.join(libraryDir, '.emdash', 'takeover-backup');
   const inFlight = new Map<string, Promise<void>>();
+  // The account's token, or anonymous; a failure to read it never blocks a request.
+  const token = async () => await deps.getGitHubToken().catch(() => null);
 
   const libraryNames = async () => (await listLibrarySkills(libraryDir)).map((s) => s.name);
 
@@ -123,10 +135,22 @@ export function createAgentLibraryService(deps: AgentLibraryServiceDeps) {
       return takeOverSkills(await scan(), new Set(await libraryNames()), backupRoot, deps.home);
     },
     listSkillSources: () => listSkillSources(libraryDir),
-    checkSkillUpdates: () => checkSkillUpdates(libraryDir),
-    setSkillSource: (name: string, url: string) => setSkillSource(libraryDir, name, url),
+    checkSkillUpdates: async () => checkSkillUpdates(libraryDir, await token()),
+    setSkillSource: async (name: string, url: string) =>
+      setSkillSource(libraryDir, name, url, await token()),
+    async scanGitHubSkills(url: string) {
+      return scanGitHubSkills(libraryDir, url, await token());
+    },
+    async installGitHubSkills(input: Parameters<typeof installGitHubSkills>[1]) {
+      const result = await installGitHubSkills(libraryDir, input, await token());
+      if (result.installed.length > 0) {
+        await deps.refreshSkillCatalog().catch(() => {});
+        await resyncAll();
+      }
+      return result;
+    },
     async updateSkill(name: string, force: boolean) {
-      const result = await updateSkill(libraryDir, name, force);
+      const result = await updateSkill(libraryDir, name, force, await token());
       if (result.updated) {
         await deps.refreshSkillCatalog().catch(() => {});
         await resyncAll();
