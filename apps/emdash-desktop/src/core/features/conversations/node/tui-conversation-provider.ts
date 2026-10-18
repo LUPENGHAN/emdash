@@ -69,6 +69,8 @@ export type TuiConversationProviderDependencies = {
     workspacePath: string;
     host: HostRef;
     env: Record<string, string>;
+    /** Whether the conversation auto-approves (Cursor then approves plugin MCP servers). */
+    autoApprove: boolean;
   }): Promise<{ args: string[]; env: Record<string, string> } | null>;
   /** Readies an agent's session on this computer before a terminal resumes it. */
   beforeResume?(params: {
@@ -197,6 +199,7 @@ export class TuiConversationProvider implements ConversationProvider {
         workspacePath: this.taskPath,
         host: this.host,
         env: providerVars,
+        autoApprove: conversation.autoApprove === true,
       })) ?? null;
 
     return {

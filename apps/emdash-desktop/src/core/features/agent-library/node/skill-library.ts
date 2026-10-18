@@ -8,6 +8,7 @@ import {
   readlink,
   realpath,
   rename,
+  rm,
   symlink,
   unlink,
   writeFile,
@@ -15,6 +16,7 @@ import {
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentSkillFound } from '../api';
+import { folderHash } from './skill-sources';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +32,13 @@ export const WORKSPACE_SKILLS_DIRS = [
 ];
 const EXCLUDE_BEGIN = '# >>> emdash skills (managed)';
 const EXCLUDE_END = '# <<< emdash skills';
+
+/**
+ * Cursor skips project skills whose real path leaves the skills folder, so it gets
+ * copies instead of links. The marker tells Emdash's copies from the repository's own.
+ */
+const CURSOR_SKILLS_DIR = path.join('.cursor', 'skills');
+const COPY_MARKER = '.emdash-library-copy';
 
 /** The agents' own skill folders (relative to home) that the library can import from. */
 export const AGENT_SKILL_DIRS: readonly { agent: string; dir: string }[] = [
@@ -100,8 +109,62 @@ export async function syncWorkspaceSkills(input: {
       excluded.push(`/${relativeDir}/${name}`);
     }
   }
-  await writeExcludeBlock(input.workspacePath, excluded);
+  const copies = await syncCursorSkillCopies(input);
+  for (const name of copies.copied) linked.add(name);
+  for (const name of copies.shadowed) shadowed.add(name);
+  await writeExcludeBlock(input.workspacePath, [...excluded, ...copies.excluded]);
   return { linked: [...linked], shadowed: [...shadowed] };
+}
+
+/**
+ * Keeps `.cursor/skills` holding real copies of the library's skills (Cursor refuses
+ * links there), each stamped with its source's hash so unchanged skills are not
+ * recopied. Folders without the marker are the repository's own and are never touched.
+ */
+async function syncCursorSkillCopies(input: {
+  workspacePath: string;
+  libraryDir: string;
+  names: readonly string[];
+}): Promise<{ copied: string[]; shadowed: string[]; excluded: string[] }> {
+  const libraryRoot = path.resolve(input.libraryDir);
+  const wanted = new Set(input.names);
+  const dir = path.join(input.workspacePath, CURSOR_SKILLS_DIR);
+  const copied: string[] = [];
+  const shadowed: string[] = [];
+  const excluded: string[] = [];
+
+  // Drop only Emdash's own copies (they carry the marker) of skills the workspace
+  // should no longer have; anything else in there is the repository's.
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    if (!wanted.has(name) && (await exists(path.join(dir, name, COPY_MARKER)))) {
+      await rm(path.join(dir, name), { recursive: true, force: true });
+    }
+  }
+  if (wanted.size === 0) return { copied, shadowed, excluded };
+
+  await mkdir(dir, { recursive: true });
+  for (const name of wanted) {
+    const copy = path.join(dir, name);
+    const marker = path.join(copy, COPY_MARKER);
+    const hash = await folderHash(path.join(libraryRoot, name));
+    if (!(await exists(marker))) {
+      if (await exists(copy)) {
+        // The repository ships its own skill under this name; it wins.
+        shadowed.push(name);
+        continue;
+      }
+    } else if ((await readFile(marker, 'utf8').catch(() => null)) === hash) {
+      continue; // Already current.
+    } else {
+      await rm(copy, { recursive: true, force: true });
+    }
+    // Dereference so links inside a library skill become real files, which Cursor reads.
+    await cp(path.join(libraryRoot, name), copy, { recursive: true, dereference: true });
+    await writeFile(marker, hash);
+    copied.push(name);
+    excluded.push(`/${CURSOR_SKILLS_DIR}/${name}`);
+  }
+  return { copied, shadowed, excluded };
 }
 
 /** Skills in the agents' own folders, merged by name. */
