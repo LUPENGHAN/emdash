@@ -125,7 +125,7 @@ function AppContent() {
                 <ThemeProvider>
                   <ModalRenderer />
                   <AppShutdownLifecycle />
-                  <ResumeWritingWatcher />
+                  {!isBrowserHost && <ResumeWritingWatcher />}
                   <HostRecoveryWakeups />
                   <UiLanguage />
                   {renderContent()}

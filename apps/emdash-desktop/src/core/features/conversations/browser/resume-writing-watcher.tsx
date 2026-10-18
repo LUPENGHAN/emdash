@@ -1,44 +1,69 @@
 import { toast } from '@emdash/ui/react/primitives';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getAgentsClient } from '@core/features/agents/api/browser/client';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { sendToConversation } from '@core/features/conversations/api/browser/send-to-conversation';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import {
   DEFAULT_RESUME_WRITING_SETTINGS,
-  type ResumeWritingSettings,
+  type ResumeJob,
 } from '@core/features/conversations/contributions/resume-settings';
+import { getRemoteClientClient } from '@core/features/remote-access/api/browser/remote-client';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { openModal } from '@core/manifests/browser/modal-api';
 import type { Conversation } from '@core/primitives/conversations/api';
-import { decideResume, type ResumeUsage } from './resume-writing';
+import { patchResumeJob } from './resume-jobs-store';
+import { decideResume, type ResumeDecision, type ResumeUsage } from './resume-writing';
 
 const USAGE_TTL_MS = 5 * 60 * 1000;
 const TICK_MS = 20_000;
 const RETRY_BASE_MS = 60_000;
 const RETRY_MAX_MS = 30 * 60 * 1000;
 
-let ticking = false;
+/** One entry per job id: a slow or failing job backs off alone. */
+const running = new Set<string>();
+const failures = new Map<string, number>();
+const retryAt = new Map<string, number>();
 let usageAt = 0;
 let usageCache: ResumeUsage[] = [];
-let failures = 0;
-let retryAt = 0;
 
-/** While the app is open, sends the configured continue message when its trigger is due. */
+/**
+ * While the app is open, sends each configured continue message when its trigger is
+ * due. One window must own this: a window driving another computer would double-send
+ * alongside that computer's own window (a remote-browser tab never mounts this
+ * watcher; see App.tsx).
+ */
 export function ResumeWritingWatcher() {
-  const { value, updateAsync } = useAppSettingsKey('resumeWriting');
-  const settingsRef = useRef(value ?? DEFAULT_RESUME_WRITING_SETTINGS);
-  const updateRef = useRef(updateAsync);
-  settingsRef.current = value ?? DEFAULT_RESUME_WRITING_SETTINGS;
-  updateRef.current = updateAsync;
-  const enabled = settingsRef.current.enabled;
+  const { value } = useAppSettingsKey('resumeWriting');
+  const jobsRef = useRef(value?.jobs ?? DEFAULT_RESUME_WRITING_SETTINGS.jobs);
+  jobsRef.current = value?.jobs ?? DEFAULT_RESUME_WRITING_SETTINGS.jobs;
+  const anyEnabled = jobsRef.current.some((job) => job.enabled);
+  // Switching computers reloads the window, so a mount-time check is enough.
+  const [drivesAnotherComputer, setDrivesAnotherComputer] = useState(false);
 
   useEffect(() => {
-    if (!enabled) return;
+    let cancelled = false;
+    void getRemoteClientClient()
+      .then((client) => client.state())
+      .then((state) => {
+        if (!cancelled) setDrivesAnotherComputer(state.activeServerId !== null);
+      })
+      .catch(() => {
+        // Unreachable remote-access state never blocks local jobs.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const active = !drivesAnotherComputer && anyEnabled;
+
+  useEffect(() => {
+    if (!active) return;
     let stopped = false;
     const tick = () => {
       if (stopped) return;
-      void runResumeTick(settingsRef.current, (patch) => updateRef.current(patch));
+      void runResumeTick(jobsRef.current);
     };
     const id = window.setInterval(tick, TICK_MS);
     tick();
@@ -46,80 +71,94 @@ export function ResumeWritingWatcher() {
       stopped = true;
       window.clearInterval(id);
     };
-  }, [enabled]);
+  }, [active]);
 
   return null;
 }
 
-async function runResumeTick(
-  settings: ResumeWritingSettings,
-  update: (patch: Partial<ResumeWritingSettings>) => Promise<void>
-): Promise<void> {
-  if (ticking || !settings.enabled || Date.now() < retryAt) return;
-  ticking = true;
+async function runResumeTick(jobs: readonly ResumeJob[]): Promise<void> {
+  // Sequential: two dialogs at once would be unreadable, and usage stays cached per tick.
+  for (const job of jobs) {
+    if (job.enabled) await runResumeJob(job);
+  }
+}
+
+async function runResumeJob(job: ResumeJob): Promise<void> {
+  if (running.has(job.id) || Date.now() < (retryAt.get(job.id) ?? 0)) return;
+  running.add(job.id);
   try {
-    const conversation = await loadConversation(settings);
-    const needsUsage = settings.quotaPercent != null || settings.onWindowReset;
+    const conversation = await loadConversation(job);
+    const needsUsage = job.quotaPercent != null || job.onWindowReset;
     const accounts = needsUsage ? await loadUsage() : [];
     const decision = decideResume({
       now: new Date(),
-      settings,
+      job,
       providerId: conversation?.providerId ?? null,
       modelSource: conversation?.modelSource,
       accounts,
     });
     if (decision.type === 'none') return;
     if (decision.type === 'remember') {
-      await update(decision.patch);
+      await patchResumeJob(job.id, decision.patch);
       return;
     }
-    if (settings.confirm) {
+    if (job.confirm) {
       const confirmed = await openModal('confirmActionModal', {
-        title:
-          decision.type === 'switch'
-            ? 'Continue on another account?'
-            : 'Continue this conversation?',
+        title: confirmTitle(decision, conversation),
         description:
           decision.type === 'switch'
             ? 'The current official account is past the limit you set. Emdash will open a new conversation on the next account and send the handoff.'
-            : `Emdash will send “${settings.text || '继续'}” to this conversation.`,
+            : `Emdash will send “${job.text || '继续'}” to this conversation.`,
         confirmLabel: 'Continue',
       });
       if (!confirmed.success) {
-        await update(decision.patch);
+        await patchResumeJob(job.id, decision.patch);
         return;
       }
     }
     if (!conversation) throw new Error('That conversation is gone');
     if (decision.type === 'send') {
-      await deliver(settings, conversation);
-      await update(decision.patch);
+      await deliver(job, conversation);
+      await patchResumeJob(job.id, decision.patch);
     } else {
       // Recorded first: a failure after the new conversation exists must not open another.
-      await update(decision.patch);
-      const createdId = await handoff(settings, conversation, decision.accountId);
-      await update({ conversationId: createdId });
+      await patchResumeJob(job.id, decision.patch);
+      const createdId = await handoff(job, conversation, decision.accountId);
+      await patchResumeJob(job.id, { conversationId: createdId });
     }
-    failures = 0;
-    retryAt = 0;
+    failures.set(job.id, 0);
+    retryAt.set(job.id, 0);
   } catch (error) {
-    failures += 1;
-    retryAt = Date.now() + Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS);
+    const count = (failures.get(job.id) ?? 0) + 1;
+    failures.set(job.id, count);
+    retryAt.set(job.id, Date.now() + Math.min(RETRY_BASE_MS * 2 ** (count - 1), RETRY_MAX_MS));
     toast.error(error instanceof Error ? error.message : String(error));
   } finally {
-    ticking = false;
+    running.delete(job.id);
   }
 }
 
-async function loadConversation(settings: ResumeWritingSettings): Promise<Conversation | null> {
-  if (!settings.projectId || !settings.taskId || !settings.conversationId) return null;
+/** Names the conversation so, with several jobs, the user knows which one is asking. */
+function confirmTitle(
+  decision: Extract<ResumeDecision, { type: 'send' | 'switch' }>,
+  conversation: Conversation | null
+): string {
+  const title = conversation?.title;
+  if (decision.type === 'switch') {
+    return title ? `Continue “${title}” on another account?` : 'Continue on another account?';
+  }
+  return title ? `Continue “${title}”?` : 'Continue this conversation?';
+}
+
+async function loadConversation(job: ResumeJob): Promise<Conversation | null> {
+  if (!job.projectId || !job.taskId || !job.conversationId) return null;
   const conversations = await (
     await getConversationsClient()
   ).getConversationsForTask({
-    projectId: settings.projectId,
-    taskId: settings.taskId,
+    projectId: job.projectId,
+    taskId: job.taskId,
   });
-  return conversations.find((item) => item.id === settings.conversationId) ?? null;
+  return conversations.find((item) => item.id === job.conversationId) ?? null;
 }
 
 async function loadUsage(): Promise<ResumeUsage[]> {
@@ -145,8 +184,8 @@ async function loadUsage(): Promise<ResumeUsage[]> {
   return usageCache;
 }
 
-async function deliver(settings: ResumeWritingSettings, conversation: Conversation): Promise<void> {
-  const text = settings.text.trim() || '继续';
+async function deliver(job: ResumeJob, conversation: Conversation): Promise<void> {
+  const text = job.text.trim() || '继续';
   if (conversation.type === 'pty') {
     const manager = conversationRegistry.get(conversation.taskId);
     if (!manager) throw new Error('Open this task to continue a terminal conversation');
@@ -187,14 +226,14 @@ function errorType(error: unknown): string | null {
 }
 
 async function handoff(
-  settings: ResumeWritingSettings,
+  job: ResumeJob,
   conversation: Conversation,
   accountId: string | null
 ): Promise<string> {
   const client = await getConversationsClient();
   const prepared = await client.prepareHandoff({
     conversationId: conversation.id,
-    note: settings.text.trim() || '继续',
+    note: job.text.trim() || '继续',
   });
   const id = crypto.randomUUID();
   const type = conversation.type ?? 'acp';
