@@ -64,6 +64,28 @@ describe('Codex model catalog', () => {
     expect(instructions).toMatch(/^You are a coding agent running in the Codex CLI/);
   });
 
+  it('leaves the context window unset when the provider does not set one', () => {
+    // A model Codex knows keeps its own context (272k); the catalog no longer
+    // overrides it, and an unknown model gets no context_window at all.
+    const [knownModel, unknownModel] = buildCodexModelCatalog(
+      { providerKey: 'emdash-x', models: [{ id: 'gpt-6-sol' }, { id: 'deepseek/v4-flash' }] },
+      known
+    ).models;
+    expect(knownModel).toMatchObject({
+      slug: 'gpt-6-sol',
+      display_name: 'GPT-6 Sol',
+      context_window: 272_000,
+    });
+    expect(unknownModel).toMatchObject({ slug: 'deepseek/v4-flash' });
+    expect(unknownModel).not.toHaveProperty('context_window');
+    expect(unknownModel).not.toHaveProperty('max_context_window');
+  });
+
+  it('names a Windows wrapper .cmd', () => {
+    expect(codexAppServerWrapperPath('/home', 'win32')).toBe('/home/emdash-codex-app-server.cmd');
+    expect(codexAppServerWrapperPath('/home', 'darwin')).toBe('/home/emdash-codex-app-server.sh');
+  });
+
   describe('on disk', () => {
     let home: string;
     beforeEach(async () => {
@@ -89,6 +111,20 @@ describe('Codex model catalog', () => {
       expect(await readFile(wrapper, 'utf8')).toContain(
         'exec "${EMDASH_CODEX_BIN:-codex}" -c "model_catalog_json=\\"$EMDASH_CODEX_MODEL_CATALOG\\"" "$@"'
       );
+    });
+
+    it('writes a Windows .cmd wrapper with a TOML literal and no chmod', async () => {
+      await ensureCodexModelCatalog(
+        { providerKey: 'emdash-x', models: [{ id: 'gpt-6-sol', contextWindow: 1_000_000 }] },
+        home,
+        'win32'
+      );
+      const wrapper = codexAppServerWrapperPath(home, 'win32');
+      const content = await readFile(wrapper, 'utf8');
+      expect(content).toContain(`-c "model_catalog_json='%EMDASH_CODEX_MODEL_CATALOG%'" %*`);
+      expect(content).toContain('\r\n');
+      // The Windows wrapper runs through the shell; no executable bit is needed.
+      expect((await stat(wrapper)).mode & 0o111).toBe(0);
     });
   });
 });

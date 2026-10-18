@@ -72,7 +72,15 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
       );
     }
     if (launch.extensionAgent) await deps.prepareAgentProvider(launch.extensionAgent);
-    if (launch.codexCatalog) await deps.ensureCodexModelCatalog?.(launch.codexCatalog);
+    if (launch.codexCatalog) {
+      await deps.ensureCodexModelCatalog?.(launch.codexCatalog);
+    } else if (agentId === 'codex' && provider.models.length > 0) {
+      // The catalog path cannot ride the space-split extraArgs (or breaks the
+      // Windows wrapper's TOML literal), so Codex falls back to its own models.
+      deps.warn?.('Codex model catalog path has whitespace; Codex will list its own models', {
+        providerId: provider.id,
+      });
+    }
     return {
       ...config,
       env: { ...config?.env, ...launch.env },

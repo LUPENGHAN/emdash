@@ -44,6 +44,12 @@ export const modelProviderSchema = z.object({
    * Pi), which send reasoning settings some non-reasoning models reject.
    */
   nonReasoningModels: z.array(z.string()).optional(),
+  /**
+   * Models that keep Codex's built-in web search tool. Codex sends it with every
+   * request and many gateways reject the whole request over it, so it is off
+   * unless listed.
+   */
+  webSearchModels: z.array(z.string()).optional(),
   /** Which of the models Claude Code uses for what (Anthropic Messages providers). */
   claude: z
     .object({

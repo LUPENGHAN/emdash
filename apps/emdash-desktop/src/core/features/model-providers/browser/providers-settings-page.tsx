@@ -184,6 +184,7 @@ function ProviderForm({
     )
   );
   const [nonReasoning, setNonReasoning] = useState<string[]>(initial?.nonReasoningModels ?? []);
+  const [webSearch, setWebSearch] = useState<string[]>(initial?.webSearchModels ?? []);
   const [claudeRoles, setClaudeRoles] = useState<ClaudeModelRoles>(initial?.claude ?? {});
   const [filter, setFilter] = useState('');
   const [manualModel, setManualModel] = useState('');
@@ -212,7 +213,10 @@ function ProviderForm({
   if (Object.keys(contextWindows).length > 0) draft.contextWindows = contextWindows;
   const nonReasoningModels = nonReasoning.filter((model) => selected.includes(model));
   if (nonReasoningModels.length > 0) draft.nonReasoningModels = nonReasoningModels;
+  const webSearchModels = webSearch.filter((model) => selected.includes(model));
+  if (webSearchModels.length > 0) draft.webSearchModels = webSearchModels;
   const speaksAnthropic = protocol === 'anthropic' || protocol === 'gateway';
+  const speaksResponses = protocol === 'openai-responses' || protocol === 'gateway';
   const claude = speaksAnthropic ? cleanClaudeRoles(claudeRoles, selected) : undefined;
   if (claude) draft.claude = claude;
   const invalidContext = selected.some(
@@ -402,6 +406,24 @@ function ProviderForm({
                       Reasoning
                     </label>
                   ) : null}
+                  {selected.includes(model) && speaksResponses ? (
+                    <label
+                      className="flex shrink-0 items-center gap-1 text-xs text-foreground-muted"
+                      title="Codex sends a web search tool with every request. Many gateways reject it; turn it on only for models whose provider supports it."
+                    >
+                      <Checkbox
+                        checked={webSearch.includes(model)}
+                        onCheckedChange={(checked) =>
+                          setWebSearch((current) =>
+                            checked === true
+                              ? [...new Set([...current, model])]
+                              : current.filter((m) => m !== model)
+                          )
+                        }
+                      />
+                      Web search (Codex)
+                    </label>
+                  ) : null}
                   {selected.includes(model) ? (
                     <div className="w-24 shrink-0">
                       <Input
@@ -430,6 +452,14 @@ function ProviderForm({
             Context: the model's context window, e.g. 1m or 256k. Codex, OpenCode, Pi, Oh My Pi and
             Claude Code use it. Leave it blank to keep the default. Reasoning: Pi and Oh My Pi offer
             thinking levels (effort) for the model; turn it off for models that reject them.
+          </Field.Description>
+        ) : null}
+        {speaksResponses ? (
+          <Field.Description>
+            In one Codex conversation, stay with models from the same vendor. Some models return
+            encrypted reasoning that models from other vendors cannot read, and the conversation
+            then fails with &quot;encrypted history requires an owned session&quot;. Start a new
+            conversation to switch.
           </Field.Description>
         ) : null}
         <div className="flex gap-2">

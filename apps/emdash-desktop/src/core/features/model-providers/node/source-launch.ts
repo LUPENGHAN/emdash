@@ -73,16 +73,23 @@ export function buildSourceLaunch(
       // Codex sizes its context (and when to compact) from its own model metadata, which a
       // provider's model ids usually miss; the provider's figure, when set, wins.
       const contextWindow = model ? provider.contextWindows?.[model] : undefined;
-      // Codex caps the context at its metadata's maximum (272k for models it does not
-      // know), so a set context comes with a catalog describing the provider's models.
-      const catalogFile = contextWindow ? codexModelCatalogPath(key) : undefined;
+      // Codex lists the models its catalog describes, so every provider model goes in,
+      // sized where the provider sets a window; without a catalog it lists OpenAI's own.
+      // A path extraArgs cannot carry (whitespace anywhere; "'" on Windows breaks the
+      // wrapper's TOML literal) means no catalog.
+      const catalogFile = provider.models.length > 0 ? codexModelCatalogPath(key) : undefined;
       const catalog: CodexModelCatalog | undefined =
-        catalogFile && !/\s/.test(catalogFile)
+        catalogFile &&
+        !/\s/.test(catalogFile) &&
+        !(process.platform === 'win32' && catalogFile.includes("'"))
           ? {
               providerKey: key,
-              models: Object.entries(provider.contextWindows ?? {})
-                .filter(([id]) => provider.models.includes(id))
-                .map(([id, tokens]) => ({ id, contextWindow: tokens })),
+              models: provider.models.map((id) => ({
+                id,
+                ...(provider.contextWindows?.[id] && {
+                  contextWindow: provider.contextWindows[id],
+                }),
+              })),
             }
           : undefined;
       const providerConfig = {
@@ -91,6 +98,11 @@ export function buildSourceLaunch(
         env_key: PROVIDER_KEY_ENV,
         wire_api: 'responses',
       };
+
+      // Codex sends a web_search tool with every request; gateways that lack it
+      // reject the whole request ("no deployment compatible"), so it stays off
+      // unless the model has it.
+      const webSearch = model && provider.webSearchModels?.includes(model) ? null : 'disabled';
       return {
         env: {
           [PROVIDER_KEY_ENV]: apiKey,
@@ -99,6 +111,7 @@ export function buildSourceLaunch(
             model_provider: key,
             model_providers: { [key]: providerConfig },
             ...(model && { model }),
+            ...(webSearch && { web_search: webSearch }),
             ...(contextWindow && { model_context_window: contextWindow }),
             ...(catalog && { model_catalog_json: catalogFile }),
           }),
@@ -118,12 +131,12 @@ export function buildSourceLaunch(
           }),
           // The adapter logs that request (key included) when this names a folder.
           APP_SERVER_LOGS: '',
-          // The chat UI's Codex reads the catalog only at startup (see the wrapper).
-          ...(catalog &&
-            process.platform !== 'win32' && {
-              CODEX_PATH: codexAppServerWrapperPath(),
-              EMDASH_CODEX_MODEL_CATALOG: catalogFile!,
-            }),
+          // The chat UI's Codex reads the catalog only at startup (see the wrapper),
+          // through a platform-appropriate script the launch writes first.
+          ...(catalog && {
+            CODEX_PATH: codexAppServerWrapperPath(),
+            EMDASH_CODEX_MODEL_CATALOG: catalogFile!,
+          }),
         },
         args: [
           ...codexOverride('model_provider', key),
@@ -131,6 +144,7 @@ export function buildSourceLaunch(
             codexOverride(`model_providers.${key}.${field}`, value)
           ),
           ...(model ? codexOverride('model', model) : []),
+          ...(webSearch ? codexOverride('web_search', webSearch) : []),
           ...(contextWindow ? codexOverride('model_context_window', contextWindow) : []),
           ...(catalog ? codexOverride('model_catalog_json', catalogFile!) : []),
         ],
