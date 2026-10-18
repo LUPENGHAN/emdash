@@ -29,7 +29,8 @@ export const LEGACY_RESUME_JOB_ID = 'legacy';
 /**
  * Before the list, the setting was one flat job. Stored values are a delta merged over
  * the defaults, so an old one arrives as `{ jobs: [], enabled, projectId, … }`; the
- * bookkeeping fields ride along so nothing fires twice on upgrade day.
+ * bookkeeping fields ride along so nothing fires twice on upgrade day. The old default
+ * was off, so a delta without `enabled` was a switched-off job and must stay off.
  */
 function migrateLegacyResumeWriting(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object') return raw;
@@ -39,7 +40,9 @@ function migrateLegacyResumeWriting(raw: unknown): unknown {
     return { jobs };
   }
   const { jobs: _jobs, ...legacy } = value;
-  return { jobs: [{ ...legacy, id: LEGACY_RESUME_JOB_ID }] };
+  return {
+    jobs: [{ ...legacy, enabled: legacy.enabled === true, id: LEGACY_RESUME_JOB_ID }],
+  };
 }
 
 export const resumeWritingSettingsSchema = z.preprocess(

@@ -84,6 +84,19 @@ describe('resumeWritingSettingsSchema migration', () => {
     ]);
   });
 
+  it('keeps a switched-off old setting off (its delta has no `enabled`)', () => {
+    const parsed = resumeWritingSettingsSchema.parse({
+      jobs: [],
+      projectId: 'p',
+      taskId: 't',
+      conversationId: 'c',
+      clockTime: '09:00',
+    }) as ResumeWritingSettings;
+    expect(parsed.jobs).toHaveLength(1);
+    expect(parsed.jobs[0]?.enabled).toBe(false);
+    expect(parsed.jobs[0]?.clockTime).toBe('09:00');
+  });
+
   it('yields an empty list when the old setting named no conversation', () => {
     const parsed = resumeWritingSettingsSchema.parse({
       enabled: true,
