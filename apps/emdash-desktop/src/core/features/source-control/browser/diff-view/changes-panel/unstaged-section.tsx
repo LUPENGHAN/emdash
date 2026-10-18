@@ -124,11 +124,10 @@ export const UnstagedSectionBody = observer(function UnstagedSectionBody() {
 
   const handleDiscardAll = () => {
     void (async () => {
-      // Same untracked heuristic the line-count enrichment uses: an "added"
-      // entry with no additions has no git content yet.
-      const untracked = changes.filter(
-        (change) => change.status === 'added' && change.additions === 0
-      );
+      // From git's own status: line counts cannot tell, since untracked files get
+      // theirs filled in after the fact.
+      const untrackedPaths = git.untrackedPaths;
+      const untracked = changes.filter((change) => untrackedPaths.has(change.path));
       const trackedCount = changes.length - untracked.length;
       const shown = untracked.slice(0, 20);
       const description = (
@@ -138,6 +137,7 @@ export const UnstagedSectionBody = observer(function UnstagedSectionBody() {
           {shown.length > 0 && (
             <div className="flex flex-col gap-1">
               <p>{`Untracked files (${untracked.length}), kept unless you check the box below:`}</p>
+              <p>Symbolic links are always kept.</p>
               <ul className="list-inside list-disc">
                 {shown.map((change) => (
                   <li key={change.path}>{change.path}</li>

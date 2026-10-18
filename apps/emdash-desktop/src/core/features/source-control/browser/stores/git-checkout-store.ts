@@ -209,6 +209,17 @@ export class GitCheckoutStore {
     return this.unstagedChanges;
   }
 
+  /** Paths git does not track yet; their changes read as `added`, like new staged files. */
+  get untrackedPaths(): ReadonlySet<string> {
+    const status = this.statusData;
+    if (status?.kind !== 'ok') return new Set();
+    return new Set(
+      Object.values(status.entries)
+        .filter((entry) => entry.index === 'untracked')
+        .map((entry) => entry.path)
+    );
+  }
+
   get totalLinesAdded(): number {
     return this.fileChanges.reduce((sum, change) => sum + change.additions, 0);
   }
