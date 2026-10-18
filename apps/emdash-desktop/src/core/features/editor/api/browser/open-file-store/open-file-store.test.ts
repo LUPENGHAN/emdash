@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { filesWireContract, type FilesContentKey } from '@core/features/files/api';
 import { hostFileRefFromNativePath, portablePath } from '@core/primitives/desktop-runtime/api';
 import { HEAD_REF, type GitRef } from '@core/primitives/git/api';
+import { bufferBaseHash } from './buffer-base-hash';
 import type { FacetDescriptor, FacetHandle, FacetHandleBinder } from './facet-handle';
 import {
   BUFFER_AUTOSAVE_DEBOUNCE_MS,
@@ -220,10 +221,10 @@ function setup() {
   const wire = createTestWire(testContract, { content: countedProvider });
   wireClient.current = wire.client;
 
-  const saveBufferCalls: Array<{ uri: string; content: string }> = [];
+  const saveBufferCalls: Array<{ uri: string; content: string; baseHash: string | null }> = [];
   const clearBufferCalls: string[] = [];
   editorClient.current = {
-    saveBuffer: async (input: { uri: string; content: string }) => {
+    saveBuffer: async (input: { uri: string; content: string; baseHash: string | null }) => {
       saveBufferCalls.push(input);
     },
     clearBuffer: async (input: { uri: string }) => {
@@ -664,7 +665,11 @@ describe('OpenFileStore', () => {
       pending.resolve();
       expect(await saving).toEqual(ok(undefined));
       expect(entry.dirty).toBe(true);
-      expect(h.saveBufferCalls.at(-1)).toEqual({ uri: entry.uri, content: 'newer' });
+      expect(h.saveBufferCalls.at(-1)).toEqual({
+        uri: entry.uri,
+        content: 'newer',
+        baseHash: expect.any(String),
+      });
     });
 
     it('isolates synchronous and asynchronous observer failures after a successful write', async () => {
@@ -747,7 +752,11 @@ describe('OpenFileStore', () => {
       expect(h.saveBufferCalls).toHaveLength(0);
       h.clock.advance(1);
       await waitFor(() => h.saveBufferCalls.length === 1);
-      expect(h.saveBufferCalls[0]).toEqual({ uri: entry.uri, content: 'one edited' });
+      expect(h.saveBufferCalls[0]).toEqual({
+        uri: entry.uri,
+        content: 'one edited',
+        baseHash: expect.any(String),
+      });
 
       await h.store.save(entry);
       expect(h.clearBufferCalls).toContain(entry.uri);
@@ -763,6 +772,25 @@ describe('OpenFileStore', () => {
       bufferHandle(entry).setText('one');
       await waitFor(() => !entry.dirty);
 
+      h.clock.advance(BUFFER_AUTOSAVE_DEBOUNCE_MS);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(h.saveBufferCalls).toHaveLength(0);
+    });
+
+    it('does not persist edits to a buffer whose file was orphaned (removed worktree)', async () => {
+      const h = start();
+      const path = '/repo/src/gone.ts';
+      const { entry } = await openReady(h, path, 'one');
+
+      bufferHandle(entry).setText('one edited');
+      await waitFor(() => entry.dirty);
+      h.clock.advance(BUFFER_AUTOSAVE_DEBOUNCE_MS);
+      await waitFor(() => h.saveBufferCalls.length === 1);
+      h.saveBufferCalls.length = 0;
+
+      h.publish(h.diskKey(path), unavailableContent('not-found'));
+      await waitFor(() => entry.status.kind === 'orphaned');
+      bufferHandle(entry).setText('edited after delete');
       h.clock.advance(BUFFER_AUTOSAVE_DEBOUNCE_MS);
       await new Promise((resolve) => setTimeout(resolve, 5));
       expect(h.saveBufferCalls).toHaveLength(0);
@@ -790,7 +818,11 @@ describe('OpenFileStore', () => {
       expect(h.store.peek(to)).toBe(entry);
       expect(entry.uri).toBe(encodeResourceUri(to));
       expect(entry.dirty).toBe(true);
-      expect(h.saveBufferCalls).toContainEqual({ uri: entry.uri, content: 'hello world' });
+      expect(h.saveBufferCalls).toContainEqual({
+        uri: entry.uri,
+        content: 'hello world',
+        baseHash: expect.any(String),
+      });
       expect(h.clearBufferCalls).toContain(oldUri);
       expect(oldBuffer.disposed).toBe(true);
       expect(oldDisk.disposed).toBe(true);
@@ -802,7 +834,8 @@ describe('OpenFileStore', () => {
       const newBuffer = bufferHandle(entry);
       expect(newBuffer).not.toBe(oldBuffer);
       expect(newBuffer.descriptor.uri).toBe(entry.uri);
-      expect(newBuffer.getText()).toBe('hello world');
+      // The seed applies after its baseline hash resolves.
+      await waitFor(() => newBuffer.getText() === 'hello world');
       expect(entry.dirty).toBe(true);
       // The rename did not create a conflict: the disk did not change under the base.
       expect(entry.conflicted).toBe(false);
@@ -894,11 +927,51 @@ describe('OpenFileStore', () => {
       const path = '/repo/src/index.ts';
       const { ref, entry } = await openReady(h, path, 'disk text');
 
-      h.store.hydrateBuffer(ref, 'recovered edits');
+      h.store.hydrateBuffer(ref, {
+        content: 'recovered edits',
+        baseHash: await bufferBaseHash('disk text'),
+        updatedAt: 1,
+      });
+      await waitFor(() => entry.dirty);
 
       expect(bufferHandle(entry).getText()).toBe('recovered edits');
-      expect(entry.dirty).toBe(true);
       expect(entry.conflicted).toBe(false);
+      expect(entry.recoveredStale).toBe(false);
+    });
+
+    it('flags a row edited from other disk text; plain save() conflicts and leaves disk alone', async () => {
+      const h = start();
+      const path = '/repo/src/index.ts';
+      const { ref, entry } = await openReady(h, path, 'newer disk text');
+
+      h.store.hydrateBuffer(ref, {
+        content: 'recovered edits',
+        baseHash: await bufferBaseHash('older disk text'),
+        updatedAt: 1,
+      });
+      await waitFor(() => entry.dirty);
+
+      expect(bufferHandle(entry).getText()).toBe('recovered edits');
+      expect(entry.conflicted).toBe(true);
+      expect(entry.recoveredStale).toBe(true);
+
+      expect(await h.store.save(entry)).toEqual(err({ type: 'conflict' }));
+      const disk = h.diskContent(h.diskKey(path));
+      expect(disk?.kind === 'text' && disk.content).toBe('newer disk text');
+    });
+
+    it('treats a row from before rows recorded a base hash as stale', async () => {
+      const h = start();
+      const path = '/repo/src/index.ts';
+      const { ref, entry } = await openReady(h, path, 'disk text');
+
+      h.store.hydrateBuffer(ref, { content: 'legacy edits', baseHash: null, updatedAt: 1 });
+      await waitFor(() => entry.dirty);
+
+      expect(bufferHandle(entry).getText()).toBe('legacy edits');
+      expect(entry.conflicted).toBe(true);
+      expect(entry.recoveredStale).toBe(true);
+      expect(await h.store.save(entry)).toEqual(err({ type: 'conflict' }));
     });
 
     it('never clobbers edits the user made before hydration arrived', async () => {
@@ -908,7 +981,11 @@ describe('OpenFileStore', () => {
 
       bufferHandle(entry).setText('typed after restart');
       await waitFor(() => entry.dirty);
-      h.store.hydrateBuffer(ref, 'stale recovered edits');
+      h.store.hydrateBuffer(ref, {
+        content: 'stale recovered edits',
+        baseHash: null,
+        updatedAt: 1,
+      });
 
       expect(bufferHandle(entry).getText()).toBe('typed after restart');
     });
@@ -920,18 +997,25 @@ describe('OpenFileStore', () => {
       const lease = h.store.acquire(ref, BUFFER);
       expect(lease.entry.status.kind).toBe('loading');
 
-      h.store.hydrateBuffer(ref, 'recovered edits');
+      h.store.hydrateBuffer(ref, {
+        content: 'recovered edits',
+        baseHash: await bufferBaseHash('disk text'),
+        updatedAt: 1,
+      });
       h.publish(h.diskKey(path), textContent('disk text', 'e1'));
       await waitFor(() => lease.entry.handleFor(BUFFER) !== undefined);
+      await waitFor(() => bufferHandle(lease.entry).getText() === 'recovered edits');
 
-      expect(bufferHandle(lease.entry).getText()).toBe('recovered edits');
       expect(lease.entry.dirty).toBe(true);
+      expect(lease.entry.conflicted).toBe(false);
     });
 
     it('leaves files that are not open alone', () => {
       const h = start();
       const ref = hostFileRefFromNativePath('/repo/not-open.ts');
-      expect(() => h.store.hydrateBuffer(ref, 'row')).not.toThrow();
+      expect(() =>
+        h.store.hydrateBuffer(ref, { content: 'row', baseHash: null, updatedAt: 1 })
+      ).not.toThrow();
       expect(h.store.peek(ref)).toBeUndefined();
     });
   });

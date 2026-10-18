@@ -1,7 +1,12 @@
+import { stat } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
+import { hostRefEquals, LOCAL_HOST_REF } from '@emdash/core/primitives/host/api';
 import {
+  comparisonKeyForAbsolutePath,
   decodeResourceUri,
   encodeResourceUri,
+  formatAbsolute,
+  nativePathIdentityKey,
   type ResourceUri,
 } from '@emdash/core/primitives/path/api';
 import type { SqliteConnection, StoreHandle } from '@emdash/core/primitives/sqlite-store/api';
@@ -29,6 +34,7 @@ const schemaSql = `
   CREATE TABLE editor_buffers (
     uri TEXT PRIMARY KEY,
     content TEXT NOT NULL,
+    base_hash TEXT,
     updated_at INTEGER NOT NULL
   ) STRICT;
 `;
@@ -60,7 +66,12 @@ export type EditorBufferServiceDeps = {
   };
 };
 
-export type EditorBufferEntry = { uri: ResourceUri; content: string };
+export type EditorBufferEntry = {
+  uri: ResourceUri;
+  content: string;
+  baseHash: string | null;
+  updatedAt: number;
+};
 
 /**
  * Crash-recovery buffer store keyed by ResourceUri. Keys are canonicalized
@@ -70,11 +81,12 @@ export type EditorBufferEntry = { uri: ResourceUri; content: string };
 export class EditorBufferService {
   constructor(private readonly deps: EditorBufferServiceDeps) {}
 
-  async saveBuffer(uri: ResourceUri, content: string): Promise<void> {
+  async saveBuffer(uri: ResourceUri, content: string, baseHash: string | null): Promise<void> {
     this.deps.handle.connection.run(
-      `INSERT INTO editor_buffers (uri, content, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT (uri) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
-      [canonicalResourceUri(uri), content, Date.now()]
+      `INSERT INTO editor_buffers (uri, content, base_hash, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (uri) DO UPDATE SET content = excluded.content, base_hash = excluded.base_hash,
+       updated_at = excluded.updated_at`,
+      [canonicalResourceUri(uri), content, baseHash, Date.now()]
     );
   }
 
@@ -82,6 +94,45 @@ export class EditorBufferService {
     this.deps.handle.connection.run(`DELETE FROM editor_buffers WHERE uri = ?`, [
       canonicalResourceUri(uri),
     ]);
+  }
+
+  /**
+   * Drops every buffer under `root` (same host, path prefix on segment
+   * boundaries) — used after the workspace's changes were discarded.
+   */
+  async clearBuffers(root: ResourceUri): Promise<void> {
+    const prefix = `${canonicalResourceUri(root)}/`;
+    this.deps.handle.connection.run(`DELETE FROM editor_buffers WHERE substr(uri, 1, ?) = ?`, [
+      prefix.length,
+      prefix,
+    ]);
+  }
+
+  /**
+   * Drops rows for local files under `dir` (a removed worktree). Remote rows
+   * are kept. Best-effort: a failure is logged, never thrown, so it cannot
+   * fail the task deletion that calls it.
+   */
+  async clearBuffersUnderLocalPath(dir: string): Promise<void> {
+    try {
+      const dirKey = nativePathIdentityKey(dir);
+      const rows = this.deps.handle.connection.all<{ uri: ResourceUri }>(
+        `SELECT uri FROM editor_buffers`
+      );
+      const removed: ResourceUri[] = [];
+      for (const row of rows) {
+        const decoded = decodeResourceUri(row.uri);
+        if (!decoded.success) continue;
+        if (!hostRefEquals(decoded.data.host, LOCAL_HOST_REF)) continue;
+        const key = comparisonKeyForAbsolutePath(decoded.data.path);
+        if (key === dirKey || key.startsWith(`${dirKey}/`)) removed.push(row.uri);
+      }
+      for (const uri of removed) {
+        this.deps.handle.connection.run(`DELETE FROM editor_buffers WHERE uri = ?`, [uri]);
+      }
+    } catch (e) {
+      this.deps.logger?.error('Failed to clear editor buffers of a removed worktree:', e);
+    }
   }
 
   /**
@@ -93,7 +144,7 @@ export class EditorBufferService {
   async listBuffers(root?: ResourceUri): Promise<EditorBufferEntry[]> {
     if (root === undefined) {
       return this.deps.handle.connection.all<EditorBufferEntry>(
-        `SELECT uri, content FROM editor_buffers`
+        `SELECT uri, content, base_hash AS baseHash, updated_at AS updatedAt FROM editor_buffers`
       );
     }
     // ResourceUri segments are percent-encoded, so `/` only occurs as the
@@ -101,7 +152,8 @@ export class EditorBufferService {
     // substr() rather than LIKE because percent-encoding puts `%` in keys.
     const prefix = `${canonicalResourceUri(root)}/`;
     return this.deps.handle.connection.all<EditorBufferEntry>(
-      `SELECT uri, content FROM editor_buffers WHERE substr(uri, 1, ?) = ?`,
+      `SELECT uri, content, base_hash AS baseHash, updated_at AS updatedAt FROM editor_buffers
+       WHERE substr(uri, 1, ?) = ?`,
       [prefix.length, prefix]
     );
   }
@@ -110,8 +162,33 @@ export class EditorBufferService {
     try {
       const cutoff = Date.now() - BUFFER_STALE_MS;
       this.deps.handle.connection.run(`DELETE FROM editor_buffers WHERE updated_at < ?`, [cutoff]);
+      await this.pruneMissingLocalFiles();
     } catch (e) {
       this.deps.logger?.error('Failed to prune stale editor buffers:', e);
+    }
+  }
+
+  /**
+   * Drops local rows whose file no longer exists — leftovers of deleted
+   * worktrees and renamed-away files. Remote rows are kept (their files are
+   * not stat-able from here).
+   */
+  private async pruneMissingLocalFiles(): Promise<void> {
+    const rows = this.deps.handle.connection.all<{ uri: ResourceUri }>(
+      `SELECT uri FROM editor_buffers`
+    );
+    const missing: ResourceUri[] = [];
+    for (const row of rows) {
+      const decoded = decodeResourceUri(row.uri);
+      if (!decoded.success) continue;
+      if (!hostRefEquals(decoded.data.host, LOCAL_HOST_REF)) continue;
+      const exists = await stat(formatAbsolute(decoded.data.path))
+        .then(() => true)
+        .catch(() => false);
+      if (!exists) missing.push(row.uri);
+    }
+    for (const uri of missing) {
+      this.deps.handle.connection.run(`DELETE FROM editor_buffers WHERE uri = ?`, [uri]);
     }
   }
 

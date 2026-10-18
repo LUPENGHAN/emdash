@@ -12,18 +12,32 @@ export const editorDomain = 'editor' as const;
 export const editorContract = defineContract({
   lsp: editorLspContract,
   saveBuffer: procedure({
-    input: editorBufferKeySchema.extend({ content: z.string() }),
+    // `baseHash` is the disk text the draft was edited from, so recovery can
+    // tell a stale row (disk moved on) from one that still applies cleanly.
+    input: editorBufferKeySchema.extend({ content: z.string(), baseHash: z.string().nullable() }),
     output: z.void(),
   }),
   clearBuffer: procedure({
     input: editorBufferKeySchema,
     output: z.void(),
   }),
+  // Bulk cleanup for a whole root (after discarding all of its changes).
+  clearBuffers: procedure({
+    input: z.object({ root: resourceUriSchema }),
+    output: z.void(),
+  }),
   // Recovery enumeration: `root` scopes to buffers under that root ResourceUri
   // prefix; omitting it lists every buffer, including files outside any root.
   listBuffers: procedure({
     input: z.object({ root: resourceUriSchema.optional() }),
-    output: z.array(z.object({ uri: resourceUriSchema, content: z.string() })),
+    output: z.array(
+      z.object({
+        uri: resourceUriSchema,
+        content: z.string(),
+        baseHash: z.string().nullable(),
+        updatedAt: z.number(),
+      })
+    ),
   }),
 });
 

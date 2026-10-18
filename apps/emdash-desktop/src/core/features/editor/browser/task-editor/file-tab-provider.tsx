@@ -31,6 +31,7 @@ import { FileContentToolbar } from './file-content-toolbar';
 import { FILE_CONTENT_TYPES } from './file-content-types';
 import { FileStatusPlaceholder } from './file-status-placeholder';
 import { FileTabBarItem, FileTabBarItemDragPreview } from './file-tab-item';
+import { RecoveredStaleBanner } from './recovered-stale-banner';
 
 export interface FileOpenArgs {
   path: string;
@@ -76,6 +77,7 @@ const FileContent = observer(function FileContent({ host, ctx }: TabContentProps
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       {activeFile && <FileContentToolbar tab={activeFile} canToggle={canToggle} />}
+      {activeFile && <RecoveredStaleBanner tab={activeFile} />}
       {activeFile && liveActionDisabledReason && !blocked && (
         <div
           className="border-b bg-background-secondary px-2 py-1 text-xs text-foreground-muted"

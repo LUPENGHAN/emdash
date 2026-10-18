@@ -344,10 +344,10 @@ export class EditorViewStore {
     if (!root) return;
     try {
       const buffers = await (await getEditorClient()).listBuffers({ root });
-      for (const { uri: bufferKey, content } of buffers) {
-        const decoded = decodeResourceUri(bufferKey);
+      for (const row of buffers) {
+        const decoded = decodeResourceUri(row.uri);
         if (!decoded.success) continue;
-        openFileStore.hydrateBuffer(decoded.data, content);
+        openFileStore.hydrateBuffer(decoded.data, row);
       }
     } catch (e) {
       log.warn('[EditorViewStore] Failed to restore buffers:', e);

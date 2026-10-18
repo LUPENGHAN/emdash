@@ -1,4 +1,5 @@
 import {
+  containsHostFileRef,
   decodeResourceUri,
   encodeResourceUri,
   resourceKeyFromFileRef,
@@ -17,6 +18,7 @@ import { filesWireContract } from '@core/features/files/api';
 import { getFilesClient } from '@core/features/files/api/browser/client';
 import type { GitRef } from '@core/primitives/git/api';
 import { log } from '@core/primitives/logging/browser/logger';
+import { bufferBaseHash } from './buffer-base-hash';
 import { facetSlotKey, type Facet, type FacetHandle, type FacetHandleBinder } from './facet-handle';
 
 /**
@@ -71,6 +73,11 @@ export interface OpenFileEntry {
   readonly status: ContentStatus;
   readonly dirty: boolean;
   readonly conflicted: boolean;
+  /**
+   * The recovered buffer predates the current disk text (or cannot tell):
+   * saving must ask instead of silently overwriting newer disk work.
+   */
+  readonly recoveredStale: boolean;
   readonly saving: boolean;
   readonly readOnly: boolean;
   handleFor(facet: Facet): FacetHandle | undefined;
@@ -123,6 +130,7 @@ class OpenFileEntryImpl implements OpenFileEntry {
   status: ContentStatus = LOADING;
   dirty = false;
   conflicted = false;
+  recoveredStale = false;
   saving = false;
   readOnly = false;
 
@@ -138,10 +146,17 @@ class OpenFileEntryImpl implements OpenFileEntry {
   lastDiskEtag: string | undefined;
   /** Etag of the disk content the buffer was last synchronized with. */
   baseEtag: string | undefined;
+  /**
+   * Disk text the current buffer edits started from — the recovery row's
+   * `baseHash` source; kept in lockstep with `baseEtag`.
+   */
+  baseText: string | undefined;
   /** True once the disk content has been readable — gates orphan vs not-found. */
   everReady = false;
   /** Buffer text carried across a re-key, applied once the new handle exists. */
   pendingBufferSeed: string | undefined;
+  /** Recovery-row base hash (or re-key baseline hash) paired with the seed. */
+  pendingBufferSeedBase: string | null | undefined;
   /** Suppresses buffer change handling while the store itself writes text. */
   applyingStoreEdit = false;
   autosaveTimer: TimerHandle | null = null;
@@ -155,6 +170,7 @@ class OpenFileEntryImpl implements OpenFileEntry {
       status: observable.ref,
       dirty: observable,
       conflicted: observable,
+      recoveredStale: observable,
       saving: observable,
       readOnly: observable,
     });
@@ -301,33 +317,53 @@ export class OpenFileStore {
   }
 
   /**
+   * Discards dirty buffers under one root only (after that workspace's
+   * changes were discarded), unlike {@link discardAllDirty} which spans every
+   * workspace.
+   */
+  discardDirtyUnder(root: ResourceUri): void {
+    const rootRef = decodeResourceUri(root);
+    if (!rootRef.success) return;
+    for (const entry of this.dirtyEntries()) {
+      const decoded = decodeResourceUri(entry.uri);
+      if (!decoded.success) continue;
+      if (!containsHostFileRef(rootRef.data, decoded.data)) continue;
+      this.reloadFromDisk(entry);
+    }
+  }
+
+  /**
    * Applies a crash-recovery buffer row to an already-open entry (the
    * workspace-open restore flow). User edits made since the entry was opened
    * win over the persisted row; a still-loading buffer takes the row as its
    * seed, applied once the handle exists. Entries that are not open are left
    * alone — their rows apply when a tab opens them.
    */
-  hydrateBuffer(ref: HostFileRef, content: string): void {
+  hydrateBuffer(
+    ref: HostFileRef,
+    row: { content: string; baseHash: string | null; updatedAt: number }
+  ): void {
     const entry = this.entries.get(resourceKeyFromFileRef(ref));
     if (!entry || entry.dirty) return;
     const slot = entry.slots.get(BUFFER_SLOT);
     if (!slot) return;
     const handle = slot.handle;
     if (!handle) {
-      entry.pendingBufferSeed = content;
+      entry.pendingBufferSeed = row.content;
+      entry.pendingBufferSeedBase = row.baseHash;
       return;
     }
-    if (handle.getText() === content) return;
-    this.silentSet(entry, handle, content);
-    this.reconcileDirty(entry);
+    void this.applyRecoveredBuffer(entry, handle, row.content, row.baseHash);
   }
 
   /**
    * Writes the buffer through the content model's etag-preconditioned write
    * mutation. A stale etag classifies as a conflict: the entry flags
    * `conflicted` and the caller resolves via `{ overwrite: true }` or
-   * {@link reloadFromDisk}. A successful save clears the crash-recovery
-   * buffer.
+   * {@link reloadFromDisk}. A stale recovered buffer has no etag to
+   * precondition with (its row only kept a hash), so plain saves refuse the
+   * same way and the conflict dialog mediates. A successful save clears the
+   * crash-recovery buffer.
    */
   async save(
     entry: OpenFileEntry,
@@ -336,6 +372,12 @@ export class OpenFileStore {
     const impl = this.entries.get(entry.key);
     if (!impl || impl !== entry) return err({ type: 'not-open' as const });
     if (impl.readOnly) return err({ type: 'readonly' as const });
+    if (!options.overwrite && impl.recoveredStale) {
+      runInAction(() => {
+        impl.conflicted = true;
+      });
+      return err({ type: 'conflict' as const });
+    }
     const slot = impl.slots.get(BUFFER_SLOT);
     const handle = slot?.handle;
     const binding = impl.diskSource;
@@ -373,8 +415,10 @@ export class OpenFileStore {
       impl.lastDiskText = content;
       if (latest?.kind === 'text') impl.lastDiskEtag = latest.etag;
       impl.baseEtag = impl.lastDiskEtag;
+      impl.baseText = impl.lastDiskText;
       runInAction(() => {
         impl.conflicted = false;
+        impl.recoveredStale = false;
       });
       this.reconcileDirty(impl);
       // A completed write only cleans the snapshot it wrote. Keep newer edits recoverable.
@@ -383,7 +427,11 @@ export class OpenFileStore {
         impl.autosaveTimer?.dispose();
         impl.autosaveTimer = null;
         await client.clearBuffer({ uri: impl.uri });
-        if (impl.dirty) await client.saveBuffer({ uri: impl.uri, content: handle.getText() });
+        if (impl.dirty) {
+          const base = impl.baseText;
+          const baseHash = base === undefined ? null : await bufferBaseHash(base);
+          await client.saveBuffer({ uri: impl.uri, content: handle.getText(), baseHash });
+        }
       }
       this.maybeScheduleBufferEviction(impl);
       const decoded = decodeResourceUri(impl.uri);
@@ -419,9 +467,11 @@ export class OpenFileStore {
     if (!handle || impl.lastDiskText === undefined) return;
     this.silentSet(impl, handle, impl.lastDiskText);
     impl.baseEtag = impl.lastDiskEtag;
+    impl.baseText = impl.lastDiskText;
     runInAction(() => {
       impl.dirty = false;
       impl.conflicted = false;
+      impl.recoveredStale = false;
     });
     impl.autosaveTimer?.dispose();
     impl.autosaveTimer = null;
@@ -450,9 +500,12 @@ export class OpenFileStore {
     const bufferSlot = entry.slots.get(BUFFER_SLOT);
     const dirtyText = entry.dirty && bufferSlot?.handle ? bufferSlot.handle.getText() : undefined;
 
+    let seedBaseHash: string | null = null;
     if (dirtyText !== undefined) {
+      const base = entry.baseText;
+      seedBaseHash = base === undefined ? null : await bufferBaseHash(base);
       const client = await getEditorClient();
-      await client.saveBuffer({ uri: newUri, content: dirtyText });
+      await client.saveBuffer({ uri: newUri, content: dirtyText, baseHash: seedBaseHash });
       await client.clearBuffer({ uri: oldUri });
     }
     if (this.entries.get(oldKey) !== entry) return;
@@ -470,15 +523,18 @@ export class OpenFileStore {
       entry.uri = newUri;
       entry.dirty = dirtyText !== undefined;
       entry.conflicted = false;
+      entry.recoveredStale = false;
       entry.status = LOADING;
     });
 
     entry.pendingBufferSeed = dirtyText;
+    entry.pendingBufferSeedBase = seedBaseHash;
     entry.autosaveTimer?.dispose();
     entry.autosaveTimer = null;
     entry.lastDiskText = undefined;
     entry.lastDiskEtag = undefined;
     entry.baseEtag = undefined;
+    entry.baseText = undefined;
     entry.everReady = false;
 
     for (const slot of entry.slots.values()) this.resetSlotHandle(entry, slot);
@@ -825,9 +881,11 @@ export class OpenFileStore {
     if (!entry.dirty || matches) {
       if (!matches) this.silentSet(entry, bufferHandle, text);
       entry.baseEtag = entry.lastDiskEtag;
+      entry.baseText = text;
       runInAction(() => {
         entry.dirty = false;
         entry.conflicted = false;
+        entry.recoveredStale = false;
       });
       this.maybeScheduleBufferEviction(entry);
     } else if (entry.baseEtag !== entry.lastDiskEtag) {
@@ -868,11 +926,13 @@ export class OpenFileStore {
         if (slot.facet.kind === 'buffer') {
           slot.unsubscribeChange = handle.onDidChange(() => this.onBufferChanged(entry));
           entry.baseEtag = entry.lastDiskEtag;
+          entry.baseText = entry.lastDiskText;
           const seed = entry.pendingBufferSeed;
           if (seed !== undefined) {
+            const seedBase = entry.pendingBufferSeedBase ?? null;
             entry.pendingBufferSeed = undefined;
-            this.silentSet(entry, handle, seed);
-            this.reconcileDirty(entry);
+            entry.pendingBufferSeedBase = undefined;
+            void this.applyRecoveredBuffer(entry, handle, seed, seedBase);
           }
           this.applyDiskText(entry);
         } else if (slot.facet.kind === 'disk') {
@@ -913,10 +973,14 @@ export class OpenFileStore {
       if (!entry.dirty) return;
       const handle = entry.slots.get(BUFFER_SLOT)?.handle;
       if (!handle) return;
+      // A buffer whose file is gone (a removed worktree) can never be saved
+      // back; persisting it would resurrect the row the removal cleared.
+      if (entry.status.kind === 'orphaned' || entry.status.kind === 'error') return;
       const uri = entry.uri;
       const content = handle.getText();
-      void getEditorClient()
-        .then((client) => client.saveBuffer({ uri, content }))
+      const base = entry.baseText;
+      void (base === undefined ? Promise.resolve(null) : bufferBaseHash(base))
+        .then(async (baseHash) => (await getEditorClient()).saveBuffer({ uri, content, baseHash }))
         .catch(() => undefined);
     });
   }
@@ -927,9 +991,43 @@ export class OpenFileStore {
     const dirty = handle.getText() !== entry.lastDiskText;
     runInAction(() => {
       entry.dirty = dirty;
-      if (!dirty) entry.conflicted = false;
+      if (!dirty) {
+        entry.conflicted = false;
+        entry.recoveredStale = false;
+      }
     });
-    if (!dirty) entry.baseEtag = entry.lastDiskEtag;
+    if (!dirty) {
+      entry.baseEtag = entry.lastDiskEtag;
+      entry.baseText = entry.lastDiskText;
+    }
+  }
+
+  /**
+   * Applies a recovered buffer row. A row edited from other disk text than
+   * what is on disk now (or a row from before rows recorded it) is a
+   * conflict, so saving asks instead of writing the stale text over newer
+   * work.
+   */
+  private async applyRecoveredBuffer(
+    entry: OpenFileEntryImpl,
+    handle: FacetHandle,
+    content: string,
+    baseHash: string | null
+  ): Promise<void> {
+    const disk = entry.lastDiskText;
+    const stale =
+      disk === undefined || baseHash === null || baseHash !== (await bufferBaseHash(disk));
+    // The entry may have changed while hashing (user typed, file closed).
+    if (this.entries.get(entry.key) !== entry || entry.dirty) return;
+    if (handle.getText() === content) return;
+    this.silentSet(entry, handle, content);
+    this.reconcileDirty(entry);
+    if (stale && entry.dirty) {
+      runInAction(() => {
+        entry.conflicted = true;
+        entry.recoveredStale = true;
+      });
+    }
   }
 
   private silentSet(entry: OpenFileEntryImpl, handle: FacetHandle, text: string): void {

@@ -130,6 +130,7 @@ describe('deleteTask', () => {
     };
     const telemetry = { capture: vi.fn() };
     const evictFileSearchRoot = vi.fn();
+    const clearEditorBuffersUnderLocalPath = vi.fn(async () => {});
     const dependencies: TaskDeletionDependencies = {
       db: fixture.db,
       runtimes,
@@ -137,8 +138,16 @@ describe('deleteTask', () => {
       getMementosRuntimeClient: async () => mementos as unknown as MementosRuntimeClient,
       telemetry,
       evictFileSearchRoot,
+      clearEditorBuffersUnderLocalPath,
     };
-    return { dependencies, sessionCleanup, mementos, telemetry, evictFileSearchRoot };
+    return {
+      dependencies,
+      sessionCleanup,
+      mementos,
+      telemetry,
+      evictFileSearchRoot,
+      clearEditorBuffersUnderLocalPath,
+    };
   }
 
   it('deletes desktop rows immediately and removes the worktree through the verb when reachable', async () => {

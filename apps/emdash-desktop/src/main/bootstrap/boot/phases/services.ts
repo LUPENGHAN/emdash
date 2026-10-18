@@ -753,6 +753,8 @@ export async function bootServices(
       getMementosRuntimeClient,
       telemetry: telemetryService,
       evictFileSearchRoot: fileSearchRuntime.evictRoot,
+      clearEditorBuffersUnderLocalPath: (path) =>
+        database.editorBuffer.clearBuffersUnderLocalPath(path),
     },
   });
   const searchService = createSearchService({

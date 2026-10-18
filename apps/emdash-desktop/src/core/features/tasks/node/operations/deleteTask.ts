@@ -68,6 +68,8 @@ export type TaskDeletionDependencies = {
   getMementosRuntimeClient(): Promise<MementosRuntimeClient>;
   telemetry: Pick<TelemetryService, 'capture'>;
   evictFileSearchRoot(path: HostAbsolutePath, host: HostRef): Promise<void> | void;
+  /** Drops crash-recovery buffers of a just-removed local worktree. */
+  clearEditorBuffersUnderLocalPath(path: string): Promise<void> | void;
 };
 
 export async function deleteTask(
@@ -153,12 +155,23 @@ export async function deleteTask(
     canDeleteOwnedWorktree &&
     input.deleteWorktree !== false
   ) {
-    await deleteWorkspaceThroughRegistry(db, dependencies.runtimes, task.workspaceId, {
-      deleteBranch: input.deleteBranch ?? false,
-    });
+    const removed = await deleteWorkspaceThroughRegistry(
+      db,
+      dependencies.runtimes,
+      task.workspaceId,
+      {
+        deleteBranch: input.deleteBranch ?? false,
+      }
+    );
+    // Crash-recovery rows for the deleted worktree are leftovers of a
+    // directory that no longer exists; their best-effort cleanup cannot be
+    // allowed to fail the deletion.
+    if (removed.success && workspace?.path) {
+      await dependencies.clearEditorBuffersUnderLocalPath(workspace.path);
+    }
     if (workspace?.path && workspaceIsUntracked(db, workspace.id)) {
-      const removed = hostFileRefFromNativePath(workspace.path, sshConnectionIdOf(host));
-      await dependencies.evictFileSearchRoot(removed.path, removed.host);
+      const removedRef = hostFileRefFromNativePath(workspace.path, sshConnectionIdOf(host));
+      await dependencies.evictFileSearchRoot(removedRef.path, removedRef.host);
     }
   }
 

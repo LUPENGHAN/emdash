@@ -1,3 +1,4 @@
+import { lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { err, ok, type Result } from '@emdash/shared';
 import { blobSourceFromBytes, type BlobSource } from '@emdash/wire/rpc';
@@ -128,14 +129,16 @@ export class GitCheckout {
     });
   }
 
-  async revertAll(): Promise<Result<void, GitCommandError>> {
+  async revertAll(options: { includeUntracked: boolean }): Promise<Result<void, GitCommandError>> {
     return this.commandMutation(async () => {
       try {
         await this.exec.exec(['reset', '--hard', 'HEAD']);
       } catch (error) {
         if (!checkoutFailures.isUnbornHead(error)) throw error;
       }
-      await this.exec.exec(['clean', '-fd']);
+      if (!options.includeUntracked) return;
+      const untracked = await this.untrackedPathsWithoutSymlinks();
+      if (untracked.length > 0) await this.exec.exec(['clean', '-fd', '--', ...untracked]);
     });
   }
 
@@ -294,6 +297,28 @@ export class GitCheckout {
     return paths.length > 0 ? paths : undefined;
   }
 
+  /**
+   * Untracked entries that are not symlinks. Untracked links such as a
+   * `node_modules` shortcut survive `reset --hard` but `git clean -fd` would
+   * remove them, because ignore patterns with a trailing slash only match
+   * directories.
+   */
+  private async untrackedPathsWithoutSymlinks(): Promise<string[]> {
+    const { stdout } = await this.exec.exec([
+      'ls-files',
+      '--others',
+      '--exclude-standard',
+      '--directory',
+      '-z',
+    ]);
+    const untracked: string[] = [];
+    for (const relative of stdout.split('\0').filter(Boolean)) {
+      const stats = await lstat(path.resolve(this.checkoutRoot, relative)).catch(() => undefined);
+      if (stats?.isSymbolicLink()) continue;
+      untracked.push(relative);
+    }
+    return untracked;
+  }
   private async getIndexedPaths(paths: string[]): Promise<string[]> {
     const { stdout } = await this.exec.exec(['ls-files', '-z', '--', ...paths]);
     return [...new Set(stdout.split('\0').filter(Boolean))];
