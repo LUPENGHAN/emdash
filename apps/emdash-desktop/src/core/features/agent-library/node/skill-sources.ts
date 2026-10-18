@@ -226,7 +226,12 @@ export async function updateSkill(
   const scratch = await mkdtemp(path.join(updateRoot, `${name}-`));
   try {
     const download = path.join(scratch, 'download');
-    await downloadSkillFiles(record.repo, files, download, token);
+    await downloadSkillFiles(
+      { repo: record.repo, commit: snapshot.commit, skillPath: record.path },
+      files,
+      download,
+      token
+    );
     return await mutateSources(libraryDir, async (records) => {
       await replaceFolder(download, folder, path.join(scratch, 'previous'));
       const stored = records[name];
@@ -620,20 +625,49 @@ function dirnamePosix(file: string): string {
   return index === -1 ? '' : file.slice(0, index);
 }
 
-/** A file's content from the GitHub blobs API; raw URLs do not serve private repositories. */
-async function downloadBlob(repo: string, sha: string, token: string | null): Promise<Buffer> {
-  const body = await fetchGitHub(`https://api.github.com/repos/${repo}/git/blobs/${sha}`, {
+/** One file of a snapshot: its path in the repository and its blob id. */
+type RemoteFile = { repoPath: string; sha: string };
+
+/**
+ * A file's content at one commit. Signed in, the blobs API (raw URLs do not serve
+ * private repositories); anonymous, the raw URL, which unlike the API (60 requests an
+ * hour without a token) is not rate limited per file.
+ */
+async function downloadFile(
+  repo: string,
+  commit: string,
+  file: RemoteFile,
+  token: string | null
+): Promise<Buffer> {
+  if (!token) {
+    const response = await fetch(
+      `https://raw.githubusercontent.com/${repo}/${commit}/${encodePath(file.repoPath)}`,
+      { signal: AbortSignal.timeout(20000), headers: { 'user-agent': 'emdash' } }
+    );
+    if (response.status === 404) {
+      throw new Error(
+        `Could not download ${file.repoPath} (404). If the repository is private, sign in to GitHub in Settings → Accounts.`
+      );
+    }
+    if (!response.ok) throw new Error(`Could not download ${file.repoPath} (${response.status})`);
+    return Buffer.from(await response.arrayBuffer());
+  }
+  const body = await fetchGitHub(`https://api.github.com/repos/${repo}/git/blobs/${file.sha}`, {
     token,
   });
   if (body?.encoding !== 'base64' || typeof body.content !== 'string') {
-    throw new Error(`GitHub sent an unreadable file (${sha})`);
+    throw new Error(`GitHub sent an unreadable file (${file.repoPath})`);
   }
   return Buffer.from(body.content, 'base64');
 }
 
+function encodePath(file: string): string {
+  return file.split('/').map(encodeURIComponent).join('/');
+}
+
 /** Writes a skill's files from a snapshot into `dest`; returns the paths written. */
 async function downloadSkillFiles(
-  repo: string,
+  snapshot: { repo: string; commit: string; skillPath: string },
   files: { path: string; sha: string | null; mode: string | null }[],
   dest: string,
   token: string | null
@@ -642,7 +676,13 @@ async function downloadSkillFiles(
   for (const file of files) {
     if (!file.sha) throw new Error(`GitHub did not list a content hash for ${file.path}`);
     const target = remoteFileTarget(dest, file.path);
-    const content = await downloadBlob(repo, file.sha, token);
+    const repoPath = snapshot.skillPath ? `${snapshot.skillPath}/${file.path}` : file.path;
+    const content = await downloadFile(
+      snapshot.repo,
+      snapshot.commit,
+      { repoPath, sha: file.sha },
+      token
+    );
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, content);
     // Scripts stay runnable (and the folder's Git tree id matches the remote's).
@@ -697,7 +737,9 @@ export async function scanGitHubSkills(
     const skillMd = folder ? `${folder}/SKILL.md` : 'SKILL.md';
     const entry = snapshot.entries.find((candidate) => candidate.path === skillMd);
     if (!entry?.sha) continue;
-    const markdown = (await downloadBlob(repo, entry.sha, token)).toString('utf8');
+    const markdown = (
+      await downloadFile(repo, snapshot.commit, { repoPath: skillMd, sha: entry.sha }, token)
+    ).toString('utf8');
     const folderPrefix = folder ? `${folder}/` : prefix;
     const skipped = snapshot.entries
       .filter(
@@ -778,7 +820,12 @@ export async function installGitHubSkills(
       let installedHash: string;
       try {
         const download = path.join(scratch, 'download');
-        await downloadSkillFiles(input.repo, files, download, token);
+        await downloadSkillFiles(
+          { repo: input.repo, commit: snapshot.commit, skillPath: pick.path },
+          files,
+          download,
+          token
+        );
         await replaceFolder(download, folder, path.join(scratch, 'previous'));
         installedHash = await folderHash(folder);
       } finally {

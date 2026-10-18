@@ -130,6 +130,12 @@ describe('updateSkill', () => {
         if (url.pathname === '/repos/o/r/git/trees/root') {
           return Response.json({ tree, truncated });
         }
+        if (url.hostname === 'raw.githubusercontent.com') {
+          const repoPath = decodeURIComponent(url.pathname.replace(/^\/o\/r\/commit-1\//, ''));
+          const sha = tree.find((entry) => entry.path === repoPath)?.sha;
+          const content = sha ? blobs[sha] : undefined;
+          return content === undefined ? new Response('', { status: 404 }) : new Response(content);
+        }
         const blob = /^\/repos\/o\/r\/git\/blobs\/([^/]+)$/.exec(url.pathname);
         if (blob) {
           const content = blobs[blob[1]!];
@@ -220,6 +226,24 @@ describe('updateSkill', () => {
       expect(request.authorization).toBeUndefined();
     }
   });
+
+  it('downloads files from raw URLs without a token, from the blobs API with one', async () => {
+    // Anonymous API calls are capped at 60 an hour; one per file would use them up.
+    requests.length = 0;
+    await updateSkill(libraryDir, 'demo', true);
+    const anonymous = requests.map((request) => request.url);
+    expect(anonymous.filter((url) => url.includes('/git/blobs/'))).toEqual([]);
+    expect(anonymous).toContain(
+      'https://raw.githubusercontent.com/o/r/commit-1/skills/demo/SKILL.md'
+    );
+
+    requests.length = 0;
+    await updateSkill(libraryDir, 'demo', true, 'tok-1');
+    const signedIn = requests.map((request) => request.url);
+    expect(signedIn.filter((url) => url.includes('raw.githubusercontent.com'))).toEqual([]);
+    expect(signedIn.filter((url) => url.includes('/git/blobs/'))).toHaveLength(2);
+    expect(await readFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'utf8')).toBe('new SKILL.md');
+  });
 });
 
 type StubEntry = { path: string; type: string; sha?: string; mode?: string };
@@ -243,6 +267,12 @@ function stubGitHub(input: {
       }
       if (url.pathname === '/repos/o/r/git/trees/root') {
         return Response.json({ tree: input.tree, truncated: input.truncated ?? false });
+      }
+      if (url.hostname === 'raw.githubusercontent.com') {
+        const repoPath = decodeURIComponent(url.pathname.replace(/^\/o\/r\/commit-1\//, ''));
+        const sha = input.tree.find((entry) => entry.path === repoPath)?.sha;
+        const content = sha ? input.blobs[sha] : undefined;
+        return content === undefined ? new Response('', { status: 404 }) : new Response(content);
       }
       const blob = /^\/repos\/o\/r\/git\/blobs\/([^/]+)$/.exec(url.pathname);
       if (blob) {
