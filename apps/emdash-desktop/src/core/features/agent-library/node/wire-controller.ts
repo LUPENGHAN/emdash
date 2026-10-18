@@ -11,6 +11,8 @@ export function createAgentLibraryWireController(service: AgentLibraryService): 
     checkSkillUpdates: () => service.checkSkillUpdates(),
     setSkillSource: ({ name, url }) => service.setSkillSource(name, url),
     updateSkill: ({ name, force }) => service.updateSkill(name, force),
+    scanGitHubSkills: ({ url }) => service.scanGitHubSkills(url),
+    installGitHubSkills: (input) => service.installGitHubSkills(input),
     checkMcpServer: ({ name }) => service.checkMcpServer(name),
     checkMcpHealth: ({ name }) => service.checkMcpHealth(name),
     effectiveFor: ({ projectId }) => service.effectiveFor(projectId),

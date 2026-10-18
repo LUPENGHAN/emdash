@@ -555,6 +555,14 @@ export async function bootServices(
       if (local.success) await local.data.agentConfig.refreshSkills({});
     },
     warn: (message, details) => log.warn(message, details),
+    // Late-bound: the GitHub credential reader is built further down in this
+    // phase; the library only asks for a token after boot completes.
+    getGitHubToken: async () => {
+      const accountId = await providerAccountRegistry.getDefaultAccountId('github');
+      if (!accountId) return null;
+      const credentials = await readGitHubCredentials(accountId, 'github.com');
+      return credentials.success ? credentials.data.accessToken : null;
+    },
   });
   appScope.add(() => agentLibrary.dispose());
   void agentLibrary.resyncAll();
