@@ -123,6 +123,10 @@ describe('skill library', () => {
       names: ['grill-me', 'archify'],
     });
     expect((await stat(path.join(copy, 'SKILL.md'))).mtimeMs).toBe(stamp);
+    // …and stays excluded from git, or it shows up as untracked files.
+    expect(await readFile(path.join(workspace, '.git', 'info', 'exclude'), 'utf8')).toContain(
+      '/.cursor/skills/grill-me'
+    );
 
     // A changed library skill is copied anew.
     await writeFile(

@@ -154,7 +154,10 @@ async function syncCursorSkillCopies(input: {
         continue;
       }
     } else if ((await readFile(marker, 'utf8').catch(() => null)) === hash) {
-      continue; // Already current.
+      // Already current, but still ours: the exclude block is rewritten on every sync.
+      copied.push(name);
+      excluded.push(`/${CURSOR_SKILLS_DIR}/${name}`);
+      continue;
     } else {
       await rm(copy, { recursive: true, force: true });
     }
