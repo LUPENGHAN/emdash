@@ -134,14 +134,10 @@ export const UnstagedSectionBody = observer(function UnstagedSectionBody() {
       const description = (
         <div className="flex flex-col gap-2">
           <p>Are you sure you want to discard all changes? This can not be undone.</p>
-          <p>{`Restores ${trackedCount} tracked ${trackedCount === 1 ? 'file' : 'files'}.`}</p>
+          <p>{`Tracked files to restore: ${trackedCount}.`}</p>
           {shown.length > 0 && (
             <div className="flex flex-col gap-1">
-              <p>
-                {`Also deletes ${untracked.length} untracked ${
-                  untracked.length === 1 ? 'file' : 'files'
-                }:`}
-              </p>
+              <p>{`Untracked files (${untracked.length}), kept unless you check the box below:`}</p>
               <ul className="list-inside list-disc">
                 {shown.map((change) => (
                   <li key={change.path}>{change.path}</li>
