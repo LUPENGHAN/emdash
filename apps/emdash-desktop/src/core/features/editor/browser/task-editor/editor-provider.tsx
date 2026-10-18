@@ -1,4 +1,4 @@
-import { autorun } from 'mobx';
+import { autorun, reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import type * as monacoNS from 'monaco-editor';
 import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from 'react';
@@ -236,22 +236,31 @@ export const EditorProvider = observer(function EditorProvider({
   // ---------------------------------------------------------------------------
   // Conflict dialog — reaction on pendingConflictPath shows the modal.
   // ---------------------------------------------------------------------------
-  useEffect(
-    () =>
-      autorun(() => {
-        const filePath = editorView.pendingConflictPath; // reactive
-        if (!filePath) return;
-        if (!editorView.openFilePaths.includes(filePath)) return;
+  useEffect(() => {
+    // Opening the modal writes observables; inside a tracking autorun that re-ran the
+    // autorun until MobX gave up, stacking ~100 copies of the dialog. The effect side
+    // of a reaction is untracked, and `shown` keeps one dialog per conflict.
+    let shown: string | null = null;
+    return reaction(
+      () => {
+        const filePath = editorView.pendingConflictPath;
+        return filePath && editorView.openFilePaths.includes(filePath) ? filePath : null;
+      },
+      (filePath) => {
+        if (!filePath || filePath === shown) return;
+        shown = filePath;
         void (async () => {
           const outcome = await openConflictModal({ filePath });
+          shown = null;
           if (outcome.success) {
             void editorView.resolveConflict(outcome.data);
           }
         })();
-      }),
+      },
+      { fireImmediately: true }
+    );
     // oxlint-disable-next-line react/exhaustive-deps
-    []
-  );
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Focus restore — when this task becomes active and focusedRegion is 'main',
