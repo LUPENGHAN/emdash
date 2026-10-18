@@ -411,6 +411,8 @@ async function archiveTask(
     'It can be restored from the archived tasks in Emdash.',
     'Archive'
   );
+  // The dialog can stay open a while: an agent may have started in the task meanwhile.
+  await taskForRemoval(caller, taskId);
   await taskManager.archiveTask(taskId);
   return { text: `Archived “${task.displayName}”.` };
 }
@@ -432,6 +434,8 @@ async function deleteTask(
     tasks: [{ taskId, taskName: task.displayName }],
   });
   if (!outcome.success) throw new Error('The user declined in Emdash.');
+  // Both dialogs can stay open a while: an agent may have started in the task meanwhile.
+  await taskForRemoval(caller, taskId);
   const { deleteWorktree, deleteBranch, deleteConversations } = outcome.data;
   await taskManager.deleteTasks([taskId], { deleteWorktree, deleteBranch, deleteConversations });
   const removed = [
