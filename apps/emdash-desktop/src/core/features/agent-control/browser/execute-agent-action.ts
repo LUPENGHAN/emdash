@@ -34,6 +34,7 @@ import { getNavigation } from '@core/primitives/navigation/browser/navigation-se
 import { resolveTaskBranchName } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult, OpenTarget } from '../api';
 import { runBrowserOp, type AutomatableBrowser } from './browser-automation';
+import { removalBlocker } from './task-removal';
 import { readableTerminals, renderTerminalTail } from './terminal-reader';
 
 const BROWSER_READY_TIMEOUT_MS = 10_000;
@@ -129,6 +130,15 @@ export async function executeAgentAction(
 
     case 'create_task':
       return createTaskForAgent(caller, action, who);
+
+    case 'list_tasks':
+      return listTasks(caller, action.includeArchived);
+
+    case 'archive_task':
+      return archiveTask(caller, who, action.taskId);
+
+    case 'delete_task':
+      return deleteTask(caller, who, action.taskId);
 
     case 'open':
       return openTarget(caller, action.target);
@@ -325,6 +335,116 @@ async function listConversations(
     return `${c.id} · ${c.providerId}${c.model ? ` (${c.model})` : ''} · ${c.type === 'acp' ? 'chat' : 'terminal'} · ${store.status}${c.id === caller.conversationId ? ' (you)' : ''} · ${c.title}`;
   });
   return { text: lines.join('\n') || 'No conversations.' };
+}
+
+// ── Tasks ───────────────────────────────────────────────────────────────────────
+
+/** The task an agent may archive or delete, or an error saying why not. */
+async function taskForRemoval(caller: AgentCaller, taskId: string) {
+  const taskManager = getTaskManagerStore(caller.projectId);
+  if (!taskManager) throw new Error('Open this project in Emdash first');
+  const task = taskManager.tasks.get(taskId);
+  if (!task) throw new Error(`No task ${taskId} in this project.`);
+  const blocker = removalBlocker({
+    task: task.data,
+    callerTaskId: caller.taskId,
+    conversations: await (
+      await getConversationsClient()
+    ).getConversationsForProject({ projectId: caller.projectId }),
+  });
+  if (blocker) throw new Error(blocker);
+  return { taskManager, task };
+}
+
+async function listTasks(
+  caller: AgentCaller,
+  includeArchived: boolean
+): Promise<AgentControlResult> {
+  const taskManager = getTaskManagerStore(caller.projectId);
+  if (!taskManager) throw new Error('Open this project in Emdash first');
+  const conversations = await (
+    await getConversationsClient()
+  ).getConversationsForProject({ projectId: caller.projectId });
+  const tasks = [...taskManager.tasks.values()]
+    .filter((task) => includeArchived || !('archivedAt' in task.data && task.data.archivedAt))
+    .sort((left, right) => right.data.createdAt.localeCompare(left.data.createdAt));
+  if (tasks.length === 0) return { text: 'No tasks.' };
+  const branches = await Promise.all(
+    tasks.map((task) =>
+      task.workspaceId
+        ? readCheckoutHead(task.workspaceId)
+            .then((head) => (head.kind === 'detached' ? null : shortName(head.ref)))
+            .catch(() => null)
+        : Promise.resolve(null)
+    )
+  );
+  const lines = tasks.map((task, index) => {
+    const running = conversations.some(
+      (conversation) =>
+        conversation.taskId === task.data.id &&
+        (conversation.agentStatus === 'working' || conversation.agentStatus === 'awaiting-input')
+    );
+    const cells = [
+      task.data.id,
+      task.displayName,
+      branches[index] ?? 'no branch',
+      'archivedAt' in task.data && task.data.archivedAt ? 'archived' : task.data.status,
+      running ? 'agent running' : 'idle',
+      `created ${task.data.createdAt.slice(0, 10)}`,
+    ];
+    return `${cells.join(' · ')}${task.data.id === caller.taskId ? ' (you)' : ''}`;
+  });
+  return { text: lines.join('\n') };
+}
+
+async function archiveTask(
+  caller: AgentCaller,
+  who: string,
+  taskId: string
+): Promise<AgentControlResult> {
+  const { taskManager, task } = await taskForRemoval(caller, taskId);
+  if ('archivedAt' in task.data && task.data.archivedAt) {
+    return { text: `“${task.displayName}” is already archived.` };
+  }
+  await confirm(
+    `${who} wants to archive “${task.displayName}”`,
+    'It can be restored from the archived tasks in Emdash.',
+    'Archive'
+  );
+  // The dialog can stay open a while: an agent may have started in the task meanwhile.
+  await taskForRemoval(caller, taskId);
+  await taskManager.archiveTask(taskId);
+  return { text: `Archived “${task.displayName}”.` };
+}
+
+async function deleteTask(
+  caller: AgentCaller,
+  who: string,
+  taskId: string
+): Promise<AgentControlResult> {
+  const { task, taskManager } = await taskForRemoval(caller, taskId);
+  // The delete dialog has no room for who asked; a first confirm says so.
+  await confirm(
+    `${who} wants to delete “${task.displayName}”`,
+    'Next you choose whether its worktree and branch are deleted too.',
+    'Continue'
+  );
+  const outcome = await openModal('deleteTaskModal', {
+    projectId: caller.projectId,
+    tasks: [{ taskId, taskName: task.displayName }],
+  });
+  if (!outcome.success) throw new Error('The user declined in Emdash.');
+  // Both dialogs can stay open a while: an agent may have started in the task meanwhile.
+  await taskForRemoval(caller, taskId);
+  const { deleteWorktree, deleteBranch, deleteConversations } = outcome.data;
+  await taskManager.deleteTasks([taskId], { deleteWorktree, deleteBranch, deleteConversations });
+  const removed = [
+    deleteWorktree && 'worktree',
+    deleteBranch && 'branch',
+    deleteConversations && 'conversations',
+  ].filter(Boolean);
+  const detail = removed.length > 0 ? ` (${removed.join(' and ')} removed)` : ' (worktree kept)';
+  return { text: `Deleted “${task.displayName}”${detail}` };
 }
 
 async function openTarget(caller: AgentCaller, target: OpenTarget): Promise<AgentControlResult> {

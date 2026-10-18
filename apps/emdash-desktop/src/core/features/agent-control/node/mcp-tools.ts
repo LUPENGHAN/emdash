@@ -183,6 +183,39 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       })
   );
 
+  // ── Tasks in this project ──────────────────────────────────────────────────────
+  server.registerTool(
+    'list_tasks',
+    {
+      description:
+        'Tasks in this project: id, name, branch, status, whether an agent is running in it, and when it was created. Yours is marked. Use the id with archive_task or delete_task.',
+      inputSchema: { include_archived: z.boolean().default(false) },
+      annotations: { readOnlyHint: true },
+    },
+    ({ include_archived }) => dispatch({ kind: 'list_tasks', includeArchived: include_archived })
+  );
+
+  server.registerTool(
+    'archive_task',
+    {
+      description:
+        'Archive a task in this project (it can be restored in Emdash later). Not your own task, and not one with an agent still running. The user confirms in Emdash.',
+      inputSchema: { task_id: z.string().min(1) },
+    },
+    ({ task_id }) => dispatch({ kind: 'archive_task', taskId: task_id })
+  );
+
+  server.registerTool(
+    'delete_task',
+    {
+      description:
+        'Delete a task in this project. The user decides in Emdash whether its worktree and branch go too, and sees any unpushed commits first. Cannot be undone. Not your own task, and not one with an agent still running. Prefer archive_task unless the user asked for deletion.',
+      inputSchema: { task_id: z.string().min(1) },
+      annotations: { destructiveHint: true },
+    },
+    ({ task_id }) => dispatch({ kind: 'delete_task', taskId: task_id })
+  );
+
   // ── The user's screen ──────────────────────────────────────────────────────────
   server.registerTool(
     'open_file',
