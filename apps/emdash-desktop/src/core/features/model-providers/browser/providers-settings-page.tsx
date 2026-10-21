@@ -1,5 +1,14 @@
 import { PageLayout } from '@emdash/ui/react/patterns';
-import { Button, Checkbox, Field, Input, Select, toast } from '@emdash/ui/react/primitives';
+import {
+  Button,
+  Checkbox,
+  Field,
+  Input,
+  Popover,
+  Select,
+  Switch,
+  toast,
+} from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
@@ -9,6 +18,10 @@ import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-s
 import { openModal } from '@core/manifests/browser/modal-api';
 import {
   CLAUDE_MODEL_ALIASES,
+  CODEX_REASONING_EFFORTS,
+  DEFAULT_CODEX_REASONING,
+  defaultAfterRemoving,
+  normalizeCodexReasoningLevels,
   OFFICIAL_ACCOUNT_AGENTS,
   OFFICIAL_ACCOUNT_LABELS,
   sourcesForAgent,
@@ -24,6 +37,8 @@ import {
   providerModelsUrl,
   providerSupportsAgent,
   type ClaudeModelRoles,
+  type CodexReasoning,
+  type CodexReasoningEffort,
   type ModelProvider,
   type ProviderProtocol,
 } from '../api';
@@ -185,6 +200,12 @@ function ProviderForm({
   );
   const [nonReasoning, setNonReasoning] = useState<string[]>(initial?.nonReasoningModels ?? []);
   const [webSearch, setWebSearch] = useState<string[]>(initial?.webSearchModels ?? []);
+  const [codexReasoning, setCodexReasoning] = useState<CodexReasoning | undefined>(
+    initial?.codexReasoning
+  );
+  const [codexReasoningByModel, setCodexReasoningByModel] = useState<
+    Record<string, CodexReasoning>
+  >(initial?.codexReasoningByModel ?? {});
   const [claudeRoles, setClaudeRoles] = useState<ClaudeModelRoles>(initial?.claude ?? {});
   const [filter, setFilter] = useState('');
   const [manualModel, setManualModel] = useState('');
@@ -219,6 +240,14 @@ function ProviderForm({
   const speaksResponses = protocol === 'openai-responses' || protocol === 'gateway';
   const claude = speaksAnthropic ? cleanClaudeRoles(claudeRoles, selected) : undefined;
   if (claude) draft.claude = claude;
+  if (speaksResponses && codexReasoning) draft.codexReasoning = codexReasoning;
+  const ownEfforts = Object.fromEntries(
+    Object.entries(codexReasoningByModel).filter(([model]) => selected.includes(model))
+  );
+  if (speaksResponses && Object.keys(ownEfforts).length > 0) {
+    draft.codexReasoningByModel = ownEfforts;
+  }
+  const providerEfforts = codexReasoning ?? DEFAULT_CODEX_REASONING;
   const invalidContext = selected.some(
     (model) => (contexts[model] ?? '').trim() !== '' && !parseContextWindow(contexts[model] ?? '')
   );
@@ -424,6 +453,20 @@ function ProviderForm({
                       Web search (Codex)
                     </label>
                   ) : null}
+                  {selected.includes(model) && speaksResponses ? (
+                    <ModelEffortsButton
+                      model={model}
+                      reasoning={!nonReasoning.includes(model)}
+                      own={codexReasoningByModel[model]}
+                      inherited={providerEfforts}
+                      onChange={(next) =>
+                        setCodexReasoningByModel((current) => {
+                          const { [model]: _dropped, ...rest } = current;
+                          return next ? { ...rest, [model]: next } : rest;
+                        })
+                      }
+                    />
+                  ) : null}
                   {selected.includes(model) ? (
                     <div className="w-24 shrink-0">
                       <Input
@@ -450,9 +493,24 @@ function ProviderForm({
         {selected.length > 0 ? (
           <Field.Description>
             Context: the model's context window, e.g. 1m or 256k. Codex, OpenCode, Pi, Oh My Pi and
-            Claude Code use it. Leave it blank to keep the default. Reasoning: Pi and Oh My Pi offer
-            thinking levels (effort) for the model; turn it off for models that reject them.
+            Claude Code use it. Leave it blank to keep the default. Reasoning: Pi, Oh My Pi and
+            Codex offer reasoning efforts for the model; turn it off for models that reject them.
           </Field.Description>
+        ) : null}
+        {speaksResponses ? (
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-foreground">Codex reasoning efforts</span>
+            <CodexEffortPicker
+              value={providerEfforts}
+              onChange={(next) =>
+                setCodexReasoning(sameEfforts(next, DEFAULT_CODEX_REASONING) ? undefined : next)
+              }
+            />
+            <Field.Description>
+              Codex offers these efforts on this provider&apos;s models. Pick the ones the provider
+              accepts: it may reject the others with an error.
+            </Field.Description>
+          </div>
         ) : null}
         {speaksResponses ? (
           <Field.Description>
@@ -722,6 +780,129 @@ const CLAUDE_ROLE_ROWS: { role: keyof Omit<ClaudeModelRoles, 'names'>; label: st
 const UNSET = '__unset__';
 
 /** Keeps only roles pointing at models still on the provider, and non-blank names. */
+function sameEfforts(a: CodexReasoning, b: CodexReasoning): boolean {
+  return a.default === b.default && a.levels.join() === b.levels.join();
+}
+
+/**
+ * Ticks the efforts Codex offers and picks the one it starts with. At least one stays
+ * ticked, and unticking the default moves it to the nearest lower level left.
+ */
+function CodexEffortPicker({
+  value,
+  onChange,
+}: {
+  value: CodexReasoning;
+  /** Absent: shown read-only. */
+  onChange?: (next: CodexReasoning) => void;
+}) {
+  const readOnly = !onChange;
+  const toggle = (effort: CodexReasoningEffort, on: boolean) => {
+    if (!onChange) return;
+    if (on) {
+      onChange({ ...value, levels: normalizeCodexReasoningLevels([...value.levels, effort]) });
+      return;
+    }
+    if (value.levels.length <= 1) return;
+    const levels = normalizeCodexReasoningLevels(value.levels.filter((e) => e !== effort));
+    const next = defaultAfterRemoving(value.levels, value.default, effort);
+    if (next) onChange({ levels, default: next });
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {CODEX_REASONING_EFFORTS.map((effort) => {
+        const on = value.levels.includes(effort);
+        return (
+          <label
+            key={effort}
+            className="flex items-center gap-1 font-mono text-xs text-foreground-muted"
+            translate="no"
+          >
+            <Checkbox
+              checked={on}
+              disabled={readOnly || (on && value.levels.length === 1)}
+              onCheckedChange={(checked) => toggle(effort, checked === true)}
+            />
+            {effort}
+          </label>
+        );
+      })}
+      <div className="flex items-center gap-1 text-xs text-foreground-muted">
+        Default
+        <Select.Root
+          value={value.default}
+          disabled={readOnly}
+          onValueChange={(next) => {
+            const effort = value.levels.find((level) => level === next);
+            if (effort) onChange?.({ ...value, default: effort });
+          }}
+        >
+          <Select.Trigger className="h-7 gap-1 font-mono text-xs">
+            <Select.Value>{value.default}</Select.Value>
+          </Select.Trigger>
+          <Select.Content align="end">
+            {value.levels.map((effort) => (
+              <Select.Item key={effort} value={effort}>
+                <span translate="no">{effort}</span>
+              </Select.Item>
+            ))}
+          </Select.Content>
+        </Select.Root>
+      </div>
+    </div>
+  );
+}
+
+/** A model's own Codex efforts, or its provider's when it follows them (`own` unset). */
+function ModelEffortsButton({
+  model,
+  reasoning,
+  own,
+  inherited,
+  onChange,
+}: {
+  model: string;
+  reasoning: boolean;
+  own: CodexReasoning | undefined;
+  inherited: CodexReasoning;
+  onChange: (next: CodexReasoning | undefined) => void;
+}) {
+  const summary = own
+    ? own.levels.length > 1
+      ? `${own.levels[0]}–${own.levels.at(-1)}`
+      : own.levels[0]
+    : undefined;
+  return (
+    <Popover.Root>
+      <Popover.Trigger
+        disabled={!reasoning}
+        render={
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 shrink-0 px-2 text-xs"
+            title={reasoning ? undefined : 'Reasoning is off for this model'}
+            aria-label={`Codex efforts of ${model}`}
+          />
+        }
+      >
+        {summary ? <span translate="no">{summary}</span> : 'Efforts'}
+      </Popover.Trigger>
+      <Popover.Content align="end" className="flex w-80 flex-col gap-3 p-3">
+        <label className="flex items-center justify-between gap-2 text-xs text-foreground">
+          Use the provider&apos;s efforts
+          <Switch
+            checked={!own}
+            onCheckedChange={(follow) => onChange(follow ? undefined : inherited)}
+          />
+        </label>
+        <CodexEffortPicker value={own ?? inherited} onChange={own ? onChange : undefined} />
+      </Popover.Content>
+    </Popover.Root>
+  );
+}
+
 function cleanClaudeRoles(roles: ClaudeModelRoles, models: string[]): ClaudeModelRoles | undefined {
   const clean: ClaudeModelRoles = {};
   for (const { role } of CLAUDE_ROLE_ROWS) {

@@ -10,6 +10,55 @@ export const PROVIDER_PROTOCOL_LABELS: Record<ProviderProtocol, string> = {
   'openai-responses': 'OpenAI Responses',
 };
 
+/** Every effort Codex accepts, lowest first; it silently replaces any other value. */
+export const CODEX_REASONING_EFFORTS = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+export const DEFAULT_CODEX_REASONING = {
+  levels: ['low', 'medium', 'high'] as CodexReasoningEffort[],
+  default: 'medium' as CodexReasoningEffort,
+};
+
+const codexReasoningSchema = z
+  .object({
+    levels: z.array(z.enum(CODEX_REASONING_EFFORTS)).min(1),
+    default: z.enum(CODEX_REASONING_EFFORTS),
+  })
+  .refine((value) => value.levels.includes(value.default), {
+    message: 'The default effort must be one of the levels',
+  });
+export type CodexReasoning = z.infer<typeof codexReasoningSchema>;
+
+/** Efforts in Codex's order, each once, however they were picked. */
+export function normalizeCodexReasoningLevels(
+  levels: readonly CodexReasoningEffort[]
+): CodexReasoningEffort[] {
+  return CODEX_REASONING_EFFORTS.filter((effort) => levels.includes(effort));
+}
+
+/**
+ * The default once `removed` is unticked: the nearest lower level still ticked, else the
+ * lowest one left. Unchanged when another level was unticked.
+ */
+export function defaultAfterRemoving(
+  levels: readonly CodexReasoningEffort[],
+  current: CodexReasoningEffort,
+  removed: CodexReasoningEffort
+): CodexReasoningEffort | undefined {
+  const left = normalizeCodexReasoningLevels(levels.filter((effort) => effort !== removed));
+  if (removed !== current) return current;
+  const rank = CODEX_REASONING_EFFORTS.indexOf(current);
+  const lower = left.filter((effort) => CODEX_REASONING_EFFORTS.indexOf(effort) < rank);
+  return lower.at(-1) ?? left[0];
+}
+
 /**
  * A model provider the user configured once and can route agents through: any API that
  * speaks one of {@link PROVIDER_PROTOCOLS} (a vendor, a gateway such as new-api, …). Its
@@ -44,6 +93,13 @@ export const modelProviderSchema = z.object({
    * Pi), which send reasoning settings some non-reasoning models reject.
    */
   nonReasoningModels: z.array(z.string()).optional(),
+  /**
+   * The reasoning efforts Codex offers on this provider's models, and the one it starts
+   * with. Unset: low/medium/high, starting at medium, for models Codex has no metadata for.
+   */
+  codexReasoning: codexReasoningSchema.optional(),
+  /** Per model, overriding codexReasoning for that model. */
+  codexReasoningByModel: z.record(z.string(), codexReasoningSchema).optional(),
   /**
    * Models that keep Codex's built-in web search tool. Codex sends it with every
    * request and many gateways reject the whole request over it, so it is off

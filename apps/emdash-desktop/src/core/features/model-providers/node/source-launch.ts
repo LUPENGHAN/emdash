@@ -2,13 +2,17 @@ import {
   CLAUDE_MODEL_ALIASES,
   providerConfigId,
   providerEndpoints,
+  type CodexReasoning,
   type ModelProvider,
   type ProviderCapableAgent,
 } from '../api';
 import {
   codexAppServerWrapperPath,
   codexModelCatalogPath,
+  codexStartingEffort,
+  type CodexCatalogModel,
   type CodexModelCatalog,
+  type CodexModelInfo,
 } from './codex-model-catalog';
 
 /**
@@ -45,12 +49,14 @@ export type SourceLaunch = {
  * provider from Emdash's extension, which reads it from the launch env).
  * Claude Code needs Anthropic Messages and Codex OpenAI Responses; the others speak any
  * of the protocols. Null when the provider's protocol does not suit the agent.
+ * `codexKnownModels` is Codex's cached model metadata (models_cache.json).
  */
 export function buildSourceLaunch(
   agent: ProviderCapableAgent,
   provider: ModelProvider,
   apiKey: string,
-  model?: string
+  model?: string,
+  codexKnownModels: CodexModelInfo[] = []
 ): SourceLaunch | null {
   const key = providerConfigId(provider);
   const { anthropic, openai } = providerEndpoints(provider);
@@ -78,20 +84,24 @@ export function buildSourceLaunch(
       // A path extraArgs cannot carry (whitespace anywhere; "'" on Windows breaks the
       // wrapper's TOML literal) means no catalog.
       const catalogFile = provider.models.length > 0 ? codexModelCatalogPath(key) : undefined;
+      const catalogModel = (id: string): CodexCatalogModel => {
+        const efforts = userCodexEfforts(provider, id);
+        return {
+          id,
+          ...(provider.contextWindows?.[id] && { contextWindow: provider.contextWindows[id] }),
+          reasoning: !provider.nonReasoningModels?.includes(id),
+          ...(efforts && { efforts }),
+        };
+      };
       const catalog: CodexModelCatalog | undefined =
         catalogFile &&
         !/\s/.test(catalogFile) &&
         !(process.platform === 'win32' && catalogFile.includes("'"))
-          ? {
-              providerKey: key,
-              models: provider.models.map((id) => ({
-                id,
-                ...(provider.contextWindows?.[id] && {
-                  contextWindow: provider.contextWindows[id],
-                }),
-              })),
-            }
+          ? { providerKey: key, models: provider.models.map(catalogModel) }
           : undefined;
+      // The user's own config.toml effort is meant for their own provider; on this one,
+      // start from a level this model is offered with.
+      const effort = model ? codexStartingEffort(catalogModel(model), codexKnownModels) : undefined;
       const providerConfig = {
         name: key,
         base_url: openai.url,
@@ -111,6 +121,7 @@ export function buildSourceLaunch(
             model_provider: key,
             model_providers: { [key]: providerConfig },
             ...(model && { model }),
+            ...(effort && { model_reasoning_effort: effort }),
             ...(webSearch && { web_search: webSearch }),
             ...(contextWindow && { model_context_window: contextWindow }),
             ...(catalog && { model_catalog_json: catalogFile }),
@@ -144,6 +155,7 @@ export function buildSourceLaunch(
             codexOverride(`model_providers.${key}.${field}`, value)
           ),
           ...(model ? codexOverride('model', model) : []),
+          ...(effort ? codexOverride('model_reasoning_effort', effort) : []),
           ...(webSearch ? codexOverride('web_search', webSearch) : []),
           ...(contextWindow ? codexOverride('model_context_window', contextWindow) : []),
           ...(catalog ? codexOverride('model_catalog_json', catalogFile!) : []),
@@ -262,6 +274,14 @@ function claudeModelEnv(provider: ModelProvider, chosen?: string): Record<string
     env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(mainWindow);
   }
   return env;
+}
+
+/** The efforts the user set for a model: its own, else its provider's, else none. */
+export function userCodexEfforts(
+  provider: ModelProvider,
+  modelId: string
+): CodexReasoning | undefined {
+  return provider.codexReasoningByModel?.[modelId] ?? provider.codexReasoning;
 }
 
 function codexOverride(path: string, value: string | number): string[] {
