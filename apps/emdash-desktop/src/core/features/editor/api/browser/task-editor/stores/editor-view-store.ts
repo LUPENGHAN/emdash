@@ -6,7 +6,7 @@ import {
 } from '@emdash/core/primitives/path/api';
 import { type Result } from '@emdash/shared';
 import { createScope, type Run, type Scope } from '@emdash/shared/concurrency';
-import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx';
+import { action, computed, makeObservable, observable, reaction, runInAction, when } from 'mobx';
 import { getEditorClient } from '@core/features/editor/api/browser/client';
 import { normalizeFileTreePath } from '@core/features/editor/api/browser/file-tree/tree-utils';
 import {
@@ -65,6 +65,7 @@ export class EditorViewStore {
   private readonly workspaceId: string;
   private readonly paneLayout: PaneLayoutStore;
   private readonly revealScope: Scope;
+  private filesStarted: (Promise<void> & { cancel(): void }) | null = null;
   private nextRevealFileRequestId = 1;
   private activeRevealFileRequestId = 0;
   private activeRevealRun: Run<Result<string[], TreeMutationError>> | null = null;
@@ -338,6 +339,17 @@ export class EditorViewStore {
    * files that are not open stay persisted untouched.
    */
   async restoreBuffers(): Promise<void> {
+    // The editor mounts before the workspace's file tree starts, and the rows are
+    // listed by its root. Cancelled when the view goes away first.
+    if (!this.files) {
+      this.filesStarted?.cancel();
+      this.filesStarted = when(() => this.files !== null);
+      const started = await this.filesStarted.then(
+        () => true,
+        () => false
+      );
+      if (!started) return;
+    }
     // Scope the listing to this view's workspace root, which the files store
     // resolved at the renderer edge when the session started.
     const root = this.files?.rootUri;
@@ -355,6 +367,7 @@ export class EditorViewStore {
   }
 
   dispose(): void {
+    this.filesStarted?.cancel();
     this.disposeFiles();
     void this.revealScope.dispose();
   }

@@ -7,6 +7,12 @@ import type { MementoHandle } from '@core/primitives/mementos/browser';
 import type { PaneLayoutStore } from '@core/primitives/workbench-shell/browser/tabs/pane-layout-store';
 import { EditorViewStore } from './editor-view-store';
 
+const editorClient = vi.hoisted(() => ({ listBuffers: vi.fn(async () => [] as unknown[]) }));
+
+vi.mock('@core/features/editor/api/browser/client', () => ({
+  getEditorClient: async () => editorClient,
+}));
+
 const isTreeExcluded = (path: string) => path.split('/').includes('dist');
 
 function mementoHandle(initial: TaskEditorTreeState): MementoHandle<TaskEditorTreeState> {
@@ -155,5 +161,41 @@ describe('EditorViewStore file reveal', () => {
       path: '/repo/new/file.ts',
       status: 'ready',
     });
+  });
+});
+
+describe('EditorViewStore buffer restore', () => {
+  const newStore = () =>
+    new EditorViewStore(
+      { groups: [] } as unknown as PaneLayoutStore,
+      'project-1',
+      'workspace-1',
+      mementoHandle({ version: '1', expandedPaths: [] })
+    );
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('waits for the file tree before listing the rows under its root', async () => {
+    editorClient.listBuffers.mockClear();
+    const store = newStore();
+    const restoring = store.restoreBuffers();
+    await flush();
+    expect(editorClient.listBuffers).not.toHaveBeenCalled();
+
+    store.files = { rootUri: 'emdash-file://v2/local/local/posix/repo' } as unknown as NonNullable<
+      EditorViewStore['files']
+    >;
+    await restoring;
+    expect(editorClient.listBuffers).toHaveBeenCalledWith({
+      root: 'emdash-file://v2/local/local/posix/repo',
+    });
+  });
+
+  it('gives up quietly when the view goes away first', async () => {
+    editorClient.listBuffers.mockClear();
+    const store = newStore();
+    const restoring = store.restoreBuffers();
+    store.dispose();
+    await expect(restoring).resolves.toBeUndefined();
+    expect(editorClient.listBuffers).not.toHaveBeenCalled();
   });
 });
