@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { UsageStatsButton } from '@core/features/usage-stats/contributions/browser/usage-stats-button';
 import { SidebarRecoveryControls } from '@core/features/workbench/browser/sidebar-recovery-controls';
 import { WindowControls } from '@core/features/workbench/browser/window-controls';
@@ -17,7 +18,7 @@ const isLinux =
   typeof navigator !== 'undefined' &&
   /Electron\//.test(navigator.userAgent);
 
-export function BorderlessTitlebar() {
+export function BorderlessTitlebar({ rightSlot }: { rightSlot?: ReactNode }) {
   const { isLeftOpen, toggleLeftSidebar } = useWorkspaceLayoutContext();
 
   return (
@@ -32,6 +33,7 @@ export function BorderlessTitlebar() {
       <div className="flex min-w-0 flex-1 items-center">
         {!isLeftOpen && <SidebarRecoveryControls onShowSidebar={toggleLeftSidebar} />}
       </div>
+      {rightSlot}
       <UsageStatsButton />
       {isLinux && <WindowControls />}
     </header>

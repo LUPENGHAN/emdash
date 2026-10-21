@@ -5,6 +5,7 @@ import type { AutomationsService } from '@core/features/automations/api/node/aut
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
 import { projectEvents } from '@core/features/projects/api/node/project-events';
 import { projectSubject } from '@core/features/projects/contributions/subject';
+import type { RequirementsOperations } from '@core/features/requirements/api/types';
 import {
   killTaskSessions,
   type TaskSessionCleanup,
@@ -46,6 +47,7 @@ export type ProjectDeletionDependencies = {
   logger: Logger;
   projects: Pick<ProjectAttachmentManager, 'invalidate'>;
   pullRequests: { deleteProjectData(projectId: string): Promise<void> };
+  requirements: Pick<RequirementsOperations, 'removeProject'>;
   sessionCleanup: TaskSessionCleanup;
   telemetry: Pick<TelemetryService, 'capture'>;
 };
@@ -158,6 +160,7 @@ async function purgeProjectLocalState(
 ): Promise<void> {
   const { db } = dependencies;
   await dependencies.pullRequests.deleteProjectData(projectId);
+  await dependencies.requirements.removeProject(projectId);
   await dependencies.automations.removeProjectDeployments(projectId);
   await db.delete(projects).where(eq(projects.id, projectId));
   const client = await dependencies.getMementosRuntimeClient();

@@ -137,6 +137,7 @@ export function createDesktopWireOptions(
     previewServerAccess: services.previewServerAccess,
     projectDeletion: services.projectDeletion,
     promptLibrary: services.promptLibrary,
+    requirements: services.requirements,
     projects: services.projects,
     projectSettings: services.projectSettings,
     providerSettings: services.providerSettings,

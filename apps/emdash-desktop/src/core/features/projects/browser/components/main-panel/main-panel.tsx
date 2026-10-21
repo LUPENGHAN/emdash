@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { isUnregisteredProject } from '@core/features/projects/api/browser/stores/project';
 import type { ProjectContextError } from '@core/features/projects/api/browser/stores/project-context';
 import {
+  asAvailableProject,
   getProjectManagerStore,
   getProjectStore,
   projectDisplayName,
@@ -13,6 +14,7 @@ import {
 import { ProjectAvailabilityBoundary } from '@core/features/projects/contributions/browser/project-availability-boundary';
 import { useConfirmDeleteProject } from '@core/features/projects/contributions/browser/use-confirm-delete-project';
 import { projectViewDef } from '@core/features/projects/contributions/views';
+import { RequirementsButton } from '@core/features/requirements/contributions/browser/requirements-button';
 import { BorderlessTitlebar } from '@core/features/workbench/contributions/browser/BorderlessTitlebar';
 import { useCurrentViewParams } from '@core/primitives/navigation/browser/navigation-hooks';
 import { ProjectErrorDetails } from '../project-error-details';
@@ -20,14 +22,20 @@ import { ActiveProject } from './active-project';
 import { PendingProjectStatus } from './pending-project';
 import { ProjectHeader } from './project-header';
 
-export function ProjectMainPanel() {
+export const ProjectMainPanel = observer(function ProjectMainPanel() {
+  const {
+    params: { projectId },
+  } = useCurrentViewParams(projectViewDef);
+  const available = asAvailableProject(getProjectStore(projectId));
   return (
     <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <BorderlessTitlebar />
+      <BorderlessTitlebar
+        rightSlot={available ? <RequirementsButton projectId={projectId} /> : undefined}
+      />
       <ProjectMainPanelContent />
     </div>
   );
-}
+});
 
 const ProjectMainPanelContent = observer(function ProjectMainPanelContent() {
   const {

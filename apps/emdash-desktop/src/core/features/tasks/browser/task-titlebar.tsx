@@ -28,6 +28,7 @@ import {
   projectDisplayName,
 } from '@core/features/projects/api/browser/stores/project-selectors';
 import { projectViewDef } from '@core/features/projects/contributions/views';
+import { RequirementsButton } from '@core/features/requirements/contributions/browser/requirements-button';
 import { OpenInMenu } from '@core/features/settings/contributions/browser/open-in-menu';
 import { getGitRepositoryStore } from '@core/features/source-control/api/browser/stores/source-control-selectors';
 import { useGitActions } from '@core/features/source-control/api/browser/use-git-actions';
@@ -335,6 +336,7 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
               <Separator orientation="vertical" className="h-5 self-center!" />
             </>
           )}
+          <RequirementsButton projectId={projectId} />
           <Tooltip.Root>
             <Tooltip.Trigger>
               <Toggle

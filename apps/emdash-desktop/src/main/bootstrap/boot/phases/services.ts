@@ -132,6 +132,9 @@ import { migrateAppWorktreeRootToLocalHostDefault } from '@core/features/project
 import type { RemoteAccessService, RemoteClientService } from '@core/features/remote-access/api';
 import { createRemoteAccessAuth } from '@core/features/remote-access/node/remote-access-auth';
 import { createRemoteAccessService } from '@core/features/remote-access/node/remote-access-service';
+import type { ProjectRequirements } from '@core/features/requirements/api/types';
+import { requirementsEvents } from '@core/features/requirements/node/event-host';
+import { RequirementsService } from '@core/features/requirements/node/requirements-service';
 import { createSearchService } from '@core/features/search/node/search-service';
 import { TaskService } from '@core/features/tasks/api/node/task-service';
 import type { TaskSessionCleanup } from '@core/features/tasks/api/node/task-session-cleanup';
@@ -240,6 +243,7 @@ export type ServicesBundle = {
   readonly notifications: ReturnType<typeof createNotificationService>;
   readonly previewServerAccess: PreviewServerAccessService;
   readonly promptLibrary: ReturnType<typeof createPromptLibraryService>;
+  readonly requirements: RequirementsService;
   readonly projectDeletion: ProjectDeletionDependencies;
   readonly projects: ProjectAttachmentManager;
   readonly projectSettings: ProjectSettingsService;
@@ -503,6 +507,11 @@ export async function bootServices(
     deactivateWorkspaceParticipants: (identity) =>
       deactivateWorkspaceParticipants(lifecycleParticipants, identity),
   });
+  // Each project's requirements list, one KV row per project; agents add to it over MCP.
+  const requirementsService = new RequirementsService({
+    store: new AppDbKeyValueStore<Record<string, ProjectRequirements>>(db, 'requirements', log),
+    emit: (event) => requirementsEvents.emit(undefined, event),
+  });
   // Agent control: Emdash's own MCP tools for every local agent (see agent-control).
   const agentControl = createAgentControlDispatcher({
     emit: (request) => agentControlEvents.emit(undefined, request),
@@ -529,6 +538,7 @@ export async function bootServices(
         ),
       dispatch: (caller, action) => agentControl.dispatch(caller, action),
       usageLimits: () => usageLimits.get(),
+      requirements: requirementsService,
     });
     appScope.add(() => server.close());
     return server;
@@ -1083,6 +1093,7 @@ export async function bootServices(
     logger: log,
     projects: projectManager,
     pullRequests: pullRequestsRegistration,
+    requirements: requirementsService,
     sessionCleanup: lifecycleSessions,
     telemetry: telemetryService,
   };
@@ -1231,6 +1242,7 @@ export async function bootServices(
     notifications: notificationService,
     previewServerAccess,
     promptLibrary: promptLibraryService,
+    requirements: requirementsService,
     projectDeletion,
     projects: projectManager,
     projectSettings: projectSettingsService,

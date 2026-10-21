@@ -24,6 +24,10 @@ vi.mock('@core/primitives/navigation/browser/navigation-hooks', () => ({
   useNavigate: () => vi.fn(),
 }));
 
+vi.mock('@core/features/requirements/contributions/browser/requirements-view', () => ({
+  RequirementsView: () => null,
+}));
+
 vi.mock('@core/features/projects/browser/components/pr-view/pr-view', () => ({
   PullRequestView: () => <div>Pull requests panel</div>,
 }));

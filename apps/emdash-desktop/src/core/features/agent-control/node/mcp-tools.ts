@@ -1,6 +1,12 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { UsageLimits } from '@core/features/model-providers/api';
+import {
+  REQUIREMENT_DETAIL_MAX,
+  REQUIREMENT_TITLE_MAX,
+  type Requirement,
+  type RequirementsOperations,
+} from '@core/features/requirements/api/types';
 import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
 
 /** Agents Emdash can start; the ids tools accept for `agent`. */
@@ -11,7 +17,21 @@ export type AgentControlToolContext = {
   caller: AgentCaller;
   dispatch: (action: AgentControlAction) => Promise<AgentControlResult>;
   usageLimits: () => Promise<UsageLimits>;
+  requirements: Pick<RequirementsOperations, 'list' | 'add' | 'update'>;
 };
+
+/** How much of a requirement's detail list_requirements shows. */
+const LISTED_DETAIL_MAX = 300;
+
+function formatRequirement(item: Requirement): string {
+  const line = `${item.id} [${item.status}] ${item.title}`;
+  if (!item.detail) return line;
+  const detail =
+    item.detail.length > LISTED_DETAIL_MAX
+      ? `${item.detail.slice(0, LISTED_DETAIL_MAX)}…`
+      : item.detail;
+  return `${line}\n${detail.replace(/^/gm, '  ')}`;
+}
 
 type ToolContent =
   | { type: 'text'; text: string }
@@ -214,6 +234,65 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       annotations: { destructiveHint: true },
     },
     ({ task_id }) => dispatch({ kind: 'delete_task', taskId: task_id })
+  );
+
+  // ── The project's requirements list ────────────────────────────────────────────
+  server.registerTool(
+    'add_requirement',
+    {
+      description:
+        "Add an item to this project's requirements list in Emdash: something the user wants done later, or follow-up work you noticed. The user sees it at once and can start it as a task.",
+      inputSchema: {
+        title: z.string().min(1).max(REQUIREMENT_TITLE_MAX),
+        detail: z.string().max(REQUIREMENT_DETAIL_MAX).optional(),
+      },
+    },
+    ({ title, detail }) =>
+      run(async () => {
+        const item = await ctx.requirements.add(
+          caller.projectId,
+          { title, detail },
+          {
+            kind: 'agent',
+            providerId: caller.providerId,
+            conversationId: caller.conversationId,
+            taskId: caller.taskId,
+          }
+        );
+        return { text: `Added requirement ${item.id}: ${item.title}` };
+      })
+  );
+
+  server.registerTool(
+    'list_requirements',
+    {
+      description: "This project's requirements list in Emdash, with ids for complete_requirement.",
+      inputSchema: { status: z.enum(['open', 'done', 'all']).default('open') },
+      annotations: { readOnlyHint: true },
+    },
+    ({ status }) =>
+      run(async () => {
+        const items = (await ctx.requirements.list(caller.projectId)).filter(
+          (item) => status === 'all' || item.status === status
+        );
+        return {
+          text: items.length ? items.map(formatRequirement).join('\n') : 'No requirements.',
+        };
+      })
+  );
+
+  server.registerTool(
+    'complete_requirement',
+    {
+      description:
+        "Mark an item on this project's requirements list done, once the work for it is finished.",
+      inputSchema: { id: z.string() },
+    },
+    ({ id }) =>
+      run(async () => {
+        const item = await ctx.requirements.update(caller.projectId, id, { status: 'done' });
+        return { text: `Marked requirement ${item.id} done: ${item.title}` };
+      })
   );
 
   // ── The user's screen ──────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ import { configureDevPerfClient } from '@core/features/dev-perf/api/browser/clie
 import { installMonacoFacetBinder } from '@core/features/editor/browser/monaco/install-monaco-facet-binder';
 import { monacoBootstrap } from '@core/features/editor/browser/monaco/monaco-bootstrap';
 import { getProjectManagerStore } from '@core/features/projects/api/browser/stores/project-selectors';
+import { installRequirementNotices } from '@core/features/requirements/contributions/browser/install-requirement-notices';
 import { prefetchAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { initSoundPlayer, soundPlayer } from '@core/features/settings/browser/sound-player';
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
@@ -106,6 +107,7 @@ async function bootstrap() {
   if (!popoutId) {
     wireExternalLinkRequests();
     installAgentControl();
+    installRequirementNotices();
   }
   // Its layout must be in place before the task's view is built.
   const popout = popoutId ? await preparePopout(popoutId) : null;
