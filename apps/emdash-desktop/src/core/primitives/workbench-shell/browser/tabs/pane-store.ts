@@ -314,9 +314,10 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
   openWithState(
     kind: string,
     initialState: unknown,
-    opts?: { isPreview?: boolean; overrideState?: boolean }
+    opts?: { isPreview?: boolean; overrideState?: boolean; background?: boolean }
   ): void {
     const isPreview = opts?.isPreview ?? false;
+    const activate = !opts?.background;
 
     if (!this.registry.has(kind)) {
       console.warn(`[PaneStore] Unknown tab kind: ${kind}`);
@@ -331,7 +332,7 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
       if (existing) {
         if (!isPreview) existing.isPreview = false;
         if (opts?.overrideState) existing.state = initialState;
-        this.setActiveTab(existing.tabId);
+        if (activate) this.setActiveTab(existing.tabId);
         return;
       }
     }
@@ -341,7 +342,7 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
       const previewEntry = this._previewEntryOfKind(kind);
       if (previewEntry) {
         this.retargetEntry(previewEntry.tabId, { state: initialState, isPreview: true });
-        this.setActiveTab(previewEntry.tabId);
+        if (activate) this.setActiveTab(previewEntry.tabId);
         return;
       }
     }
@@ -349,7 +350,7 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
     // Fresh tab.
     const tabId = crypto.randomUUID();
     const entry = new TabEntryImpl(kind, tabId, isPreview, initialState);
-    this._attachEntryAndInitialize(entry, { activate: true });
+    this._attachEntryAndInitialize(entry, { activate });
   }
 
   /**
@@ -371,6 +372,7 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
       this.openWithState(kind, state, {
         isPreview: !!config?.preview,
         overrideState: !!config?.overrideState,
+        background: !!config?.background,
       });
     }
   }

@@ -59,6 +59,11 @@ export interface TabOpenOptions {
    * 'right'/'left' will split if needed; { paneId } targets an explicit pane.
    */
   target?: OpenTarget;
+  /**
+   * When true, the tab is opened (or found) without becoming the active tab or pane, so
+   * whatever the user is looking at stays in front.
+   */
+  background?: boolean;
 }
 
 // ── Registry interface ────────────────────────────────────────────────────────

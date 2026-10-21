@@ -175,6 +175,18 @@ export function BrowserSettingsCard() {
               />
             }
           />
+
+          <SettingRow
+            title="Open pages in the background when an agent opens them"
+            description="Agents load and drive pages in a background browser tab instead of switching you to it. If the task is not on screen, the agent is told to ask you to open it."
+            control={
+              <Switch
+                checked={browserSettings?.agentOpensInBackground ?? false}
+                disabled={disabled}
+                onCheckedChange={(next) => update({ agentOpensInBackground: next })}
+              />
+            }
+          />
         </SeparatedList>
       </SettingsCard>
 

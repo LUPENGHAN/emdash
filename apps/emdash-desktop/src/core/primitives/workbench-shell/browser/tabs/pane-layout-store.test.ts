@@ -162,3 +162,28 @@ describe('PaneLayoutStore tab transfer', () => {
     expect(store.groups[0]?.pane.tabOrder).toContain('t-4');
   });
 });
+
+describe('PaneLayoutStore.open in the background', () => {
+  function storeWithActiveTab() {
+    const store = createStore();
+    store.open('test', { id: 'chat' });
+    return store;
+  }
+
+  it('adds the tab without changing the active tab', () => {
+    const store = storeWithActiveTab();
+    const before = store.focusedPane.resolvedActiveTabId;
+    store.open('test', { id: 'page' }, { preview: false, background: true });
+    const pane = store.focusedPane;
+    expect(pane.resolvedTabs).toHaveLength(2);
+    expect(pane.resolvedTabs.find((tab) => tab.isActive)?.tabId).toBe(before);
+    expect(pane.resolvedActiveTabId).toBe(before);
+  });
+
+  it('activates the new tab when not opened in the background', () => {
+    const store = storeWithActiveTab();
+    store.open('test', { id: 'page' }, { preview: false });
+    const pane = store.focusedPane;
+    expect(pane.activeEntry?.state).toEqual({ id: 'page' });
+  });
+});
