@@ -7,7 +7,7 @@ import {
   type ModelSourceOverride,
   type OfficialAccount,
 } from '../api';
-import type { CodexModelCatalog } from './codex-model-catalog';
+import type { CodexModelCatalog, CodexModelInfo } from './codex-model-catalog';
 import { ACCOUNT_HOME_ENV } from './official-accounts';
 import { buildSourceLaunch, type ExtensionProviderAgent } from './source-launch';
 
@@ -17,6 +17,8 @@ export type EffectiveAgentConfigDeps = {
   getApiKey: (providerId: string) => Promise<string | null>;
   prepareAgentProvider: (agent: ExtensionProviderAgent) => Promise<void>;
   ensureCodexModelCatalog?: (catalog: CodexModelCatalog) => Promise<void>;
+  /** Codex's cached model metadata, for the effort a model it knows starts with. */
+  readKnownCodexModels?: () => Promise<CodexModelInfo[]>;
   /** Readies an official account's config dir and returns it. */
   prepareAccountHome: (account: OfficialAccount) => Promise<string>;
   warn?: (message: string, details: Record<string, unknown>) => void;
@@ -65,7 +67,8 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
     // No model picked: the provider's first model, not the agent's own default (a Claude
     // or GPT id the provider may not serve).
     const model = (override ? override.sourceModel : config?.sourceModel) || provider.models[0];
-    const launch = buildSourceLaunch(agentId, provider, apiKey, model || undefined);
+    const known = agentId === 'codex' ? await deps.readKnownCodexModels?.() : undefined;
+    const launch = buildSourceLaunch(agentId, provider, apiKey, model || undefined, known);
     if (!launch) {
       throw new ModelSourceUnavailableError(
         `The provider “${provider.name}” speaks a protocol this agent cannot use.`

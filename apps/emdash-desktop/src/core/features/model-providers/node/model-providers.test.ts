@@ -4,7 +4,10 @@ import path from 'node:path';
 import { secret } from '@emdash/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  defaultAfterRemoving,
   formatContextWindow,
+  modelProviderSchema,
+  normalizeCodexReasoningLevels,
   parseContextWindow,
   anthropicBaseUrl,
   openAiBaseUrl,
@@ -14,6 +17,7 @@ import {
   providerSupportsAgent,
   sourceOverrideOf,
   usesProviderSource,
+  type CodexReasoning,
   type ModelProvider,
 } from '../api';
 import { agentProviderFilePath, removeLegacyProviderEntries } from './agent-provider-files';
@@ -25,6 +29,7 @@ import {
   buildSourceLaunch,
   PROVIDER_KEY_ENV,
   type SourceLaunch,
+  userCodexEfforts,
 } from './source-launch';
 
 const provider: ModelProvider = {
@@ -222,8 +227,8 @@ describe('buildSourceLaunch', () => {
     expect(launch.codexCatalog).toEqual({
       providerKey: 'emdash-newapi',
       models: [
-        { id: 'moonshotai/kimi-k3', contextWindow: 1_000_000 },
-        { id: 'z-ai/glm-5.3-flash' },
+        { id: 'moonshotai/kimi-k3', contextWindow: 1_000_000, reasoning: true },
+        { id: 'z-ai/glm-5.3-flash', reasoning: true },
       ],
     });
     const catalogArg = launch.args.find((arg) => arg.startsWith('model_catalog_json='));
@@ -260,7 +265,11 @@ describe('buildSourceLaunch', () => {
     const launch = buildSourceLaunch('codex', three, 'sk-1', 'a/three')!;
     expect(launch.codexCatalog).toEqual({
       providerKey: 'emdash-newapi',
-      models: [{ id: 'a/one' }, { id: 'a/two', contextWindow: 200_000 }, { id: 'a/three' }],
+      models: [
+        { id: 'a/one', reasoning: true },
+        { id: 'a/two', contextWindow: 200_000, reasoning: true },
+        { id: 'a/three', reasoning: true },
+      ],
     });
     expect(launch.args.find((arg) => arg.startsWith('model_catalog_json='))).toBeDefined();
     expect(launch.args.every((arg) => !/\s/.test(arg))).toBe(true);
@@ -285,6 +294,105 @@ describe('buildSourceLaunch', () => {
     const bare = buildSourceLaunch('codex', searching, 'sk-1')!;
     expect(bare.args).toContain('web_search="disabled"');
     expect(JSON.parse(bare.env.CODEX_CONFIG!).web_search).toBe('disabled');
+  });
+
+  describe('Codex reasoning effort', () => {
+    /** The effort in the -c flags and in CODEX_CONFIG, checked to agree. */
+    function effortOf(launch: SourceLaunch | null): string | undefined {
+      const arg = launch!.args.find((a) => a.startsWith('model_reasoning_effort='));
+      const fromArgs = arg ? JSON.parse(arg.slice('model_reasoning_effort='.length)) : undefined;
+      expect(JSON.parse(launch!.env.CODEX_CONFIG!).model_reasoning_effort).toBe(fromArgs);
+      return fromArgs;
+    }
+
+    it("starts at medium, not the user's own config, when nothing is set", () => {
+      expect(effortOf(buildSourceLaunch('codex', provider, 'sk-1', 'moonshotai/kimi-k3'))).toBe(
+        'medium'
+      );
+    });
+
+    it("starts at the provider's default, or the model's own when it has one", () => {
+      const xhigh: ModelProvider = {
+        ...provider,
+        codexReasoning: { levels: ['low', 'high', 'xhigh'], default: 'xhigh' },
+      };
+      expect(effortOf(buildSourceLaunch('codex', xhigh, 'sk-1', 'moonshotai/kimi-k3'))).toBe(
+        'xhigh'
+      );
+      const perModel: ModelProvider = {
+        ...provider,
+        codexReasoning: { levels: ['low', 'medium', 'high'], default: 'medium' },
+        codexReasoningByModel: {
+          'moonshotai/kimi-k3': { levels: ['low', 'high', 'max'], default: 'max' },
+        },
+      };
+      expect(effortOf(buildSourceLaunch('codex', perModel, 'sk-1', 'moonshotai/kimi-k3'))).toBe(
+        'max'
+      );
+      expect(effortOf(buildSourceLaunch('codex', perModel, 'sk-1', 'z-ai/glm-5.3-flash'))).toBe(
+        'medium'
+      );
+    });
+
+    it("uses a known model's own default from Codex's cache", () => {
+      const known = [{ slug: 'kimi-k3', default_reasoning_level: 'high' }];
+      expect(
+        effortOf(buildSourceLaunch('codex', provider, 'sk-1', 'moonshotai/kimi-k3', known))
+      ).toBe('high');
+    });
+
+    it('passes no effort for a model that does not reason, or when none is chosen', () => {
+      const off: ModelProvider = { ...provider, nonReasoningModels: ['moonshotai/kimi-k3'] };
+      expect(effortOf(buildSourceLaunch('codex', off, 'sk-1', 'moonshotai/kimi-k3'))).toBe(
+        undefined
+      );
+      expect(effortOf(buildSourceLaunch('codex', provider, 'sk-1'))).toBe(undefined);
+    });
+
+    it("writes the user's efforts into the catalog", () => {
+      const launch = buildSourceLaunch(
+        'codex',
+        {
+          ...provider,
+          nonReasoningModels: ['z-ai/glm-5.3-flash'],
+          codexReasoning: { levels: ['low', 'high'], default: 'high' },
+        },
+        'sk-1',
+        'moonshotai/kimi-k3'
+      )!;
+      expect(launch.codexCatalog?.models).toEqual([
+        {
+          id: 'moonshotai/kimi-k3',
+          reasoning: true,
+          efforts: { levels: ['low', 'high'], default: 'high' },
+        },
+        {
+          id: 'z-ai/glm-5.3-flash',
+          reasoning: false,
+          efforts: { levels: ['low', 'high'], default: 'high' },
+        },
+      ]);
+    });
+
+    it("picks the model's efforts over the provider's, and only for that model", () => {
+      const ofProvider: CodexReasoning = { levels: ['low', 'medium'], default: 'low' };
+      const ofModel: CodexReasoning = { levels: ['max'], default: 'max' };
+      const withFields = (fields: Partial<ModelProvider>) => ({ ...provider, ...fields });
+      expect(userCodexEfforts(withFields({ codexReasoning: ofProvider }), 'a')).toEqual(ofProvider);
+      expect(userCodexEfforts(withFields({ codexReasoningByModel: { a: ofModel } }), 'a')).toEqual(
+        ofModel
+      );
+      const both = withFields({
+        codexReasoning: ofProvider,
+        codexReasoningByModel: { a: ofModel },
+      });
+      expect(userCodexEfforts(both, 'a')).toEqual(ofModel);
+      expect(userCodexEfforts(both, 'b')).toEqual(ofProvider);
+      expect(userCodexEfforts(provider, 'a')).toBeUndefined();
+      expect(userCodexEfforts(withFields({ codexReasoningByModel: { b: ofModel } }), 'a')).toBe(
+        undefined
+      );
+    });
   });
 
   it('reads and writes context windows the way people type them', () => {
@@ -360,6 +468,38 @@ describe('buildSourceLaunch', () => {
         { id: 'z-ai/glm-5.3-flash', reasoning: false },
       ]);
     }
+  });
+});
+
+describe('Codex reasoning settings', () => {
+  it("stores levels in Codex's order, each once", () => {
+    expect(normalizeCodexReasoningLevels(['max', 'low', 'high', 'low'])).toEqual([
+      'low',
+      'high',
+      'max',
+    ]);
+  });
+
+  it('moves the default down to the nearest level left when it is unticked', () => {
+    expect(defaultAfterRemoving(['low', 'medium', 'high'], 'medium', 'medium')).toBe('low');
+    expect(defaultAfterRemoving(['medium', 'high', 'max'], 'medium', 'medium')).toBe('high');
+    expect(defaultAfterRemoving(['low', 'high', 'max'], 'max', 'max')).toBe('high');
+    expect(defaultAfterRemoving(['low', 'medium', 'high'], 'medium', 'high')).toBe('medium');
+  });
+
+  it('reads providers saved before efforts, and rejects a default that is not offered', () => {
+    expect(modelProviderSchema.safeParse(provider).success).toBe(true);
+    const bad = { levels: ['low', 'high'], default: 'medium' };
+    expect(modelProviderSchema.safeParse({ ...provider, codexReasoning: bad }).success).toBe(false);
+    expect(
+      modelProviderSchema.safeParse({ ...provider, codexReasoningByModel: { a: bad } }).success
+    ).toBe(false);
+    expect(
+      modelProviderSchema.safeParse({
+        ...provider,
+        codexReasoningByModel: { a: { levels: ['ultra'], default: 'ultra' } },
+      }).success
+    ).toBe(false);
   });
 });
 

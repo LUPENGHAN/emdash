@@ -2,11 +2,14 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { CodexReasoning } from '../api';
 import {
   buildCodexModelCatalog,
   codexAppServerWrapperPath,
   codexModelCatalogPath,
+  codexStartingEffort,
   ensureCodexModelCatalog,
+  readKnownCodexModels,
 } from './codex-model-catalog';
 
 describe('Codex model catalog', () => {
@@ -16,6 +19,9 @@ describe('Codex model catalog', () => {
       display_name: 'GPT-6 Sol',
       context_window: 272_000,
       max_context_window: 872_000,
+      default_reasoning_level: 'high',
+      supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'high' }],
+      supports_reasoning_effort_updates: true,
       model_messages: { instructions_template: 'gpt-6 instructions' },
       apply_patch_tool_type: 'freeform',
     },
@@ -26,8 +32,8 @@ describe('Codex model catalog', () => {
       {
         providerKey: 'emdash-x',
         models: [
-          { id: 'gpt-6-sol', contextWindow: 1_000_000 },
-          { id: 'openai/gpt-6-sol', contextWindow: 1_000_000 },
+          { id: 'gpt-6-sol', contextWindow: 1_000_000, reasoning: true },
+          { id: 'openai/gpt-6-sol', contextWindow: 1_000_000, reasoning: true },
         ],
       },
       known
@@ -49,13 +55,15 @@ describe('Codex model catalog', () => {
 
   it("describes unknown models with Codex's own fallback and its base instructions", () => {
     const [model] = buildCodexModelCatalog(
-      { providerKey: 'emdash-x', models: [{ id: 'deepseek/v4-flash', contextWindow: 128_000 }] },
+      {
+        providerKey: 'emdash-x',
+        models: [{ id: 'deepseek/v4-flash', contextWindow: 128_000, reasoning: true }],
+      },
       known
     ).models;
     expect(model).toMatchObject({
       slug: 'deepseek/v4-flash',
       display_name: 'deepseek/v4-flash',
-      supported_reasoning_levels: [],
       context_window: 128_000,
       max_context_window: 128_000,
     });
@@ -68,7 +76,13 @@ describe('Codex model catalog', () => {
     // A model Codex knows keeps its own context (272k); the catalog no longer
     // overrides it, and an unknown model gets no context_window at all.
     const [knownModel, unknownModel] = buildCodexModelCatalog(
-      { providerKey: 'emdash-x', models: [{ id: 'gpt-6-sol' }, { id: 'deepseek/v4-flash' }] },
+      {
+        providerKey: 'emdash-x',
+        models: [
+          { id: 'gpt-6-sol', reasoning: true },
+          { id: 'deepseek/v4-flash', reasoning: true },
+        ],
+      },
       known
     ).models;
     expect(knownModel).toMatchObject({
@@ -79,6 +93,74 @@ describe('Codex model catalog', () => {
     expect(unknownModel).toMatchObject({ slug: 'deepseek/v4-flash' });
     expect(unknownModel).not.toHaveProperty('context_window');
     expect(unknownModel).not.toHaveProperty('max_context_window');
+  });
+
+  describe('reasoning efforts', () => {
+    const levels = (model: Record<string, unknown> | undefined) =>
+      ((model?.supported_reasoning_levels ?? []) as { effort: string }[]).map((l) => l.effort);
+    const build = (models: Parameters<typeof buildCodexModelCatalog>[0]['models']) =>
+      buildCodexModelCatalog({ providerKey: 'emdash-x', models }, known).models;
+
+    it('offers none for a model that does not reason, known or not, set or not', () => {
+      const efforts: CodexReasoning = { levels: ['low', 'high'], default: 'high' };
+      for (const model of build([
+        { id: 'gpt-6-sol', reasoning: false },
+        { id: 'deepseek/v4-flash', reasoning: false, efforts },
+      ])) {
+        expect(model).toMatchObject({
+          supported_reasoning_levels: [],
+          default_reasoning_level: null,
+          supports_reasoning_effort_updates: false,
+        });
+      }
+    });
+
+    it("uses the user's efforts on known and unknown models alike", () => {
+      const efforts: CodexReasoning = { levels: ['low', 'high', 'max'], default: 'max' };
+      const models = build([
+        { id: 'gpt-6-sol', reasoning: true, efforts },
+        { id: 'deepseek/v4-flash', reasoning: true, efforts },
+      ]);
+      for (const model of models) {
+        expect(levels(model)).toEqual(['low', 'high', 'max']);
+        expect(model).toMatchObject({
+          default_reasoning_level: 'max',
+          supports_reasoning_effort_updates: true,
+        });
+      }
+      expect(models[0]?.supported_reasoning_levels).toContainEqual({
+        effort: 'max',
+        description: 'The most reasoning the model offers',
+      });
+    });
+
+    it("keeps Codex's own efforts for a model it knows when none are set", () => {
+      const [model] = build([{ id: 'openai/gpt-6-sol', reasoning: true }]);
+      expect(levels(model)).toEqual(['medium', 'high']);
+      expect(model?.default_reasoning_level).toBe('high');
+    });
+
+    it('offers low/medium/high from medium for an unknown model when none are set', () => {
+      const [model] = build([{ id: 'deepseek/v4-flash', reasoning: true }]);
+      expect(levels(model)).toEqual(['low', 'medium', 'high']);
+      expect(model).toMatchObject({
+        default_reasoning_level: 'medium',
+        supports_reasoning_effort_updates: true,
+      });
+    });
+
+    it('starts a launch at an effort the catalog offers', () => {
+      const start = (model: Parameters<typeof codexStartingEffort>[0]) =>
+        codexStartingEffort(model, known);
+      expect(start({ id: 'deepseek/v4-flash', reasoning: true })).toBe('medium');
+      expect(start({ id: 'gpt-6-sol', reasoning: true })).toBe('high');
+      expect(
+        start({ id: 'gpt-6-sol', reasoning: true, efforts: { levels: ['low'], default: 'low' } })
+      ).toBe('low');
+      expect(start({ id: 'gpt-6-sol', reasoning: false })).toBeUndefined();
+      // Without Codex's cache every model counts as unknown.
+      expect(codexStartingEffort({ id: 'gpt-6-sol', reasoning: true }, [])).toBe('medium');
+    });
   });
 
   it('names a Windows wrapper .cmd', () => {
@@ -98,7 +180,10 @@ describe('Codex model catalog', () => {
     it("writes the provider's catalog next to Codex's files, from its model cache", async () => {
       await writeFile(path.join(home, 'models_cache.json'), JSON.stringify({ models: known }));
       await ensureCodexModelCatalog(
-        { providerKey: 'emdash-x', models: [{ id: 'gpt-6-sol', contextWindow: 1_000_000 }] },
+        {
+          providerKey: 'emdash-x',
+          models: [{ id: 'gpt-6-sol', contextWindow: 1_000_000, reasoning: true }],
+        },
         home
       );
       const file = codexModelCatalogPath('emdash-x', home);
@@ -113,9 +198,18 @@ describe('Codex model catalog', () => {
       );
     });
 
+    it("reads Codex's model cache, or nothing when there is none", async () => {
+      expect(await readKnownCodexModels(home)).toEqual([]);
+      await writeFile(path.join(home, 'models_cache.json'), JSON.stringify({ models: known }));
+      expect(await readKnownCodexModels(home)).toEqual(known);
+    });
+
     it('writes a Windows .cmd wrapper with a TOML literal and no chmod', async () => {
       await ensureCodexModelCatalog(
-        { providerKey: 'emdash-x', models: [{ id: 'gpt-6-sol', contextWindow: 1_000_000 }] },
+        {
+          providerKey: 'emdash-x',
+          models: [{ id: 'gpt-6-sol', contextWindow: 1_000_000, reasoning: true }],
+        },
         home,
         'win32'
       );
