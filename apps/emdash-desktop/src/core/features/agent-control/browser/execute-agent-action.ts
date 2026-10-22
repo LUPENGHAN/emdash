@@ -5,6 +5,7 @@ import {
 import { shortName } from '@emdash/core/runtimes/git/api';
 import type { AgentProviderId } from '@emdash/plugins/agents/types';
 import { toast } from '@emdash/ui/react/primitives';
+import { captureBrowserPage } from '@core/features/browser/api/browser/browser-capture';
 import { browserControlsRegistry } from '@core/features/browser/api/browser/browser-controls-registry';
 import { browserDiagnosticsStore } from '@core/features/browser/api/browser/browser-diagnostics-store';
 import { browserSessionStore } from '@core/features/browser/api/browser/browser-session-store';
@@ -591,7 +592,7 @@ async function taskBrowser(caller: AgentCaller, openUrl?: string): Promise<Autom
     );
   return {
     executeJavaScript: (code) => adapter.executeJavaScript(code),
-    capturePng: () => adapter.capturePng(),
+    capturePng: () => captureBrowserPage(id, adapter),
     sendInputEvent: (event) => adapter.sendInputEvent(event),
     insertText: (text) => adapter.insertText(text),
     loadUrl: async (url) => {

@@ -434,4 +434,32 @@ describe('BrowserWebContentsRegistry', () => {
       ],
     });
   });
+
+  it("keeps a browser's window painting while captures hold it, then restores it", () => {
+    const registry = new BrowserWebContentsRegistry();
+    registry.registerSession({ browserId: 'browser-1', partition: PROFILE_PARTITION });
+    const guest = fakeWebContents();
+    let throttled = true;
+    const host = {
+      id: 99,
+      isDestroyed: () => false,
+      getBackgroundThrottling: () => throttled,
+      setBackgroundThrottling: vi.fn((value: boolean) => {
+        throttled = value;
+      }),
+    };
+    Object.assign(guest, { hostWebContents: host });
+    registry.handleWebviewAttached(guest);
+    registry.bindWebContents('browser-1', guest);
+
+    expect(registry.holdPainting('browser-1', true)).toBe(true);
+    expect(registry.holdPainting('browser-1', true)).toBe(true);
+    expect(throttled).toBe(false);
+    registry.holdPainting('browser-1', false);
+    expect(throttled).toBe(false);
+    registry.holdPainting('browser-1', false);
+    expect(throttled).toBe(true);
+    expect(host.setBackgroundThrottling).toHaveBeenCalledTimes(2);
+    expect(registry.holdPainting('missing', true)).toBe(false);
+  });
 });

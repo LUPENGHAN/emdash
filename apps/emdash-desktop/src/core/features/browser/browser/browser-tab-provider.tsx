@@ -1,5 +1,6 @@
 import { observer } from 'mobx-react-lite';
-import { useEffect } from 'react';
+import { useEffect, type CSSProperties } from 'react';
+import { browserCaptureHolds } from '@core/features/browser/api/browser/browser-capture';
 import { browserSessionStore } from '@core/features/browser/api/browser/browser-session-store';
 import { BrowserTabResource } from '@core/features/browser/api/browser/browser-tab-resource';
 import { getBrowserClient } from '@core/features/browser/api/browser/client';
@@ -31,7 +32,8 @@ export interface BrowserOpenArgs {
 
 /**
  * Mounts BrowserPane for every open browser tab; visibility is managed via
- * visibility:hidden + inert so browser sessions survive tab switches.
+ * visibility:hidden + inert so browser sessions survive tab switches. A hidden tab being
+ * captured for an agent is drawn fully transparent instead, so its page has a frame.
  * When no browser tab is active, calls setActiveBrowser(null) so the browser
  * process stops responding to commands.
  */
@@ -53,11 +55,16 @@ const BrowserTabContent = observer(function BrowserTabContent({ host }: TabConte
       {browserTabs.map((tab) => {
         const browserId = tab.resource.browserId;
         const visible = activeBrowserId === browserId;
+        const style: CSSProperties = visible
+          ? { visibility: 'visible' }
+          : browserCaptureHolds.isHeld(browserId)
+            ? { visibility: 'visible', opacity: 0, pointerEvents: 'none' }
+            : { visibility: 'hidden' };
         return (
           <div
             key={browserId}
             className="absolute inset-0"
-            style={{ visibility: visible ? 'visible' : 'hidden' }}
+            style={style}
             // eslint-disable-next-line @typescript-eslint/ban-ts-comment
             // @ts-ignore — `inert` is a valid HTML attribute in modern browsers but not yet in React types
             inert={visible ? undefined : ''}
