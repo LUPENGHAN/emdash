@@ -328,6 +328,7 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
    *   preview      – open as a preview tab (replaced on next preview open)
    *   overrideState – when single-mount hit, replace the existing tab's state
    *   target       – which pane to open into ('active' | 'left' | 'right' | 'up' | 'down' | {paneId})
+   *   background   – open without activating the tab or its pane
    *
    * For single-mount providers, scans all panes for an existing dedupKey match
    * and focuses it (with optional state override) instead of opening a new tab.
@@ -343,6 +344,7 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
   open(kind: string, args: Record<string, unknown>, config?: TabOpenOptions): void {
     const previewFlag = !!config?.preview;
     const overrideStateFlag = !!config?.overrideState;
+    const backgroundFlag = !!config?.background;
     const resolvedTarget: OpenTarget = config?.target ?? 'active';
     const explicitTargetPaneId =
       typeof resolvedTarget === 'object' && 'paneId' in resolvedTarget
@@ -377,10 +379,12 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
             return;
           }
 
-          this.setActiveGroup(g.paneId);
           if (!previewFlag) existing.isPreview = false;
           if (overrideStateFlag) existing.state = initialState;
-          g.pane.setActiveTab(existing.tabId);
+          if (!backgroundFlag) {
+            this.setActiveGroup(g.paneId);
+            g.pane.setActiveTab(existing.tabId);
+          }
           return;
         }
       }
@@ -391,6 +395,7 @@ export class PaneLayoutStore<R extends TabRegistry = TabRegistry> {
     targetPane.openWithState(kind, initialState, {
       isPreview: previewFlag,
       overrideState: overrideStateFlag,
+      background: backgroundFlag,
     });
   }
 

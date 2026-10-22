@@ -13,6 +13,7 @@ export type BrowserOperations = {
   setActiveBrowser(browserId: string | null): BrowserActionResult;
   getActiveBrowser(): { browserId: string | null };
   openDevTools(browserId: string): BrowserActionResult;
+  holdPainting(browserId: string, on: boolean): BrowserActionResult;
   captureScreenshot(browserId: string): Promise<BrowserActionResult>;
   clearData(browserId: string, kind: BrowserDataClearKind): Promise<BrowserActionResult>;
   clearProfileStorage(profileId: string): Promise<BrowserActionResult>;
@@ -29,6 +30,7 @@ export function createBrowserWireController(browserOperations: BrowserOperations
     setActiveBrowser: ({ browserId }) => browserOperations.setActiveBrowser(browserId),
     getActiveBrowser: () => browserOperations.getActiveBrowser(),
     openDevTools: ({ browserId }) => browserOperations.openDevTools(browserId),
+    holdPainting: ({ browserId, on }) => browserOperations.holdPainting(browserId, on),
     captureScreenshot: ({ browserId }) => browserOperations.captureScreenshot(browserId),
     clearData: ({ browserId, kind }) => browserOperations.clearData(browserId, kind),
     clearProfileStorage: ({ profileId }) => browserOperations.clearProfileStorage(profileId),

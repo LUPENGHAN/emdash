@@ -80,6 +80,8 @@ export type BrowserSettings = {
   defaultProfileId: BrowserProfileSelection;
   relaxCorsForLocalhost: boolean;
   profiles: BrowserProfile[];
+  /** Agents open pages in a background tab instead of switching to the browser. */
+  agentOpensInBackground: boolean;
 };
 
 export type KeyboardSettings = Record<string, string | null | undefined>;

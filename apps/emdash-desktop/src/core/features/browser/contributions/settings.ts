@@ -24,6 +24,7 @@ const browserSettingsSchema = z
         })
       )
       .min(1),
+    agentOpensInBackground: z.boolean(),
   })
   .refine(
     (settings) =>
@@ -42,6 +43,7 @@ export const browserSettingsContribution = defineSettingsContribution<'browser',
     defaultProfileId: DEFAULT_BROWSER_PROFILE_ID,
     relaxCorsForLocalhost: false,
     profiles: DEFAULT_BROWSER_PROFILES,
+    agentOpensInBackground: false,
   },
 });
 

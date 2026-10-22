@@ -35,6 +35,11 @@ export const browserContract = defineContract({
     input: z.object({ browserId: z.string() }),
     output: z.custom<BrowserActionResult>(),
   }),
+  /** Keeps the browser's window drawing while covered, for a capture (see the registry). */
+  holdPainting: procedure({
+    input: z.object({ browserId: z.string(), on: z.boolean() }),
+    output: z.custom<BrowserActionResult>(),
+  }),
   captureScreenshot: procedure({
     input: z.object({ browserId: z.string() }),
     output: z.custom<BrowserActionResult>(),

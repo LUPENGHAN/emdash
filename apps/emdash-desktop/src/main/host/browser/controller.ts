@@ -48,6 +48,10 @@ export const browserOperations = {
     success: import.meta.env.DEV && browserWebContentsRegistry.openDevTools(browserId),
   }),
 
+  holdPainting: (browserId: string, on: boolean) => ({
+    success: browserWebContentsRegistry.holdPainting(browserId, on),
+  }),
+
   captureScreenshot: async (browserId: string) => ({
     success: await browserWebContentsRegistry.captureScreenshotToClipboard(browserId),
   }),

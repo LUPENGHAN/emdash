@@ -5,6 +5,7 @@ import {
 import { shortName } from '@emdash/core/runtimes/git/api';
 import type { AgentProviderId } from '@emdash/plugins/agents/types';
 import { toast } from '@emdash/ui/react/primitives';
+import { captureBrowserPage } from '@core/features/browser/api/browser/browser-capture';
 import { browserControlsRegistry } from '@core/features/browser/api/browser/browser-controls-registry';
 import { browserDiagnosticsStore } from '@core/features/browser/api/browser/browser-diagnostics-store';
 import { browserSessionStore } from '@core/features/browser/api/browser/browser-session-store';
@@ -538,18 +539,33 @@ async function taskBrowser(caller: AgentCaller, openUrl?: string): Promise<Autom
     }
     return null;
   };
+  // Failing to read the setting keeps the default: switching to the browser is the
+  // long-standing behaviour, and agents should not lose the browser over a settings read.
+  const inBackground =
+    (await fetchAppSettingsMeta('browser').catch(() => undefined))?.value.agentOpensInBackground ===
+    true;
+  // A browser runs only while its task is on screen: the task's panes (and every tab in
+  // them, hidden ones included) are not mounted while another view is showing. Unless the
+  // user asked not to be pulled away, the agent's request brings its task to the front.
+  if (inBackground && !composition.paneLayout.isViewActive) {
+    throw new Error(
+      'Auto-switching to the built-in browser is off in Emdash settings, and this task is not ' +
+        'on screen, so the browser is not running. Ask the user to open the task, then try again.'
+    );
+  }
   let browserId = findBrowserId();
   if (!browserId) {
     // Blank first: callers load their URL once the tab's webview is ready.
-    composition.paneLayout.open('browser', { initialUrl: 'about:blank' }, { preview: false });
+    composition.paneLayout.open(
+      'browser',
+      { initialUrl: 'about:blank' },
+      inBackground ? { preview: false, background: true } : { preview: false }
+    );
     browserId = findBrowserId();
   }
   if (!browserId) throw new Error('Could not open the built-in browser');
   const id = browserId;
-  // A browser runs only while its task is on screen: the task's panes (and every tab in
-  // them, hidden ones included) are not mounted while another view is showing. The agent
-  // asked to use it, so bring its task to the front rather than fail.
-  if (!browserControlsRegistry.get(id)) {
+  if (!inBackground && !browserControlsRegistry.get(id)) {
     getNavigation().navigate(taskViewDef({ projectId: caller.projectId, taskId: caller.taskId }));
   }
   const controls = await waitFor(
@@ -576,7 +592,7 @@ async function taskBrowser(caller: AgentCaller, openUrl?: string): Promise<Autom
     );
   return {
     executeJavaScript: (code) => adapter.executeJavaScript(code),
-    capturePng: () => adapter.capturePng(),
+    capturePng: () => captureBrowserPage(id, adapter),
     sendInputEvent: (event) => adapter.sendInputEvent(event),
     insertText: (text) => adapter.insertText(text),
     loadUrl: async (url) => {

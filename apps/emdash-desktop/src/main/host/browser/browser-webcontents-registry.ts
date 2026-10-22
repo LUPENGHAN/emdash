@@ -64,6 +64,8 @@ export class BrowserWebContentsRegistry {
   private readonly browserIdByWebContentsId = new Map<number, string>();
   private readonly pendingWebContentsIds = new Set<number>();
   private activeBrowserId: string | null = null;
+  /** Windows kept painting for a capture, by host webContents id. */
+  private readonly paintHolds = new Map<number, { count: number; throttled: boolean }>();
   private browserShortcuts = buildBrowserClaims();
 
   registerSession(input: RegisteredBrowserSession): void {
@@ -161,6 +163,32 @@ export class BrowserWebContentsRegistry {
     const webContents = this.webContentsByBrowserId.get(browserId);
     if (!webContents || webContents.isDestroyed()) return false;
     webContents.openDevTools({ mode: 'detach' });
+    return true;
+  }
+
+  /**
+   * Keeps the window showing this browser drawing frames while it is covered or in the
+   * background, so a capture of the page gets one; each hold is released by one call
+   * with `on: false`, and the window's own setting comes back with the last.
+   */
+  holdPainting(browserId: string, on: boolean): boolean {
+    const host = this.webContentsByBrowserId.get(browserId)?.hostWebContents;
+    if (!host || host.isDestroyed()) return false;
+    const hold = this.paintHolds.get(host.id);
+    if (on) {
+      if (hold) {
+        hold.count += 1;
+      } else {
+        this.paintHolds.set(host.id, { count: 1, throttled: host.getBackgroundThrottling() });
+        host.setBackgroundThrottling(false);
+      }
+    } else if (hold) {
+      hold.count -= 1;
+      if (hold.count === 0) {
+        this.paintHolds.delete(host.id);
+        host.setBackgroundThrottling(hold.throttled);
+      }
+    }
     return true;
   }
 
