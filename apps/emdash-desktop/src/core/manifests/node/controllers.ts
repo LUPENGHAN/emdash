@@ -70,6 +70,8 @@ import type { RemoteAccessService, RemoteClientService } from '@core/features/re
 import { createRemoteClientWireController } from '@core/features/remote-access/node/remote-client-wire-controller';
 import { createRemoteAccessWireController } from '@core/features/remote-access/node/wire-controller';
 import { createRepositoryWireController } from '@core/features/repository/node/wire-controller';
+import type { RequirementsService } from '@core/features/requirements/node/requirements-service';
+import { createRequirementsWireController } from '@core/features/requirements/node/wire-controller';
 import type { SearchService } from '@core/features/search/node/search-service';
 import { createSearchWireController } from '@core/features/search/node/wire-controller';
 import { createSkillsWireController } from '@core/features/skills/node/wire-controller';
@@ -163,6 +165,7 @@ export type DesktopControllerContext = {
   readonly previewServerAccess: PreviewServerAccessOperations;
   readonly projectDeletion: ProjectDeletionDependencies;
   readonly promptLibrary: PromptLibraryService;
+  readonly requirements: RequirementsService;
   readonly projects: ProjectAttachmentManager;
   readonly projectSettings: ProjectSettingsService;
   readonly providerSettings: ProviderOverrideSettings;
@@ -333,6 +336,9 @@ export const desktopNodeControllers = {
   },
   promptLibrary: {
     create: ({ promptLibrary }) => createPromptLibraryWireController(promptLibrary),
+  },
+  requirements: {
+    create: ({ requirements }) => createRequirementsWireController(requirements),
   },
   repository: {
     create: ({ db, projects }) =>

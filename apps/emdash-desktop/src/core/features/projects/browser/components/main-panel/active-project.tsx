@@ -2,6 +2,7 @@ import { getPillTabId, PillTabs, type PillTab } from '@emdash/ui/react/patterns'
 import {
   GitPullRequest,
   History,
+  ListPlus,
   ListTodo,
   PanelsTopLeft,
   Settings as SettingsIcon,
@@ -19,6 +20,7 @@ import { TaskList } from '@core/features/projects/browser/components/task-view/t
 import { ProjectWorkspacesView } from '@core/features/projects/browser/components/workspaces-view/project-workspaces-view';
 import type { ProjectView } from '@core/features/projects/browser/stores/project-view';
 import { projectViewDef } from '@core/features/projects/contributions/views';
+import { RequirementsView } from '@core/features/requirements/contributions/browser/requirements-view';
 import { useCurrentViewParams } from '@core/primitives/navigation/browser/navigation-hooks';
 import { cn } from '@core/primitives/styling/browser/cn';
 
@@ -26,6 +28,7 @@ const PROJECT_SECTION_PANEL_ID = 'project-section-panel';
 
 const projectViewItems: readonly PillTab<ProjectView>[] = [
   { value: 'tasks', label: 'Tasks', icon: <ListTodo className="size-3.5" /> },
+  { value: 'requirements', label: 'Requirements', icon: <ListPlus className="size-3.5" /> },
   { value: 'history', label: 'History', icon: <History className="size-3.5" /> },
   {
     value: 'pull-request',
@@ -66,7 +69,10 @@ export const ActiveProject = observer(function ActiveProject() {
         className={cn(
           'flex w-full flex-col px-1',
           activeView === 'workspaces' && 'min-h-[calc(100vh-16rem)]',
-          (activeView === 'tasks' || activeView === 'history' || activeView === 'pull-request') &&
+          (activeView === 'tasks' ||
+            activeView === 'requirements' ||
+            activeView === 'history' ||
+            activeView === 'pull-request') &&
             'h-[calc(100vh-16rem)] min-h-96',
           // Settings scrolls internally with a pinned footer, so its floor must
           // fit the smallest supported window (500px − 16rem chrome = 244px);
@@ -76,6 +82,7 @@ export const ActiveProject = observer(function ActiveProject() {
         )}
       >
         {activeView === 'tasks' && <TaskList />}
+        {activeView === 'requirements' && <RequirementsView projectId={projectId} />}
         {activeView === 'history' && <ProjectHistoryView projectId={projectId} />}
         {activeView === 'pull-request' && <PullRequestView />}
         {activeView === 'workspaces' && <ProjectWorkspacesView projectId={projectId} />}

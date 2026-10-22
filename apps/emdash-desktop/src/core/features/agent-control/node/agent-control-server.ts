@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { UsageLimits } from '@core/features/model-providers/api';
+import type { RequirementsOperations } from '@core/features/requirements/api/types';
 import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
 import { mcpPath, verifyMcpPath } from './caller-tokens';
 import { registerAgentControlTools } from './mcp-tools';
@@ -16,6 +17,7 @@ export type AgentControlServerDeps = {
   resolveCaller: (conversationId: string) => Promise<AgentCaller | null>;
   dispatch: (caller: AgentCaller, action: AgentControlAction) => Promise<AgentControlResult>;
   usageLimits: () => Promise<UsageLimits>;
+  requirements: Pick<RequirementsOperations, 'list' | 'add' | 'update'>;
   preferredPort?: number;
 };
 
@@ -64,13 +66,14 @@ export async function startAgentControlServer(
       { name: 'emdash', version: deps.version },
       {
         instructions:
-          'You run inside Emdash, which manages git worktrees as tasks the user can see and review. When you need a separate git worktree (parallel work, an alternative approach, isolating a change), create it with the create_task tool instead of `git worktree add` or a worktree feature of your own.',
+          'You run inside Emdash, which manages git worktrees as tasks the user can see and review. When you need a separate git worktree (parallel work, an alternative approach, isolating a change), create it with the create_task tool instead of `git worktree add` or a worktree feature of your own. When the user asks you to note a requirement or idea for later, use add_requirement instead of writing it to a file.',
       }
     );
     registerAgentControlTools(server, {
       caller,
       dispatch: (action) => deps.dispatch(caller, action),
       usageLimits: deps.usageLimits,
+      requirements: deps.requirements,
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

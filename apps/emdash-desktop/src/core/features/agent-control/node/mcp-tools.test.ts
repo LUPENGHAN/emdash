@@ -37,6 +37,7 @@ function registeredTools() {
     },
     dispatch,
     usageLimits: async () => ({ agents: [] }),
+    requirements: { list: vi.fn(), add: vi.fn(), update: vi.fn() },
   } satisfies AgentControlToolContext);
   return { dispatch, tool: (name: string) => tools.find((entry) => entry.name === name) };
 }

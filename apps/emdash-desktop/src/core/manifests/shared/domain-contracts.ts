@@ -25,6 +25,7 @@ import {
   remoteClientDomain,
 } from '@core/features/remote-access/api';
 import { repositoryContract, repositoryDomain } from '@core/features/repository/api';
+import { requirementsContract, requirementsDomain } from '@core/features/requirements/api/contract';
 import { searchContract, searchDomain } from '@core/features/search/api';
 import { skillsContract, skillsDomain } from '@core/features/skills/api';
 import { sourceControlContract, sourceControlDomain } from '@core/features/source-control/api';
@@ -77,6 +78,7 @@ export const desktopDomainContracts = {
   [projectSettingsDomain]: projectSettingsContract,
   [projectWorkspacesDomain]: projectWorkspacesContract,
   [promptLibraryDomain]: promptLibraryContract,
+  [requirementsDomain]: requirementsContract,
   [repositoryDomain]: repositoryContract,
   [searchDomain]: searchContract,
   [telemetryDomain]: telemetryContract,

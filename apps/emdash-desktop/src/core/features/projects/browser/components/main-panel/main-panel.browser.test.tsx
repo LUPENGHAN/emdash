@@ -22,6 +22,7 @@ const panelState = vi.hoisted(() => ({
 }));
 
 vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
+  asAvailableProject: () => undefined,
   getProjectManagerStore: () => ({ hydrateProjectContext: vi.fn() }),
   getProjectStore: () => panelState.store,
   projectDisplayName: () => 'Emdash',
@@ -30,6 +31,10 @@ vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
 
 vi.mock('@core/features/projects/contributions/browser/use-confirm-delete-project', () => ({
   useConfirmDeleteProject: () => vi.fn(),
+}));
+
+vi.mock('@core/features/requirements/contributions/browser/requirements-button', () => ({
+  RequirementsButton: () => null,
 }));
 
 vi.mock('@core/features/workbench/contributions/browser/BorderlessTitlebar', () => ({

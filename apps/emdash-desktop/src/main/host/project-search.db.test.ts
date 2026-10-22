@@ -87,6 +87,7 @@ describe('project deletion search cleanup', () => {
         logger: log,
         projects: { invalidate: vi.fn(async () => {}) },
         pullRequests: { deleteProjectData: vi.fn(async () => {}) },
+        requirements: { removeProject: vi.fn(async () => {}) },
         sessionCleanup: {
           resolve: async () => ({
             acpConversationIds: [],

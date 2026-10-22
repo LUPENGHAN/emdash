@@ -2,6 +2,7 @@ import { request } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Requirement } from '@core/features/requirements/api/types';
 import type { AgentControlAction } from '../api';
 import { startAgentControlServer, type AgentControlServer } from './agent-control-server';
 
@@ -19,9 +20,27 @@ describe('startAgentControlServer', () => {
   const dispatch = vi.fn(async (_caller: unknown, action: AgentControlAction) => ({
     text: `did ${action.kind}`,
   }));
+  const requirement: Requirement = {
+    id: 'r1',
+    title: 'Retry on timeout',
+    detail: 'in the fetch layer',
+    status: 'open',
+    source: { kind: 'user' },
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const requirements = {
+    list: vi.fn(async () => [requirement]),
+    add: vi.fn(async (_projectId: string, input: { title: string }) => ({
+      ...requirement,
+      title: input.title,
+    })),
+    update: vi.fn(async () => ({ ...requirement, status: 'done' as const })),
+  };
 
   beforeEach(async () => {
     dispatch.mockClear();
+    requirements.add.mockClear();
     server = await startAgentControlServer({
       secret: Buffer.from('test-secret'),
       version: '1.0.0',
@@ -38,6 +57,7 @@ describe('startAgentControlServer', () => {
           },
         ],
       }),
+      requirements,
     });
   });
 
@@ -88,6 +108,39 @@ describe('startAgentControlServer', () => {
     });
     expect(declined.isError).toBe(true);
     expect(JSON.stringify(declined.content)).toContain('The user declined');
+    await client.close();
+  });
+
+  it("keeps the caller's project requirements list, as that agent", async () => {
+    const client = await connect(server.urlFor('conv-1'));
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(['add_requirement', 'list_requirements', 'complete_requirement'])
+    );
+
+    const added = await client.callTool({
+      name: 'add_requirement',
+      arguments: { title: 'Cache the token' },
+    });
+    expect(JSON.stringify(added.content)).toContain('Added requirement r1: Cache the token');
+    expect(requirements.add).toHaveBeenCalledWith(
+      'project-1',
+      { title: 'Cache the token', detail: undefined },
+      { kind: 'agent', providerId: 'claude', conversationId: 'conv-1', taskId: 'task-1' }
+    );
+
+    const listed = await client.callTool({ name: 'list_requirements', arguments: {} });
+    expect(JSON.stringify(listed.content)).toContain(
+      'r1 [open] Retry on timeout\\n  in the fetch layer'
+    );
+
+    await client.callTool({ name: 'complete_requirement', arguments: { id: 'r1' } });
+    expect(requirements.update).toHaveBeenCalledWith('project-1', 'r1', { status: 'done' });
+
+    requirements.add.mockRejectedValueOnce(new Error('This project already has 500 requirements'));
+    const failed = await client.callTool({ name: 'add_requirement', arguments: { title: 'x' } });
+    expect(failed.isError).toBe(true);
+    expect(JSON.stringify(failed.content)).toContain('already has 500 requirements');
     await client.close();
   });
 

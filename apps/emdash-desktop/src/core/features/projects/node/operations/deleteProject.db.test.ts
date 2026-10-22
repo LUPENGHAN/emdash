@@ -138,6 +138,7 @@ describe('deleteProject', () => {
     const automations = { removeProjectDeployments: vi.fn(async () => {}) };
     const projectsManager = { invalidate: vi.fn(async () => {}) };
     const pullRequests = { deleteProjectData: vi.fn(async () => {}) };
+    const requirements = { removeProject: vi.fn(async () => {}) };
     const telemetry = { capture: vi.fn() };
     const dependencies: ProjectDeletionDependencies = {
       db: fixture.db,
@@ -147,6 +148,7 @@ describe('deleteProject', () => {
       logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       projects: projectsManager as unknown as ProjectDeletionDependencies['projects'],
       pullRequests,
+      requirements,
       sessionCleanup,
       telemetry,
     };
@@ -156,6 +158,7 @@ describe('deleteProject', () => {
       mementos,
       projectsManager,
       pullRequests,
+      requirements,
       sessionCleanup,
       telemetry,
     };
@@ -164,7 +167,7 @@ describe('deleteProject', () => {
   it('purges the project cascade and removes provenance worktrees through the verb when reachable', async () => {
     await seedProject();
     const { registry, runtimes } = makeRuntimes();
-    const { dependencies, automations, projectsManager, pullRequests, telemetry } =
+    const { dependencies, automations, projectsManager, pullRequests, requirements, telemetry } =
       makeDependencies(runtimes);
     projectsManager.invalidate.mockImplementationOnce(async () => {
       const [tombstoned] = await fixture.db
@@ -194,6 +197,7 @@ describe('deleteProject', () => {
     expect(workspaceRegistry.getLive('workspace-2')).toBeUndefined();
     expect(workspaceRegistry.getLive('repo-root')).toBeUndefined();
     expect(pullRequests.deleteProjectData).toHaveBeenCalledWith('project-1');
+    expect(requirements.removeProject).toHaveBeenCalledWith('project-1');
     expect(projectsManager.invalidate).toHaveBeenCalledWith('project-1', 'deletion');
     expect(projectsManager.invalidate.mock.invocationCallOrder[0]!).toBeLessThan(
       registry.deleteWorktree.mock.invocationCallOrder[0]!
