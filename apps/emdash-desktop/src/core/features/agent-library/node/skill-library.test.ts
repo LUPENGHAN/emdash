@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  frontmatterField,
   importSkills,
   listLibrarySkills,
   scanAgentSkills,
@@ -28,6 +29,29 @@ async function skill(dir: string, name: string, description = `${name} does thin
     `---\nname: ${name}\ndescription: ${description}\n---\n# ${name}\n`
   );
 }
+
+describe('frontmatterField', () => {
+  it('reads single-line, quoted and CRLF values', () => {
+    expect(
+      frontmatterField('---\nname: a\ndescription: "Does: things"\n---\n', 'description')
+    ).toBe('Does: things');
+    expect(frontmatterField('---\r\nname: a\r\ndescription: b\r\n---\r\n', 'description')).toBe(
+      'b'
+    );
+    expect(frontmatterField('no frontmatter', 'name')).toBe('');
+  });
+
+  it('reads folded and literal block descriptions', () => {
+    const folded =
+      '---\nname: a\ndescription: >\n  Analyses customer needs\n  and buying signals.\n---\n';
+    expect(frontmatterField(folded, 'description')).toBe(
+      'Analyses customer needs and buying signals.'
+    );
+    const literal = '---\ndescription: |-\n  Line one\n  Line two\nname: a\n---\n';
+    expect(frontmatterField(literal, 'description')).toBe('Line one\nLine two');
+    expect(frontmatterField(literal, 'name')).toBe('a');
+  });
+});
 
 describe('skill library', () => {
   let root: string;

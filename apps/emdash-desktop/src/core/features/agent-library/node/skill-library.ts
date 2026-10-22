@@ -15,6 +15,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { parseFrontmatter } from '@emdash/core/primitives/skills/api';
 import type { AgentSkillFound } from '../api';
 import { folderHash } from './skill-sources';
 
@@ -294,15 +295,7 @@ async function writeExcludeBlock(workspacePath: string, entries: readonly string
   await writeFile(excludeFile, next);
 }
 
-/** Reads one `field: value` line from a skill's frontmatter, unquoted. */
-export function frontmatterField(markdown: string, field: string): string {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
-  if (!match) return '';
-  const line = match[1]!.split(/\r?\n/).find((l) => l.startsWith(`${field}:`));
-  return line
-    ? line
-        .slice(field.length + 1)
-        .trim()
-        .replace(/^["']|["']$/g, '')
-    : '';
+/** Reads a field from a skill's frontmatter, unquoted, including `|` and `>` block values. */
+export function frontmatterField(markdown: string, field: 'name' | 'description'): string {
+  return parseFrontmatter(markdown.replace(/\r\n/g, '\n')).frontmatter[field];
 }
