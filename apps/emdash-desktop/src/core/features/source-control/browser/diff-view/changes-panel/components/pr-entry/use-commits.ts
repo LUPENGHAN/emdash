@@ -24,6 +24,29 @@ export function commitRangeForPullRequest(pr: PullRequest): CommitRange {
   };
 }
 
+/** The one range this Changes section lists. A pull request wins over the local branch. */
+export function sectionCommitRange(
+  currentPr: PullRequest | undefined,
+  branch: { defaultBranchOid: string | undefined; headOid: string | undefined }
+): CommitRange | undefined {
+  if (currentPr) return commitRangeForPullRequest(currentPr);
+  if (branch.defaultBranchOid && branch.headOid && branch.defaultBranchOid !== branch.headOid) {
+    return {
+      source: 'branch',
+      baseRefOid: branch.defaultBranchOid,
+      headRefOid: branch.headOid,
+    };
+  }
+  return undefined;
+}
+
+/** Shown when the log query failed and no previous page is left to display. */
+export const COMMIT_LIST_LOAD_ERROR = 'Could not load commits';
+
+export function commitListLoadFailed(isError: boolean, hasData: boolean): boolean {
+  return isError && !hasData;
+}
+
 export const commitsQueryKey = (
   projectId: string,
   workspaceId: string,

@@ -24,7 +24,11 @@ import { getPullRequestsRuntimeClient } from '@core/services/pull-requests/api/c
 import { ChangesViewModeToggle } from './components/changes-view-mode-toggle';
 import { CommitRangeCommitsList } from './components/pr-entry/commits-list';
 import { PullRequestEntry } from './components/pr-entry/pr-entry';
-import { type CommitRange, useCommits } from './components/pr-entry/use-commits';
+import {
+  type CommitRange,
+  sectionCommitRange,
+  useCommits,
+} from './components/pr-entry/use-commits';
 import { SectionHeader } from './components/section-header';
 import { useChangesViewMode } from './hooks/use-changes-view-mode';
 
@@ -58,14 +62,12 @@ function usePullRequestsSectionModel() {
   const defaultBranch = repository?.defaultBranch;
   const gitCheckout = workspace.get(gitCheckoutStoreToken);
   const headOid = gitCheckout.headOid;
+  const sectionRange = sectionCommitRange(currentPr, {
+    defaultBranchOid: defaultBranch?.oid,
+    headOid: headOid ?? undefined,
+  });
   const branchCommitRange: CommitRange | undefined =
-    !currentPr && defaultBranch?.oid && headOid && defaultBranch.oid !== headOid
-      ? {
-          source: 'branch',
-          baseRefOid: defaultBranch.oid,
-          headRefOid: headOid,
-        }
-      : undefined;
+    sectionRange?.source === 'branch' ? sectionRange : undefined;
   const branchCommits = useCommits(projectId, workspaceId, branchCommitRange);
   const branchCommitCount = branchCommits.data?.pages[0]?.aheadCount;
 
@@ -83,6 +85,7 @@ function usePullRequestsSectionModel() {
     pullRequestsObservation,
     currentPr,
     branchCommitRange,
+    sectionRange,
     showBranchCommits,
     sectionLabel: showBranchCommits ? 'Branch Commits' : 'Pull Requests',
     sectionCount: showBranchCommits ? (branchCommitCount ?? 0) : pullRequests.length,
@@ -261,6 +264,7 @@ export const PullRequestsSectionBody = observer(function PullRequestsSectionBody
 }: {
   syncError: string | null;
 }) {
+  const taskView = useTaskComposition();
   const {
     repositoryUrl,
     providerRepositoryObservation,
@@ -268,6 +272,7 @@ export const PullRequestsSectionBody = observer(function PullRequestsSectionBody
     pullRequestsObservation,
     currentPr,
     branchCommitRange,
+    sectionRange,
     showBranchCommits,
   } = usePullRequestsSectionModel();
 
@@ -282,7 +287,16 @@ export const PullRequestsSectionBody = observer(function PullRequestsSectionBody
         </p>
       ) : null}
       {currentPr ? (
-        <PullRequestEntry key={currentPr.url} pr={currentPr} />
+        taskView.diffView && sectionRange ? (
+          <>
+            <PullRequestEntry key={currentPr.url} pr={currentPr} />
+            <div className="flex min-h-0 flex-1 flex-col border-t border-border">
+              <div className="min-h-0 flex-1 px-2.5">
+                <CommitRangeCommitsList range={sectionRange} />
+              </div>
+            </div>
+          </>
+        ) : null
       ) : showBranchCommits && branchCommitRange ? (
         <BranchCommitsEntry range={branchCommitRange} />
       ) : providerRepositoryObservation.kind === 'unavailable' ? (

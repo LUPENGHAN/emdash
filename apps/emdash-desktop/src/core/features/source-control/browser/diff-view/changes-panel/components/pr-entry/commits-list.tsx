@@ -18,7 +18,12 @@ import { usePrefetchDiffModels } from '../../hooks/use-prefetch-diff-models';
 import { ChangesListItem } from '../changes-list-item';
 import { NestedChangesTree } from '../nested-changes-tree';
 import { useCommitFiles } from './use-commit-files';
-import { type CommitRange, useCommits } from './use-commits';
+import {
+  COMMIT_LIST_LOAD_ERROR,
+  type CommitRange,
+  commitListLoadFailed,
+  useCommits,
+} from './use-commits';
 
 const ESTIMATED_COMMIT_ROW_HEIGHT = 43;
 const COMMIT_ROW_GAP = 4;
@@ -61,7 +66,7 @@ export const CommitRangeCommitsList = observer(function CommitRangeCommitsList({
     rangeIdentity,
     hashes: new Set(),
   }));
-  const { data, isFetchingNextPage, hasNextPage, fetchNextPage } = useCommits(
+  const { data, isError, isFetchingNextPage, hasNextPage, fetchNextPage } = useCommits(
     projectId,
     workspaceId,
     range
@@ -93,6 +98,10 @@ export const CommitRangeCommitsList = observer(function CommitRangeCommitsList({
       return { rangeIdentity, hashes: next };
     });
   };
+
+  if (commitListLoadFailed(isError, data !== undefined)) {
+    return <EmptyState label={COMMIT_LIST_LOAD_ERROR} />;
+  }
 
   if (commits.length === 0 && !isFetchingNextPage) {
     return <EmptyState label={emptyState.label} description={emptyState.description} />;

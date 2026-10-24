@@ -13,6 +13,25 @@ import { type GitCheckoutStore } from '../../../../browser/stores/git-checkout-s
 
 export const MAX_STACKED_FILES = 8;
 
+export type StoredPrTab = 'files' | 'commits' | 'checks';
+
+/** Tab to store when the current pull request URL changes. Closed PRs open on Checks. */
+export function prTabAfterUrlChange(status: string | undefined): 'files' | 'checks' {
+  return status === 'open' ? 'files' : 'checks';
+}
+
+/**
+ * Files and Checks are the tabs this section still has. A stored Commits tab, or
+ * Files on a pull request that is not open, is shown as Checks.
+ */
+export function effectivePrTabOf(
+  stored: StoredPrTab,
+  status: string | undefined
+): 'files' | 'checks' {
+  if (stored === 'commits' || (status !== 'open' && stored === 'files')) return 'checks';
+  return stored === 'files' ? 'files' : 'checks';
+}
+
 type CommitAction = 'commit' | 'commit-push' | 'commit-pr';
 
 const VALID_OBJECT_REF_KINDS = new Set(['branch', 'commit', 'tag']);
@@ -76,7 +95,7 @@ export class DiffViewStore {
       reaction(
         () => this.pr.currentPr?.url,
         () => {
-          this.setPrTab(this.pr.currentPr?.status === 'open' ? 'files' : 'commits');
+          this.setPrTab(prTabAfterUrlChange(this.pr.currentPr?.status));
         }
       )
     );
@@ -105,7 +124,7 @@ export class DiffViewStore {
     return this.preferencesHandle.value.commitAction;
   }
 
-  get prTab(): 'files' | 'commits' | 'checks' {
+  get prTab(): StoredPrTab {
     return this.preferencesHandle.value.prTab;
   }
 
@@ -162,11 +181,8 @@ export class DiffViewStore {
     return null;
   }
 
-  get effectivePrTab(): 'files' | 'commits' | 'checks' {
-    if (this.pr.currentPr?.status !== 'open' && this.prTab === 'files') {
-      return 'commits';
-    }
-    return this.prTab;
+  get effectivePrTab(): 'files' | 'checks' {
+    return effectivePrTabOf(this.prTab, this.pr.currentPr?.status);
   }
 
   get effectiveCommitAction(): CommitAction {
@@ -199,7 +215,7 @@ export class DiffViewStore {
     this.preferencesHandle.update((current) => ({ ...current, diffStyle: style }));
   }
 
-  setPrTab(tab: 'files' | 'commits' | 'checks'): void {
+  setPrTab(tab: StoredPrTab): void {
     this.preferencesHandle.update((current) => ({ ...current, prTab: tab }));
   }
 

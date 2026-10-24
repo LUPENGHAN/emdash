@@ -13,12 +13,10 @@ import { StatusIcon } from '@root/src/core/services/pull-requests/browser/compon
 import { PrUrlCopyButton } from '@root/src/core/services/pull-requests/browser/components/pr-url-copy-button';
 import { PrCheckoutDriftLine } from './checkout-drift-line';
 import { PrChecksList } from './checks-list';
-import { CommitRangeCommitsList } from './commits-list';
 import { PrFilesList } from './files-list';
 import { type MergeAction } from './merge-footer';
 import { MergeFooter } from './merge-footer';
 import { computeMergeUiState } from './merge-ui-state';
-import { commitRangeForPullRequest } from './use-commits';
 
 export type MergeMode = 'merge' | 'squash' | 'rebase';
 
@@ -119,7 +117,7 @@ export const PullRequestEntry = observer(function PullRequestEntry({
   }));
 
   return (
-    <div className={cn('flex min-h-0 flex-1 flex-col border-t border-border')}>
+    <div className={cn('flex min-h-0 flex-col border-t border-border')}>
       <div className="flex w-full flex-col gap-2 p-2.5">
         <div className="group/header flex items-center justify-between gap-2">
           <button
@@ -147,29 +145,23 @@ export const PullRequestEntry = observer(function PullRequestEntry({
           isUpdating={isUpdatingCheckout}
         />
       </div>
-      <div className="flex min-h-0 flex-1 flex-col px-2.5">
+      <div className="flex min-h-0 flex-col px-2.5">
         <ToggleGroup.Root
           value={[tab]}
           className="flex w-full"
           onValueChange={([value]) => {
-            if (value) {
-              diffView.setPrTab(value as 'files' | 'commits' | 'checks');
-            }
+            if (value === 'files' || value === 'checks') diffView.setPrTab(value);
           }}
         >
           <ToggleGroup.Item className="flex-1" value="files" disabled={!isOpen}>
             Files
           </ToggleGroup.Item>
-          <ToggleGroup.Item className="flex-1" value="commits">
-            Commits
-          </ToggleGroup.Item>
           <ToggleGroup.Item className="flex-1" value="checks">
             Checks
           </ToggleGroup.Item>
         </ToggleGroup.Root>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 overflow-y-auto">
           {tab === 'files' && <PrFilesList pr={pr} />}
-          {tab === 'commits' && <CommitRangeCommitsList range={commitRangeForPullRequest(pr)} />}
           {tab === 'checks' && <PrChecksList pr={pr} checks={checks} details={details} />}
         </div>
       </div>
