@@ -26,10 +26,10 @@ import {
   toAgentInstallationStatus,
 } from './agent-payload-builder';
 import {
+  agentReleaseForDisplay,
   applyAgentRelease,
   clearAgentRelease,
   loadAgentRelease,
-  peekAgentRelease,
 } from './agent-release';
 
 export type HostDependenciesClient = ContractClient<HostDependenciesContract>;
@@ -74,13 +74,13 @@ export function createAgentOperations(dependencies: {
         .filter((view) => view.definition.category === 'agent')
         .map((view) => toAgentInstallationStatus(view.definition.id, connectionId, view));
       if (connectionId) return statuses;
-      return statuses.map((status) => {
-        const provider = getPlugin(status.id as AgentProviderId);
-        const path = snapshot.dependencies[status.id]?.resolved?.path ?? null;
-        if (!provider || !path) return status;
-        void loadAgentRelease(status.id, path, provider);
-        return applyAgentRelease(status, peekAgentRelease(status.id));
-      });
+      return Promise.all(
+        statuses.map(async (status) => {
+          const path = snapshot.dependencies[status.id]?.resolved?.path ?? null;
+          if (!path) return status;
+          return applyAgentRelease(status, await agentReleaseForDisplay(status.id, path));
+        })
+      );
     },
 
     getAgentInstallationStatus: async (
@@ -122,7 +122,7 @@ export function createAgentOperations(dependencies: {
       if (result.success) {
         return {
           success: true as const,
-          data: toAgentInstallationStatus(id, connectionId, result.data),
+          data: await installationStatusAfterLocalChange(id, connectionId, result.data),
         };
       }
       return { success: false as const, error: toAgentUpdateError(result.error, id) };
@@ -147,7 +147,7 @@ export function createAgentOperations(dependencies: {
       if (result.success) {
         return {
           success: true as const,
-          data: toAgentInstallationStatus(id, connectionId, result.data),
+          data: await installationStatusAfterLocalChange(id, connectionId, result.data),
         };
       }
       return { success: false as const, error: result.error };
@@ -241,6 +241,18 @@ async function resolveDependencyManager(
   const result = await getDependencyManager(connectionId);
   if (!result.success) throw runtimeResolveErrorAsError(result.error);
   return result.data;
+}
+
+async function installationStatusAfterLocalChange(
+  id: AgentProviderId,
+  connectionId: string | undefined,
+  view: Parameters<typeof toAgentInstallationStatus>[2]
+) {
+  const status = toAgentInstallationStatus(id, connectionId, view);
+  if (connectionId) return status;
+  clearAgentRelease(id);
+  if (!status.command) return status;
+  return applyAgentRelease(status, await agentReleaseForDisplay(id, status.command));
 }
 
 async function snapshotFor(manager: HostDependenciesClient): Promise<HostDependencySnapshot> {

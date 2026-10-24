@@ -16,12 +16,7 @@ import type {
   SelectedSource,
 } from '@core/primitives/agents/api';
 import type { ProviderOverrideSettings } from '@core/services/settings/node/provider-settings-service';
-import {
-  applyAgentRelease,
-  loadAgentRelease,
-  peekAgentRelease,
-  updateMethod,
-} from './agent-release';
+import { agentReleaseForDisplay, applyAgentRelease, updateMethod } from './agent-release';
 import { claudeModelOptions } from './claude-models';
 import { codexModelOptions } from './codex-models';
 
@@ -129,8 +124,7 @@ async function buildOne(
     usedId: sourceKey(used),
   };
   if (connectionId || !view?.resolved?.path) return payload;
-  void loadAgentRelease(id, view.resolved.path, provider);
-  return applyAgentRelease(payload, peekAgentRelease(id));
+  return applyAgentRelease(payload, await agentReleaseForDisplay(id, view.resolved.path));
 }
 
 export async function buildAgentPayload(

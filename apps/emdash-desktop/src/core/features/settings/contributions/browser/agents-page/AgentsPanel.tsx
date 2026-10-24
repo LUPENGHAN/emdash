@@ -11,6 +11,8 @@ type AgentsPanelProps = {
   searchQuery?: string;
   onSearchQueryChange?: (query: string) => void;
   onManageMcp?: () => void;
+  /** Set on the settings page so a mounted panel refetches local versions. */
+  versionRefetchInterval?: number;
 };
 
 export function AgentsPanel({
@@ -19,11 +21,12 @@ export function AgentsPanel({
   searchQuery: controlledSearchQuery,
   onSearchQueryChange,
   onManageMcp,
+  versionRefetchInterval,
 }: AgentsPanelProps) {
   const host = useMemo(() => hostRefFromConnectionId(connectionId), [connectionId]);
   const [localSearchQuery, setLocalSearchQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
-  const { probeAll } = useAgentInstallationStatuses(host);
+  const { probeAll } = useAgentInstallationStatuses(host, versionRefetchInterval);
   const searchQuery = controlledSearchQuery ?? localSearchQuery;
   const setSearchQuery = onSearchQueryChange ?? setLocalSearchQuery;
 

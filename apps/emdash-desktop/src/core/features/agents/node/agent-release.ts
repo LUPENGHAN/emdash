@@ -16,11 +16,13 @@ export type AgentRelease = {
 
 const cache = new Map<string, AgentRelease>();
 const inflight = new Map<string, Promise<AgentRelease>>();
+const displayInflight = new Map<string, Promise<AgentRelease | undefined>>();
 const generations = new Map<string, number>();
 
 export function clearAgentRelease(id: string): void {
   cache.delete(id);
   inflight.delete(id);
+  displayInflight.delete(id);
   generations.set(id, (generations.get(id) ?? 0) + 1);
 }
 
@@ -50,12 +52,48 @@ export async function loadAgentRelease(
     )
     .then((release) => {
       if ((generations.get(id) ?? 0) === generation) {
-        cache.set(id, release);
+        const stored = {
+          ...release,
+          version: release.version ?? cache.get(id)?.version ?? null,
+        };
+        cache.set(id, stored);
         inflight.delete(id);
+        return stored;
       }
       return release;
     });
   inflight.set(id, next);
+  return next;
+}
+
+/**
+ * Local version for the settings list. Uses the cache inside the TTL, otherwise
+ * `execFile(path, ['--version'])`. Does not ask GitHub or npm.
+ */
+export async function agentReleaseForDisplay(
+  id: string,
+  binaryPath: string | null
+): Promise<AgentRelease | undefined> {
+  if (!binaryPath) return undefined;
+  const cached = cache.get(id);
+  if (cached && Date.now() - cached.checkedAt <= RELEASE_TTL_MS) return cached;
+  const pending = displayInflight.get(id);
+  if (pending) return pending;
+  const generation = generations.get(id) ?? 0;
+  const next = readLocalVersion(binaryPath).then((probed) => {
+    if ((generations.get(id) ?? 0) !== generation) return undefined;
+    const cachedRelease = cache.get(id);
+    const stored: AgentRelease = {
+      version: probed ?? cachedRelease?.version ?? null,
+      latestVersion: cachedRelease?.latestVersion ?? null,
+      method: cachedRelease?.method ?? null,
+      checkedAt: Date.now(),
+    };
+    cache.set(id, stored);
+    displayInflight.delete(id);
+    return stored;
+  });
+  displayInflight.set(id, next);
   return next;
 }
 

@@ -38,6 +38,23 @@ function statusQueryKey(host: HostRef) {
   return ['agents', 'status', hostRefKey(host)] as const;
 }
 
+export function agentInstallationStatusQueryConfig(versionRefetchInterval?: number): {
+  staleTime: number;
+  refetchInterval?: number;
+} {
+  if (versionRefetchInterval === undefined) return { staleTime: 30_000 };
+  return { staleTime: 30_000, refetchInterval: versionRefetchInterval };
+}
+
+/** Status and metadata queries to drop after a local install, update, or latest-version refresh. */
+export function agentStatusInvalidationFilters(host: HostRef) {
+  const hostKey = hostRefKey(host);
+  return [
+    { queryKey: ['agents', 'status', hostKey] as const },
+    { queryKey: [...AGENTS_METADATA_QUERY_KEY, hostKey] as const },
+  ];
+}
+
 function opKey(op: 'install' | 'update' | 'uninstall', host: HostRef) {
   return ['agents', op, hostRefKey(host)] as const;
 }
@@ -48,7 +65,7 @@ type AgentOperationResult = Result<AgentInstallationStatus, AgentInstallError | 
 const selectOpVars = (mutation: { state: { variables?: unknown } }) =>
   mutation.state.variables as OpVars | undefined;
 
-export function useAgentInstallationStatuses(host: HostRef) {
+export function useAgentInstallationStatuses(host: HostRef, versionRefetchInterval?: number) {
   const queryClient = useQueryClient();
   const installFailureMap = useDependencyOperationFailures();
   const updateFailureMap = useDependencyOperationFailures();
@@ -65,16 +82,22 @@ export function useAgentInstallationStatuses(host: HostRef) {
     queryKey: key,
     queryFn: async () =>
       unwrapAgentsResult((await getAgentsClient()).listAgentInstallationStatus({ host })),
-    staleTime: 30_000,
+    ...agentInstallationStatusQueryConfig(versionRefetchInterval),
   });
 
   const invalidate = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: key });
   }, [key, queryClient]);
 
+  const invalidateStatusAndMetadata = useCallback(() => {
+    for (const filter of agentStatusInvalidationFilters(host)) {
+      void queryClient.invalidateQueries(filter);
+    }
+  }, [host, queryClient]);
+
   const handleOperationResult = useCallback(
     (op: AgentOperation, result: AgentOperationResult, variables: OpVars) => {
-      invalidate();
+      invalidateStatusAndMetadata();
       const name = nameOf(variables.id);
       const failureMap = op === 'install' ? installFailureMap : updateFailureMap;
       if (result.success) {
@@ -100,7 +123,7 @@ export function useAgentInstallationStatuses(host: HostRef) {
         description: getAgentOperationErrorMessage(result.error),
       });
     },
-    [installFailureMap, invalidate, nameOf, updateFailureMap]
+    [installFailureMap, invalidateStatusAndMetadata, nameOf, updateFailureMap]
   );
 
   const installMutation = useMutation<
@@ -180,7 +203,7 @@ export function useAgentInstallationStatuses(host: HostRef) {
   const refreshLatestMutation = useMutation<void, RuntimeResolveError, string>({
     mutationFn: async (id) =>
       unwrapAgentsResult((await getAgentsClient()).refreshLatestVersion({ host, id })),
-    onSuccess: invalidate,
+    onSuccess: invalidateStatusAndMetadata,
   });
 
   const probeAllMutation = useMutation<void, RuntimeResolveError, void>({

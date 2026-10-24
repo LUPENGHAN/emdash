@@ -10,6 +10,7 @@ export function AgentsSettingsPage() {
       header={{ title: 'Agents', description: 'Manage agents and model configurations.' }}
       searchQuery={settingsSearchQuery}
       onSearchQueryChange={setSettingsSearchQuery}
+      versionRefetchInterval={60_000}
     />
   );
 }
