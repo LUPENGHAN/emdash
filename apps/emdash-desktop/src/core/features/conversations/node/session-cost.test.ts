@@ -45,8 +45,12 @@ describe('prices', () => {
   const catalog = parseModelsDev(MODELS_DEV);
 
   it("prefers the vendor's own listing and matches agents' model names", () => {
+    expect(catalog.get('anthropic/claude-opus-5-5')?.input).toBe(4);
+    expect(catalog.get('openrouter/claude-opus-5-5')?.input).toBe(99);
+    expect(catalog.get('claude-opus-5-5')?.input).toBe(4);
     expect(priceOf(catalog, 'claude-opus-5-5')?.input).toBe(4);
     expect(priceOf(catalog, 'claude-opus-5-5[1m]')?.output).toBe(20);
+    expect(priceOf(catalog, 'openrouter/claude-opus-5-5')?.input).toBe(99);
     expect(priceOf(catalog, 'openai/gpt-6-sol')?.input).toBe(2);
     expect(priceOf(catalog, 'deepseek/deepseek-v4.1-flash')?.cacheRead).toBe(0.01);
     expect(priceOf(catalog, 'gpt-6-sol')?.longContext).toEqual({
@@ -55,6 +59,9 @@ describe('prices', () => {
       output: 15,
       cacheRead: 0.4,
     });
+    expect(priceOf(catalog, 'claude-opus-5-5', 'openrouter')?.input).toBe(99);
+    expect(priceOf(catalog, 'claude-opus-5-5', 'anthropic')?.input).toBe(4);
+    expect(priceOf(catalog, 'm1', 'openrouter')).toBeUndefined();
   });
 
   it("passes over a plan's free listing for a model some listing prices", () => {
@@ -65,6 +72,8 @@ describe('prices', () => {
     });
     expect(prices.get('flash-x')).toMatchObject({ input: 0.04, listing: 'engy' });
     expect(prices.get('gift-y')).toMatchObject({ input: 0, listing: 'free-only' });
+    expect(prices.get('alibaba-token-plan/flash-x')).toMatchObject({ input: 0 });
+    expect(prices.get('engy/flash-x')).toMatchObject({ input: 0.04, listing: 'engy' });
   });
 
   it("lists every listing of a model, as agents name it, vendors' own first", () => {

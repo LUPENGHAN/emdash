@@ -1,9 +1,10 @@
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { PriceCatalog } from '../session-cost';
 import {
+  catalogFingerprint,
   claudeFileUsage,
   codexFileUsage,
   createUsageScanner,
@@ -99,9 +100,51 @@ describe('session records', () => {
         requests: 2,
         input: 2_000_000,
         vendor: 'openai',
-        listUsd: 4,
+        listUsd: null,
       }),
     ]);
+  });
+
+  it('adds each Codex file positive delta on its own', async () => {
+    const priced: PriceCatalog = new Map([['openai/m1', { input: 1, output: 2 }]]);
+    const total = (input: number) => ({
+      type: 'event_msg',
+      timestamp: at('2026-10-03'),
+      payload: {
+        type: 'token_count',
+        info: { total_token_usage: { input_tokens: input, output_tokens: 0 } },
+      },
+    });
+    const parent = path.join(dir, 'parent.jsonl');
+    const child = path.join(dir, 'child.jsonl');
+    await writeFile(
+      parent,
+      lines([
+        { type: 'session_meta', payload: { id: 'parent', cwd: '/w', model_provider: 'openai' } },
+        { type: 'turn_context', payload: { model: 'm1' } },
+        total(1_000_000),
+      ])
+    );
+    await writeFile(
+      child,
+      lines([
+        {
+          type: 'session_meta',
+          payload: { id: 'child', parent_thread_id: 'parent', cwd: '/w', model_provider: 'openai' },
+        },
+        { type: 'turn_context', payload: { model: 'm1' } },
+        total(1_000_000),
+      ])
+    );
+    const parentUsage = await codexFileUsage(parent, priced);
+    const childUsage = await codexFileUsage(child, priced);
+    expect(parentUsage.sessionId).toBe('parent');
+    expect(childUsage.sessionId).toBe('parent');
+    expect(parentUsage.buckets[0]).toMatchObject({ requests: 1, input: 1_000_000, listUsd: 1 });
+    expect(childUsage.buckets[0]).toMatchObject({ requests: 1, input: 1_000_000, listUsd: 1 });
+    expect((parentUsage.buckets[0]?.requests ?? 0) + (childUsage.buckets[0]?.requests ?? 0)).toBe(
+      2
+    );
   });
 
   it('keeps the provider Pi names for each call', async () => {
@@ -130,6 +173,35 @@ describe('session records', () => {
     expect(result.buckets.map((bucket) => [bucket.vendor, bucket.requests])).toEqual([
       ['openrouter', 1],
       ['anthropic', 1],
+    ]);
+    expect(result.buckets.map((bucket) => bucket.listUsd)).toEqual([null, null]);
+  });
+
+  it('prices the same Pi model id from each provider’s listing', async () => {
+    const priced: PriceCatalog = new Map([
+      ['m1', { input: 1, output: 2 }],
+      ['openrouter/m1', { input: 9, output: 0 }],
+      ['anthropic/m1', { input: 4, output: 0 }],
+    ]);
+    const file = path.join(dir, 'pi-priced.jsonl');
+    const message = (provider: string) => ({
+      type: 'message',
+      timestamp: at('2026-10-04'),
+      message: {
+        role: 'assistant',
+        model: 'm1',
+        provider,
+        usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    });
+    await writeFile(
+      file,
+      lines([{ type: 'session', id: 'p2', cwd: '/w' }, message('openrouter'), message('anthropic')])
+    );
+    const result = await piFileUsage('pi', file, priced);
+    expect(result.buckets.map((bucket) => [bucket.vendor, bucket.listUsd])).toEqual([
+      ['openrouter', 9],
+      ['anthropic', 4],
     ]);
   });
 
@@ -173,6 +245,60 @@ describe('session records', () => {
     expect(await scanner.scan()).toEqual([]);
   });
 
+  it('rereads session files cached at usage cache version 1', async () => {
+    const root = path.join(dir, 'projects');
+    await mkdir(root, { recursive: true });
+    const file = path.join(root, 'a.jsonl');
+    await writeFile(
+      file,
+      lines([
+        {
+          type: 'assistant',
+          timestamp: at('2026-10-01'),
+          message: { id: 'a', model: 'm1', usage: { input_tokens: 1 } },
+        },
+      ])
+    );
+    const info = await stat(file);
+    const cacheFile = path.join(dir, 'cache.json');
+    await writeFile(
+      cacheFile,
+      JSON.stringify({
+        version: 1,
+        catalogKey: catalogFingerprint(catalog),
+        files: {
+          [file]: {
+            key: `claude:${info.mtimeMs}:${info.size}`,
+            usage: {
+              agent: 'claude',
+              sessionId: null,
+              cwd: null,
+              buckets: [
+                {
+                  day: '2026-10-01',
+                  model: 'm1',
+                  vendor: null,
+                  requests: 99,
+                  input: 1,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  listUsd: 0,
+                },
+              ],
+            },
+          },
+        },
+      })
+    );
+    const scanner = createUsageScanner({
+      cacheFile,
+      roots: async () => [{ agent: 'claude', dir: root }],
+      catalog: async () => catalog,
+    });
+    expect((await scanner.scan())[0]?.usage.buckets[0]?.requests).toBe(1);
+  });
+
   it("counts OpenCode's calls per session, reasoning as output", async () => {
     const call = (overrides: Partial<OpenCodeCall>): OpenCodeCall => ({
       sessionId: 'ses_1',
@@ -207,7 +333,7 @@ describe('session records', () => {
         output: 500_000,
         cacheRead: 0,
         cacheWrite: 0,
-        listUsd: 2,
+        listUsd: null,
       },
     ]);
     const scanner = createUsageScanner({

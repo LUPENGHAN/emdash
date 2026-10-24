@@ -122,18 +122,39 @@ function bucketUsage(bucket: UsageBucket) {
 }
 
 /**
- * A bucket's list price: at a price set by hand, else as read (or priced now if the
- * model had no known price then).
+ * models.dev's catalog with prices set by hand laid on the strings they were saved
+ * under, plus the same string with an `[...]` or `:effort` suffix removed.
+ */
+function catalogWithManualPrices(
+  catalog: PriceCatalog,
+  manual: Record<string, ModelPrice>
+): PriceCatalog {
+  const entries = Object.entries(manual);
+  if (entries.length === 0) return catalog;
+  const priced = new Map(catalog);
+  for (const [model, price] of entries) {
+    const overlaid = { ...price, listing: 'manual' };
+    priced.set(model, overlaid);
+    priced.set(model.replace(/\[[^\]]*\]$/, '').replace(/:[a-z]+$/i, ''), overlaid);
+  }
+  return priced;
+}
+
+/**
+ * A bucket's list price. A hand-set price applies only when `priceOf` hits that
+ * string for this model and vendor. Otherwise the price read with the file stands,
+ * or the model is priced now when that read had none.
  */
 function listUsdOf(
   bucket: UsageBucket,
   catalog: PriceCatalog,
   manual: Record<string, ModelPrice>
 ): number | null {
-  const override = manual[bucket.model];
-  if (override) return costAt(bucketUsage(bucket), override);
+  const priced = catalogWithManualPrices(catalog, manual);
+  const price = priceOf(priced, bucket.model, bucket.vendor);
+  if (price?.listing === 'manual') return costAt(bucketUsage(bucket), price);
   if (bucket.listUsd !== null) return bucket.listUsd;
-  return usageCost(bucketUsage(bucket), catalog);
+  return usageCost(bucketUsage(bucket), priced, bucket.vendor);
 }
 
 /**
@@ -338,14 +359,7 @@ export function createUsageStatsService(deps: {
     /** models.dev's prices with the ones set by hand over them, for every cost Emdash shows. */
     async pricedCatalog(): Promise<PriceCatalog> {
       const [catalog, pricing] = await Promise.all([deps.catalog(), readPricing()]);
-      if (Object.keys(pricing.models).length === 0) return catalog;
-      const priced = new Map(catalog);
-      for (const [model, price] of Object.entries(pricing.models)) {
-        const manual = { ...price, listing: 'manual' };
-        priced.set(model, manual);
-        priced.set(model.replace(/\[[^\]]*\]$/, '').replace(/:[a-z]+$/i, ''), manual);
-      }
-      return priced;
+      return catalogWithManualPrices(catalog, pricing.models);
     },
 
     async prices(models: string[]) {

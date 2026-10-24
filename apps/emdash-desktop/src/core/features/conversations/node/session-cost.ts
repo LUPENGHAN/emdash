@@ -26,7 +26,10 @@ export type ModelPrice = {
   listing?: string;
 };
 
-/** Model id → price, first-party vendors' ids first, then every other listing. */
+/**
+ * Model id → price. A bare id keeps the first non-free listing, first-party vendors
+ * first. `${providerId}/${id}` keeps that provider's own listing.
+ */
 export type PriceCatalog = Map<string, ModelPrice>;
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
@@ -96,9 +99,10 @@ function providerOrder(providers: Record<string, unknown>): string[] {
 }
 
 /**
- * Builds the catalog from models.dev's api.json: per model id, the first vendor's
+ * Builds the catalog from models.dev's api.json. Each listing with a price is stored
+ * at `${providerId}/${id}`, first write kept. The bare id is still the first vendor's
  * listing, or else the first other one, passing over free plan listings where some
- * listing names a real price.
+ * listing names a real price. A provider that only lists 0 keeps that 0 on its prefixed key.
  */
 export function parseModelsDev(data: unknown): PriceCatalog {
   const catalog: PriceCatalog = new Map();
@@ -106,9 +110,13 @@ export function parseModelsDev(data: unknown): PriceCatalog {
   for (const providerId of providerOrder(providers)) {
     const models = asRecord(asRecord(providers[providerId])?.models) ?? {};
     for (const [id, model] of Object.entries(models)) {
+      const price = priceFromCost(asRecord(asRecord(model)?.cost), providerId);
+      if (price) {
+        const prefixed = `${providerId}/${id}`;
+        if (!catalog.has(prefixed)) catalog.set(prefixed, price);
+      }
       const known = catalog.get(id);
       if (known && !isFree(known)) continue;
-      const price = priceFromCost(asRecord(asRecord(model)?.cost), providerId);
       if (!price || (known && isFree(price))) continue;
       catalog.set(id, price);
     }
@@ -213,10 +221,22 @@ export function createPriceCatalog(deps: {
 
 export type PriceCatalogSource = ReturnType<typeof createPriceCatalog>;
 
-/** The price of a model as agents name it (`opus[1m]`-style suffixes, `vendor/` prefixes). */
-export function priceOf(catalog: PriceCatalog, model: string): ModelPrice | undefined {
+/**
+ * The price of a model as agents name it (`opus[1m]`-style suffixes, `vendor/` prefixes).
+ * A recorded vendor, or a `/` in the name, never falls back to another listing's bare id.
+ */
+export function priceOf(
+  catalog: PriceCatalog,
+  model: string,
+  vendor?: string | null
+): ModelPrice | undefined {
   const bare = model.replace(/\[[^\]]*\]$/, '').replace(/:[a-z]+$/i, '');
-  return catalog.get(bare) ?? catalog.get(bare.split('/').pop() ?? bare);
+  if (vendor) {
+    const short = bare.split('/').pop() ?? bare;
+    return catalog.get(`${vendor}/${short}`);
+  }
+  if (bare.includes('/')) return catalog.get(bare);
+  return catalog.get(bare);
 }
 
 /** What one request costs at a given price. */
@@ -245,8 +265,12 @@ function costOf(usage: Usage, price: ModelPrice): number {
 }
 
 /** What one request would cost at its vendor's API list price; null for an unknown model. */
-export function usageCost(usage: Usage, catalog: PriceCatalog): number | null {
-  const price = priceOf(catalog, usage.model);
+export function usageCost(
+  usage: Usage,
+  catalog: PriceCatalog,
+  vendor?: string | null
+): number | null {
+  const price = priceOf(catalog, usage.model, vendor);
   return price ? costOf(usage, price) : null;
 }
 

@@ -115,7 +115,7 @@ export function bucketize(
     bucket.output += usage.output;
     bucket.cacheRead += usage.cacheRead;
     bucket.cacheWrite += usage.cacheWrite5m + usage.cacheWrite1h;
-    const cost = usageCost(usage, catalog);
+    const cost = usageCost(usage, catalog, vendor);
     bucket.listUsd = cost === null || bucket.listUsd === null ? null : bucket.listUsd + cost;
   }
   return [...buckets.values()];
@@ -350,7 +350,7 @@ function fileUsage(
 }
 
 /** Bumped when what a file's usage holds changes, so the cache is read afresh. */
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 
 type CacheFile = {
   version: number;

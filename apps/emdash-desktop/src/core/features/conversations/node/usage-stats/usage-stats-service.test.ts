@@ -135,6 +135,51 @@ describe('usage rows', () => {
     expect(rows[0]).toMatchObject({ source: 'gw', sourceName: 'My gateway', billing: 'usage' });
   });
 
+  it('prices one short model id apart for each vendor', () => {
+    const priced: PriceCatalog = new Map([
+      ['m1', { input: 1, output: 0 }],
+      ['openrouter/m1', { input: 9, output: 0 }],
+      ['anthropic/m1', { input: 4, output: 0 }],
+    ]);
+    const piFile: FileUsage = {
+      agent: 'pi',
+      sessionId: 's',
+      cwd: '/w',
+      buckets: [
+        { ...bucket('2026-10-02', null), vendor: 'openrouter' },
+        { ...bucket('2026-10-02', null), vendor: 'anthropic' },
+      ],
+    };
+    const { rows } = rowsOf([piFile], { catalog: priced });
+    expect(rows.find((row) => row.source === 'own:pi:openrouter')?.listUsd).toBe(9);
+    expect(rows.find((row) => row.source === 'own:pi:anthropic')?.listUsd).toBe(4);
+  });
+
+  it('does not apply a hand-set bare price to another vendor model', () => {
+    const piFile: FileUsage = {
+      agent: 'pi',
+      sessionId: 's',
+      cwd: '/w',
+      buckets: [
+        { ...bucket('2026-10-02', null), vendor: 'openrouter' },
+        { ...bucket('2026-10-02', null), model: 'openrouter/gpt-4o', vendor: null },
+      ],
+    };
+    const { rows, unpricedModels } = rowsOf([piFile], {
+      pricing: {
+        sources: {},
+        usdToCny: 7,
+        models: {
+          m1: { input: 9, output: 0 },
+          'gpt-4o': { input: 9, output: 0 },
+        },
+      },
+    });
+    expect(rows.find((row) => row.model === 'm1')?.listUsd).toBeNull();
+    expect(rows.find((row) => row.model === 'openrouter/gpt-4o')?.listUsd).toBeNull();
+    expect(unpricedModels).toEqual(expect.arrayContaining(['m1', 'openrouter/gpt-4o']));
+  });
+
   it('counts a model at the price set by hand, from its tokens', () => {
     const { rows } = rowsOf([file('claude', 'a', ['2026-10-02'])], {
       pricing: {
