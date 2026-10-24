@@ -8,6 +8,7 @@ import {
   gitTreeId,
   installGitHubSkills,
   isSafeSkillName,
+  listSkillSources,
   parseGitHubSkillUrl,
   remoteFileTarget,
   scanGitHubSkills,
@@ -159,10 +160,17 @@ describe('updateSkill', () => {
 
   it('replaces the folder with the downloaded tree and records its sha', async () => {
     const result = await updateSkill(libraryDir, 'demo', false);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       updated: true,
       dirty: false,
       files: ['SKILL.md', 'docs/guide.md'],
+    });
+    expect(result.source).toMatchObject({
+      name: 'demo',
+      installedTree: 'tree-demo',
+      remoteTree: 'tree-demo',
+      updateAvailable: false,
+      dirty: false,
     });
     expect(await readFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'utf8')).toBe('new SKILL.md');
     const sources = JSON.parse(
@@ -237,12 +245,141 @@ describe('updateSkill', () => {
       'https://raw.githubusercontent.com/o/r/commit-1/skills/demo/SKILL.md'
     );
 
+    tree[1] = { path: 'skills/demo', type: 'tree', sha: 'tree-demo-2' };
     requests.length = 0;
     await updateSkill(libraryDir, 'demo', true, 'tok-1');
     const signedIn = requests.map((request) => request.url);
     expect(signedIn.filter((url) => url.includes('raw.githubusercontent.com'))).toEqual([]);
     expect(signedIn.filter((url) => url.includes('/git/blobs/'))).toHaveLength(2);
     expect(await readFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'utf8')).toBe('new SKILL.md');
+  });
+
+  it('records the remote tree and does not download when the copy is already current', async () => {
+    const local = await gitTreeId(path.join(libraryDir, 'demo'));
+    tree[1] = { path: 'skills/demo', type: 'tree', sha: local };
+    requests.length = 0;
+    const result = await updateSkill(libraryDir, 'demo', false);
+    expect(result).toMatchObject({ updated: false, dirty: false, files: [] });
+    expect(result.source).toMatchObject({
+      remoteTree: local,
+      installedTree: local,
+      updateAvailable: false,
+    });
+    expect(requests.some((request) => request.url.includes('raw.githubusercontent.com'))).toBe(
+      false
+    );
+    expect(requests.some((request) => request.url.includes('/git/blobs/'))).toBe(false);
+    expect(await readFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'utf8')).toBe('old');
+    const sources = JSON.parse(
+      await readFile(path.join(libraryDir, '.emdash', 'sources.json'), 'utf8')
+    ) as { skills: Record<string, { remoteTree: string }> };
+    expect(sources.skills.demo?.remoteTree).toBe(local);
+
+    requests.length = 0;
+    const again = await updateSkill(libraryDir, 'demo', false);
+    expect(again.updated).toBe(false);
+    expect(requests.some((request) => request.url.includes('raw.githubusercontent.com'))).toBe(
+      false
+    );
+  });
+
+  it('writes the checked tree when installedTree is filled in during the request', async () => {
+    const sourcesPath = path.join(libraryDir, '.emdash', 'sources.json');
+    const parsed = JSON.parse(await readFile(sourcesPath, 'utf8')) as {
+      skills: Record<string, { installedTree: string | null }>;
+    };
+    const demo = parsed.skills.demo;
+    if (!demo) throw new Error('missing demo source');
+    demo.installedTree = null;
+    await writeFile(sourcesPath, JSON.stringify(parsed));
+
+    const inner = globalThis.fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let opened!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      opened = resolve;
+    });
+    let held = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string, init?: RequestInit) => {
+        const url = new URL(input);
+        if (!held && url.pathname === '/repos/o/r/git/trees/root') {
+          held = true;
+          opened();
+          await gate;
+        }
+        return inner(input, init);
+      })
+    );
+
+    const pending = checkSkillUpdates(libraryDir);
+    await entered;
+    await listSkillSources(libraryDir);
+    release();
+    const views = await pending;
+    expect(views.find((view) => view.name === 'demo')).toMatchObject({
+      remoteTree: 'tree-demo',
+      updateAvailable: true,
+    });
+    const stored = JSON.parse(await readFile(sourcesPath, 'utf8')) as {
+      skills: Record<string, { installedTree: string | null; remoteTree: string | null }>;
+    };
+    expect(stored.skills.demo?.installedTree).toEqual(expect.any(String));
+    expect(stored.skills.demo?.remoteTree).toBe('tree-demo');
+  });
+
+  it('does not write an older remote tree over an update that finished during the check', async () => {
+    const inner = globalThis.fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let opened!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      opened = resolve;
+    });
+    let held = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string, init?: RequestInit) => {
+        const url = new URL(input);
+        if (!held && url.pathname === '/repos/o/r/git/trees/root') {
+          held = true;
+          const response = await inner(input, init);
+          opened();
+          await gate;
+          return response;
+        }
+        return inner(input, init);
+      })
+    );
+
+    const pending = checkSkillUpdates(libraryDir);
+    await entered;
+    tree[1] = { path: 'skills/demo', type: 'tree', sha: 'tree-updated' };
+    await updateSkill(libraryDir, 'demo', false);
+    release();
+    const views = await pending;
+    expect(views.find((view) => view.name === 'demo')).toMatchObject({
+      installedTree: 'tree-updated',
+      remoteTree: 'tree-updated',
+      updateAvailable: false,
+    });
+  });
+
+  it('leaves another skill on the same repo untouched', async () => {
+    await mkdir(path.join(libraryDir, 'demo-2'), { recursive: true });
+    await writeFile(path.join(libraryDir, 'demo-2', 'SKILL.md'), 'other');
+    await setSkillSource(libraryDir, 'demo-2', 'https://github.com/o/r/tree/main/skills/demo');
+    const before = (await listSkillSources(libraryDir)).find((view) => view.name === 'demo-2');
+    await updateSkill(libraryDir, 'demo', false);
+    const after = (await listSkillSources(libraryDir)).find((view) => view.name === 'demo-2');
+    expect(after?.installedTree).toBe(before?.installedTree);
+    expect(after?.remoteTree).toBe(before?.remoteTree);
   });
 });
 

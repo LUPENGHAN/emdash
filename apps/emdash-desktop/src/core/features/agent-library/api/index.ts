@@ -168,6 +168,7 @@ export const agentLibraryContract = defineContract({
       updated: z.boolean(),
       dirty: z.boolean(),
       files: z.array(z.string()),
+      source: skillSourceSchema,
     }),
   }),
   /** Lists the skills inside a GitHub link; the account's token is used, never shown. */

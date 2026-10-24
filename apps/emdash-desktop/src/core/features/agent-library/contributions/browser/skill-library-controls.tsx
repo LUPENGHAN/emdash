@@ -3,9 +3,17 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { openModal } from '@core/manifests/browser/modal-api';
-import { DEFAULT_AGENT_LIBRARY_SETTINGS } from '../../api';
+import { DEFAULT_AGENT_LIBRARY_SETTINGS, type SkillSourceView } from '../../api';
 import { getAgentLibraryClient } from '../../api/browser/client';
 import { ScopePicker } from './scope-picker';
+import {
+  bumpSkillSourceGeneration,
+  currentSkillSourceGeneration,
+  skillSourceCheckMayWrite,
+  skillUpdateAffordance,
+  skillUpdateButtonLabel,
+  skillUpdateForRow,
+} from './skill-update-affordance';
 
 const SKILL_SOURCES_KEY = ['agentLibrary', 'skillSources'];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -51,6 +59,20 @@ export function SkillSource({ name }: { name: string }) {
     }
   };
 
+  const check = async () => {
+    setBusy(true);
+    const started = currentSkillSourceGeneration();
+    try {
+      const sources = await (await getAgentLibraryClient()).checkSkillUpdates();
+      if (!skillSourceCheckMayWrite(started, { aborted: false })) return;
+      queryClient.setQueryData(SKILL_SOURCES_KEY, sources);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const update = async () => {
     setBusy(true);
     try {
@@ -65,6 +87,15 @@ export function SkillSource({ name }: { name: string }) {
         if (!confirmed.success) return;
         result = await client.updateSkill({ name, force: true });
       }
+      bumpSkillSourceGeneration();
+      const source = skillUpdateForRow(name, result.source);
+      if (!source) {
+        toast.error(`Update for ${name} returned ${result.source.name}`);
+        return;
+      }
+      queryClient.setQueryData(SKILL_SOURCES_KEY, (current: SkillSourceView[] | undefined) =>
+        (current ?? []).map((item) => (item.name === source.name ? source : item))
+      );
       toast.success(result.updated ? `Updated ${name}` : `${name} is already current`);
       await refresh();
     } catch (error) {
@@ -95,6 +126,8 @@ export function SkillSource({ name }: { name: string }) {
     );
   }
 
+  const affordance = skillUpdateAffordance(source);
+  const buttonLabel = skillUpdateButtonLabel(affordance);
   return (
     <span className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
       <button
@@ -105,10 +138,16 @@ export function SkillSource({ name }: { name: string }) {
         {source ? `${source.repo}${source.path ? `/${source.path}` : ''}` : 'No source'}
       </button>
       {source?.updateAvailable ? <span className="text-xs">Update available</span> : null}
+      {affordance === 'up-to-date' ? <span className="text-xs">Up to date</span> : null}
       {source?.dirty ? <span className="text-xs text-foreground-muted">Local edits</span> : null}
-      {source ? (
-        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void update()}>
-          Update
+      {buttonLabel ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={busy}
+          onClick={() => void (buttonLabel === 'Check' ? check() : update())}
+        >
+          {buttonLabel}
         </Button>
       ) : null}
     </span>
@@ -147,9 +186,12 @@ export function AgentSkillsBanner() {
   useQuery({
     queryKey: ['agentLibrary', 'skillSourceCheck'],
     staleTime: DAY_MS,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
+      const started = currentSkillSourceGeneration();
       const sources = await (await getAgentLibraryClient()).checkSkillUpdates();
-      queryClient.setQueryData(SKILL_SOURCES_KEY, sources);
+      if (skillSourceCheckMayWrite(started, signal)) {
+        queryClient.setQueryData(SKILL_SOURCES_KEY, sources);
+      }
       return sources;
     },
   });

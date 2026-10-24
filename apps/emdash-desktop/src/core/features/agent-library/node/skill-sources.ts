@@ -193,9 +193,16 @@ export async function checkSkillUpdates(
       if (result.status !== 'fulfilled') continue;
       for (const { record, tree } of result.value) {
         const stored = current[record.name];
-        if (tree && stored && stored.repo === record.repo && stored.ref === record.ref) {
-          stored.remoteTree = tree;
+        if (!tree || !stored || stored.repo !== record.repo || stored.ref !== record.ref) continue;
+        // Skip only after an update has written both trees to one sha. A backfill of
+        // installedTree leaves remoteTree null and must still record this check.
+        if (
+          stored.installedTree !== record.installedTree &&
+          stored.remoteTree === stored.installedTree
+        ) {
+          continue;
         }
+        stored.remoteTree = tree;
       }
     }
   });
@@ -207,7 +214,7 @@ export async function updateSkill(
   name: string,
   force: boolean,
   token: string | null = null
-): Promise<{ updated: boolean; dirty: boolean; files: string[] }> {
+): Promise<{ updated: boolean; dirty: boolean; files: string[]; source: SkillSourceView }> {
   const folder = skillFolder(libraryDir, name);
   const record = await mutateSources(libraryDir, (records) =>
     records[name] ? { ...records[name] } : null
@@ -220,7 +227,19 @@ export async function updateSkill(
   const files = filesUnder(snapshot, record.path);
   const names = files.map((file) => file.path);
   if (!tree || files.length === 0) throw new Error(`No files found in ${record.repo}`);
-  if (dirty && !force) return { updated: false, dirty: true, files: names };
+  if (dirty && !force) {
+    return { updated: false, dirty: true, files: names, source: toView(record, hash) };
+  }
+  if (!dirty && record.installedTree === tree) {
+    const source = await mutateSources(libraryDir, (records) => {
+      const stored = records[name];
+      if (!stored) return null;
+      stored.remoteTree = tree;
+      return toView(stored, hash);
+    });
+    if (!source) throw new Error(`No source is set for ${name}`);
+    return { updated: false, dirty: false, files: [], source };
+  }
   const updateRoot = path.join(libraryDir, UPDATE_DIR);
   await mkdir(updateRoot, { recursive: true });
   const scratch = await mkdtemp(path.join(updateRoot, `${name}-`));
@@ -240,7 +259,9 @@ export async function updateSkill(
         stored.installedTree = tree;
         stored.remoteTree = tree;
       }
-      return { updated: true, dirty: false, files: names };
+      const written = stored ? toView(stored, stored.installedHash) : null;
+      if (!written) throw new Error(`No source is set for ${name}`);
+      return { updated: true, dirty: false, files: names, source: written };
     });
   } finally {
     await rm(scratch, { recursive: true, force: true });
