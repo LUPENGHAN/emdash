@@ -1,12 +1,13 @@
 import { normalizeExclusionPatterns } from '@emdash/core/primitives/exclusion-policy/api';
 import { SettingsCard } from '@emdash/ui/react/patterns';
-import { SeparatedList, Textarea } from '@emdash/ui/react/primitives';
+import { SeparatedList, Switch, Textarea } from '@emdash/ui/react/primitives';
 import React from 'react';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import type { FilesSettings } from '@core/primitives/app-settings/api';
 import { ResetToDefaultButton } from './ResetToDefaultButton';
+import { SettingRow } from './SettingRow';
 
-type ExclusionField = keyof FilesSettings;
+type ExclusionField = 'treeExclude' | 'searchExclude' | 'watcherExclude';
 
 type ExclusionListEditorProps = {
   title: string;
@@ -34,6 +35,7 @@ const FilesSettingsCard: React.FC = () => {
     treeExclude: [],
     searchExclude: [],
     watcherExclude: [],
+    openChangedFileAsDiff: false,
   };
 
   const commitField = (field: ExclusionField, value: string[]) => {
@@ -43,6 +45,25 @@ const FilesSettingsCard: React.FC = () => {
   return (
     <SettingsCard>
       <SeparatedList gap="1rem" direction="column">
+        <SettingRow
+          title="Open changed files as diff"
+          description="In a task's Files tree, open a file that has Git changes as a diff."
+          control={
+            <>
+              <ResetToDefaultButton
+                visible={isFieldOverridden('openChangedFileAsDiff')}
+                defaultLabel="off"
+                onReset={() => resetField('openChangedFileAsDiff')}
+                disabled={loading || saving}
+              />
+              <Switch
+                checked={current.openChangedFileAsDiff}
+                disabled={loading || saving}
+                onCheckedChange={(checked) => update({ openChangedFileAsDiff: checked })}
+              />
+            </>
+          }
+        />
         <ExclusionListEditor
           title="File tree exclusions"
           description="Hide matching files or folders from the editor file tree."

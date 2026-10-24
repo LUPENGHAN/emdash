@@ -35,6 +35,8 @@ export type FilesSettings = {
   treeExclude: string[];
   searchExclude: string[];
   watcherExclude: string[];
+  /** Task Files tree: open a path that has Git changes as a diff. */
+  openChangedFileAsDiff: boolean;
 };
 
 export type TerminalSettings = {

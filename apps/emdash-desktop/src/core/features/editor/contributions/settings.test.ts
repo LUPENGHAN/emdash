@@ -12,6 +12,7 @@ describe('filesSettingsContribution', () => {
       treeExclude: [...DEFAULT_TREE_EXCLUDE],
       searchExclude: [...DEFAULT_SEARCH_EXCLUDE],
       watcherExclude: [...DEFAULT_WATCHER_EXCLUDE],
+      openChangedFileAsDiff: false,
     });
   });
 
@@ -26,6 +27,41 @@ describe('filesSettingsContribution', () => {
       treeExclude: ['.git'],
       searchExclude: ['node_modules'],
       watcherExclude: ['**/node_modules/**'],
+      openChangedFileAsDiff: false,
     });
+  });
+
+  it('keeps stored exclusion lists when the diff switch is absent', () => {
+    const defaults = filesSettingsContribution.defaults;
+    const base = typeof defaults === 'function' ? defaults() : defaults;
+    const parsed = filesSettingsContribution.schema.safeParse({
+      ...base,
+      treeExclude: ['.git'],
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.openChangedFileAsDiff).toBe(false);
+    expect(parsed.data.treeExclude).toEqual(['.git']);
+    expect(parsed.data.searchExclude).toEqual([...DEFAULT_SEARCH_EXCLUDE]);
+    expect(parsed.data.watcherExclude).toEqual([...DEFAULT_WATCHER_EXCLUDE]);
+  });
+
+  it('keeps a stored true value and rejects a non-boolean', () => {
+    expect(
+      filesSettingsContribution.schema.parse({
+        treeExclude: [],
+        searchExclude: [],
+        watcherExclude: [],
+        openChangedFileAsDiff: true,
+      }).openChangedFileAsDiff
+    ).toBe(true);
+    expect(
+      filesSettingsContribution.schema.safeParse({
+        treeExclude: [],
+        searchExclude: [],
+        watcherExclude: [],
+        openChangedFileAsDiff: 'yes',
+      }).success
+    ).toBe(false);
   });
 });

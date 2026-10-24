@@ -80,6 +80,7 @@ import {
 import { detectPlatformContext } from '@core/primitives/keybindings/api';
 import { disabled, enabled, hidden, type ViewScopeImpl } from '@core/primitives/view-scopes/api';
 import { useViewScope } from '@core/primitives/view-scopes/react';
+import { createdFileOpenPlan, selectTreeFileOpen } from './open-changed-file-as-diff';
 
 const MAX_COPY_FILE_BYTES = 10 * 1024 * 1024;
 const PLATFORM = detectPlatformContext().os;
@@ -345,11 +346,26 @@ export const EditorFileTree = observer(function EditorFileTree() {
   // Route through the openFile seam (spec §10): sidebar clicks resolve the
   // file's identity here at the edge and never reveal (the tree already shows
   // the file and keeps focus).
-  const openFile = (path: string, preview: boolean) => {
+  const openWorkbenchAt = (path: string, preview: boolean) => {
     openWorkbenchFile(hostFileRefFromNativePath(path, workspace.sshConnectionId), {
       context: { projectId: taskView.projectId, taskId: taskView.taskId },
       preview,
     });
+  };
+
+  const openFile = (path: string, preview: boolean) => {
+    const plan = selectTreeFileOpen({
+      enabled: filesSettings?.openChangedFileAsDiff === true,
+      relativePath: relativeFileTreePath(workspace.path, path),
+      preview,
+      unstaged: gitCheckout.unstagedFileChanges,
+      staged: gitCheckout.stagedFileChanges,
+    });
+    if (plan.kind === 'diff') {
+      taskView.activePane.open('diff', plan.payload, { preview: plan.preview });
+      return;
+    }
+    openWorkbenchAt(path, plan.preview);
   };
 
   const startDraft = (kind: 'file' | 'directory') => {
@@ -402,7 +418,7 @@ export const EditorFileTree = observer(function EditorFileTree() {
       return;
     }
     editorView.expandPath(parentPath);
-    openFile(path, false);
+    openWorkbenchAt(path, createdFileOpenPlan().preview);
     toast('File created');
   };
 
