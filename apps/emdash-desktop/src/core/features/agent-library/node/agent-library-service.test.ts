@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -94,6 +94,95 @@ describe('createAgentLibraryService', () => {
     // Symlinks appear before the background sync finishes updating Git excludes.
     // Drain the per-workspace queues before the fixture directory is removed.
     await library.resyncAll();
+    library.dispose();
+  });
+
+  it('refreshes the catalog after an import replaces the skill body', async () => {
+    const refreshSkillCatalog = vi.fn(async () => {});
+    const warn = vi.fn();
+    const library = createAgentLibraryService({
+      home: root,
+      getSettings: async () => settings,
+      onSettingsChanged: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      listLocalWorkspaces: async () => workspaces,
+      refreshSkillCatalog,
+      getGitHubToken: async () => null,
+      warn,
+    });
+    const installed = path.join(root, '.agentskills', 'review-pr');
+    await mkdir(installed);
+    await writeFile(
+      path.join(installed, 'SKILL.md'),
+      '---\nname: review-pr\ndescription: before\n---\nold body\n'
+    );
+    const source = path.join(root, 'incoming', 'review-pr');
+    await mkdir(source, { recursive: true });
+    await writeFile(
+      path.join(source, 'SKILL.md'),
+      '---\nname: review-pr\ndescription: after import\n---\nnew body\n'
+    );
+
+    const result = await library.importLocalSkills({
+      sourcePath: source,
+      cwd: null,
+      overwrite: true,
+      apply: true,
+    });
+    expect(result.replaced).toEqual(['review-pr']);
+    expect(refreshSkillCatalog).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    expect(await readFile(path.join(installed, 'SKILL.md'), 'utf8')).toContain('new body');
+    expect(
+      (await library.effectiveFor(null)).skills.find((skill) => skill.name === 'review-pr')
+        ?.description
+    ).toBe('after import');
+
+    const plan = await library.importLocalSkills({
+      sourcePath: source,
+      cwd: null,
+      overwrite: false,
+      apply: false,
+    });
+    expect(plan.pendingReplace).toEqual(['review-pr']);
+    expect(refreshSkillCatalog).toHaveBeenCalledTimes(1);
+    library.dispose();
+  });
+
+  it('keeps the imported files when the catalog refresh fails', async () => {
+    const refreshSkillCatalog = vi.fn(async () => {
+      throw new Error('catalog down');
+    });
+    const warn = vi.fn();
+    const library = createAgentLibraryService({
+      home: root,
+      getSettings: async () => settings,
+      onSettingsChanged: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      listLocalWorkspaces: async () => workspaces,
+      refreshSkillCatalog,
+      getGitHubToken: async () => null,
+      warn,
+    });
+    const source = path.join(root, 'incoming', 'ship-note');
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, 'SKILL.md'), '---\nname: ship-note\n---\nnote\n');
+    await expect(
+      library.importLocalSkills({
+        sourcePath: source,
+        cwd: null,
+        overwrite: false,
+        apply: true,
+      })
+    ).resolves.toMatchObject({ imported: ['ship-note'], replaced: [] });
+    expect(warn).not.toHaveBeenCalled();
+    expect(
+      await readFile(path.join(root, '.agentskills', 'ship-note', 'SKILL.md'), 'utf8')
+    ).toContain('note');
     library.dispose();
   });
 });

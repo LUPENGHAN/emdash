@@ -1,11 +1,23 @@
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { crc32, deflateRawSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   checkSkillUpdates,
   gitTreeId,
+  importLocalSkills,
   installGitHubSkills,
   isSafeSkillName,
   listSkillSources,
@@ -381,6 +393,65 @@ describe('updateSkill', () => {
     expect(after?.installedTree).toBe(before?.installedTree);
     expect(after?.remoteTree).toBe(before?.remoteTree);
   });
+
+  it('does not download an already-current skill after another skill is imported', async () => {
+    const local = await gitTreeId(path.join(libraryDir, 'demo'));
+    tree[1] = { path: 'skills/demo', type: 'tree', sha: local };
+    await updateSkill(libraryDir, 'demo', false);
+    const source = path.join(home, 'ship-note');
+    await mkdir(source);
+    await writeFile(path.join(source, 'SKILL.md'), '---\nname: ship-note\n---\nnote\n');
+    requests.length = 0;
+    await importLocalSkills(libraryDir, {
+      sourcePath: source,
+      cwd: null,
+      overwrite: false,
+      apply: true,
+    });
+    expect(requests).toEqual([]);
+    requests.length = 0;
+    const result = await updateSkill(libraryDir, 'demo', false);
+    expect(result).toMatchObject({ updated: false, dirty: false, files: [] });
+    expect(requests.some((request) => request.url.includes('raw.githubusercontent.com'))).toBe(
+      false
+    );
+    expect(requests.some((request) => request.url.includes('/git/blobs/'))).toBe(false);
+    expect(await readFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'utf8')).toBe('old');
+    expect(await readFile(path.join(libraryDir, 'ship-note', 'SKILL.md'), 'utf8')).toContain(
+      'note'
+    );
+  });
+
+  it('keeps a GitHub skill dirty after import and still names the remote files', async () => {
+    const sourcesPath = path.join(libraryDir, '.emdash', 'sources.json');
+    const before = await readFile(sourcesPath, 'utf8');
+    const source = path.join(home, 'replacement');
+    await mkdir(source);
+    await writeFile(path.join(source, 'SKILL.md'), '---\nname: demo\n---\nimported body\n');
+    await importLocalSkills(libraryDir, {
+      sourcePath: source,
+      cwd: null,
+      overwrite: true,
+      apply: true,
+    });
+    expect(await readFile(sourcesPath, 'utf8')).toBe(before);
+    requests.length = 0;
+    const result = await updateSkill(libraryDir, 'demo', false);
+    expect(result).toMatchObject({
+      updated: false,
+      dirty: true,
+      files: ['SKILL.md', 'docs/guide.md'],
+    });
+    expect(requests.some((request) => request.url.includes('api.github.com'))).toBe(true);
+    expect(requests.some((request) => request.url.includes('raw.githubusercontent.com'))).toBe(
+      false
+    );
+    expect(requests.some((request) => request.url.includes('/git/blobs/'))).toBe(false);
+    expect(await readFile(path.join(libraryDir, 'demo', 'SKILL.md'), 'utf8')).toContain(
+      'imported body'
+    );
+    expect(await readFile(sourcesPath, 'utf8')).toBe(before);
+  });
 });
 
 type StubEntry = { path: string; type: string; sha?: string; mode?: string };
@@ -720,5 +791,478 @@ describe('installGitHubSkills', () => {
     expect(await readFile(path.join(libraryDir, 'customer-analysis', 'SKILL.md'), 'utf8')).toBe(
       'existing'
     );
+  });
+});
+
+type ZipSpec = {
+  name: string;
+  data: Buffer | string;
+  method?: number;
+  flags?: number;
+  attr?: number;
+  compressed?: Buffer;
+  uncompressedSize?: number;
+  cdUncompressedSize?: number;
+  localName?: string;
+};
+
+/** Unix external attributes. Shift stays unsigned: `<<` alone sets the sign bit. */
+function unixAttr(mode: number): number {
+  return (mode << 16) >>> 0;
+}
+
+/** A store (or deflate) zip built from the central directory. No zip package. */
+function zipArchive(entries: ZipSpec[]): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data);
+    const stored = entry.compressed ?? data;
+    const method = entry.method ?? 0;
+    const flags = entry.flags ?? 0;
+    const localSize = entry.uncompressedSize ?? data.length;
+    const cdSize = entry.cdUncompressedSize ?? localSize;
+    const compressedSize = stored.length;
+    const crc = crc32(data);
+    const localName = Buffer.from(entry.localName ?? entry.name);
+    const cdName = Buffer.from(entry.name);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(flags, 6);
+    local.writeUInt16LE(method, 8);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(compressedSize, 18);
+    local.writeUInt32LE(localSize, 22);
+    local.writeUInt16LE(localName.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE((3 << 8) | 20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(flags, 8);
+    central.writeUInt16LE(method, 10);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(compressedSize, 20);
+    central.writeUInt32LE(cdSize, 24);
+    central.writeUInt16LE(cdName.length, 28);
+    central.writeUInt32LE(entry.attr ?? 0, 38);
+    central.writeUInt32LE(offset, 42);
+    const localFull = Buffer.concat([local, localName, stored]);
+    locals.push(localFull);
+    centrals.push(Buffer.concat([central, cdName]));
+    offset += localFull.length;
+  }
+  const directory = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(directory.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, directory, eocd]);
+}
+
+const importCall = (
+  libraryDir: string,
+  sourcePath: string,
+  options: { overwrite?: boolean; apply?: boolean; cwd?: string | null } = {}
+) =>
+  importLocalSkills(libraryDir, {
+    sourcePath,
+    cwd: options.cwd ?? null,
+    overwrite: options.overwrite ?? false,
+    apply: options.apply ?? true,
+  });
+
+async function scratchNames(libraryDir: string): Promise<string[]> {
+  const dir = path.join(libraryDir, '.emdash', 'skill-update');
+  return (await readdir(dir).catch(() => [] as string[])).filter((name) =>
+    name.startsWith('import-')
+  );
+}
+
+describe('importLocalSkills', () => {
+  let home: string;
+  let libraryDir: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'skill-import-'));
+    libraryDir = path.join(home, '.agentskills');
+    await mkdir(libraryDir);
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('replaces an existing skill folder and drops files the new tree lacks', async () => {
+    const skillDir = path.join(libraryDir, 'review-pr');
+    await mkdir(skillDir);
+    await writeFile(path.join(skillDir, 'SKILL.md'), 'old');
+    await writeFile(path.join(skillDir, 'old-only.md'), 'gone');
+    const source = path.join(home, 'incoming', 'review-pr');
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, 'SKILL.md'), 'new');
+    await writeFile(path.join(source, 'run.sh'), 'echo hi\n');
+    await chmod(path.join(source, 'run.sh'), 0o755);
+    const outside = path.join(home, 'sentinel.txt');
+    await writeFile(outside, 'sentinel');
+
+    const result = await importCall(libraryDir, source, { overwrite: true });
+
+    expect(result).toMatchObject({ imported: [], replaced: ['review-pr'], pendingReplace: [] });
+    expect(await readFile(path.join(skillDir, 'SKILL.md'), 'utf8')).toBe('new');
+    await expect(lstat(path.join(skillDir, 'old-only.md'))).rejects.toThrow();
+    expect((await lstat(path.join(skillDir, 'run.sh'))).mode & 0o777).toBe(0o755);
+    expect(await readFile(outside, 'utf8')).toBe('sentinel');
+    expect(await scratchNames(libraryDir)).toEqual([]);
+  });
+
+  it('plans a second import, then replaces only when overwrite is set', async () => {
+    const skillDir = path.join(libraryDir, 'review-pr');
+    await mkdir(skillDir);
+    await writeFile(path.join(skillDir, 'SKILL.md'), 'new');
+    const source = path.join(home, 'incoming', 'review-pr');
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, 'SKILL.md'), 'new');
+
+    const plan = await importCall(libraryDir, source, { apply: false });
+    expect(plan).toMatchObject({ imported: [], replaced: [], pendingReplace: ['review-pr'] });
+    expect(await readFile(path.join(skillDir, 'SKILL.md'), 'utf8')).toBe('new');
+
+    await writeFile(path.join(source, 'SKILL.md'), 'newer');
+    await importCall(libraryDir, source, { overwrite: false, apply: true });
+    expect(await readFile(path.join(skillDir, 'SKILL.md'), 'utf8')).toBe('new');
+
+    const replaced = await importCall(libraryDir, source, { overwrite: true, apply: true });
+    expect(replaced.replaced).toEqual(['review-pr']);
+    expect(await readFile(path.join(skillDir, 'SKILL.md'), 'utf8')).toBe('newer');
+    expect(await scratchNames(libraryDir)).toEqual([]);
+  });
+
+  it('refuses a zip slip from the central directory and leaves the library alone', async () => {
+    const skillDir = path.join(libraryDir, 'review-pr');
+    await mkdir(skillDir);
+    await writeFile(path.join(skillDir, 'SKILL.md'), 'old');
+    const sentinel = path.join(home, 'sentinel.txt');
+    await writeFile(sentinel, 'sentinel');
+    const zipPath = path.join(home, 'slip.zip');
+    await writeFile(
+      zipPath,
+      zipArchive([
+        { name: 'review-pr/SKILL.md', data: 'new' },
+        { name: '../../outside.md', data: 'pwned' },
+      ])
+    );
+
+    await expect(importCall(libraryDir, zipPath, { overwrite: true })).rejects.toThrow(/outside/);
+    expect(await readFile(path.join(skillDir, 'SKILL.md'), 'utf8')).toBe('old');
+    expect(await readFile(sentinel, 'utf8')).toBe('sentinel');
+    await expect(lstat(path.join(home, 'outside.md'))).rejects.toThrow();
+    await expect(lstat(path.join(libraryDir, 'outside.md'))).rejects.toThrow();
+    expect(await scratchNames(libraryDir)).toEqual([]);
+  });
+
+  it('trusts the central-directory name when the local header disagrees', async () => {
+    const sentinel = path.join(home, 'sentinel.txt');
+    await writeFile(sentinel, 'sentinel');
+    const zipPath = path.join(home, 'names.zip');
+    await writeFile(
+      zipPath,
+      zipArchive([
+        {
+          name: 'review-pr/SKILL.md',
+          localName: '../../outside.md',
+          data: 'from-central',
+        },
+      ])
+    );
+
+    const result = await importCall(libraryDir, zipPath);
+    expect(result.imported).toEqual(['review-pr']);
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe(
+      'from-central'
+    );
+    await expect(lstat(path.join(home, 'outside.md'))).rejects.toThrow();
+    expect(await readFile(sentinel, 'utf8')).toBe('sentinel');
+  });
+
+  it('rejects a symlink that leaves the source folder', async () => {
+    const secret = path.join(home, 'secret.txt');
+    await writeFile(secret, 'top secret');
+    const source = path.join(home, 'incoming');
+    await mkdir(path.join(source, 'review-pr'), { recursive: true });
+    await writeFile(path.join(source, 'review-pr', 'SKILL.md'), 'new');
+    await symlink(secret, path.join(source, 'review-pr', 'leak'));
+    await mkdir(path.join(libraryDir, 'review-pr'));
+    await writeFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'old');
+
+    await expect(importCall(libraryDir, source, { overwrite: true })).rejects.toThrow(
+      'Symlink review-pr/leak points outside the skill folder'
+    );
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe('old');
+    await expect(lstat(path.join(libraryDir, 'review-pr', 'leak'))).rejects.toThrow();
+    expect(await readFile(secret, 'utf8')).toBe('top secret');
+    const libraryFiles = await readdir(libraryDir);
+    expect(libraryFiles).not.toContain('secret.txt');
+    expect(await scratchNames(libraryDir)).toEqual([]);
+  });
+
+  it('skips a symlink that stays inside and does not recreate it', async () => {
+    const source = path.join(home, 'review-pr');
+    await mkdir(source);
+    await writeFile(path.join(source, 'SKILL.md'), 'body');
+    await symlink('SKILL.md', path.join(source, 'link'));
+
+    await importCall(libraryDir, source);
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe('body');
+    await expect(lstat(path.join(libraryDir, 'review-pr', 'link'))).rejects.toThrow();
+  });
+
+  it('rejects a fifo without reading it', async () => {
+    const source = path.join(home, 'incoming');
+    await mkdir(path.join(source, 'review-pr'), { recursive: true });
+    await writeFile(path.join(source, 'review-pr', 'SKILL.md'), 'new');
+    execFileSync('mkfifo', [path.join(source, 'review-pr', 'pipe')]);
+
+    await expect(importCall(libraryDir, source)).rejects.toThrow('Unsupported file review-pr/pipe');
+    await expect(lstat(path.join(libraryDir, 'review-pr'))).rejects.toThrow();
+  });
+
+  it('rejects a zip symlink that points outside and skips one that stays inside', async () => {
+    const outside = path.join(home, 'escape.zip');
+    await writeFile(
+      outside,
+      zipArchive([
+        { name: 'review-pr/SKILL.md', data: 'new' },
+        { name: 'review-pr/leak', data: '/tmp/secret.txt', attr: unixAttr(0o120777) },
+      ])
+    );
+    await expect(importCall(libraryDir, outside)).rejects.toThrow(
+      'Symlink review-pr/leak points outside the skill folder'
+    );
+    await expect(lstat(path.join(libraryDir, 'review-pr'))).rejects.toThrow();
+
+    const inside = path.join(home, 'inside.zip');
+    await writeFile(
+      inside,
+      zipArchive([
+        { name: 'review-pr/SKILL.md', data: 'kept' },
+        { name: 'review-pr/link', data: 'SKILL.md', attr: unixAttr(0o120777) },
+      ])
+    );
+    await importCall(libraryDir, inside);
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe('kept');
+    await expect(lstat(path.join(libraryDir, 'review-pr', 'link'))).rejects.toThrow();
+  });
+
+  it('stops before extract when the central directory declares too many bytes', async () => {
+    await mkdir(path.join(libraryDir, 'review-pr'));
+    await writeFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'old');
+    const zipPath = path.join(home, 'huge.zip');
+    await writeFile(
+      zipPath,
+      zipArchive([
+        {
+          name: 'review-pr/SKILL.md',
+          data: 'new',
+          cdUncompressedSize: 8 * 1024 * 1024 + 1,
+        },
+      ])
+    );
+    await expect(importCall(libraryDir, zipPath, { overwrite: true })).rejects.toThrow(
+      'Skill archive is too large'
+    );
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe('old');
+    expect(await scratchNames(libraryDir)).toEqual([]);
+  });
+
+  it('stops a deflate stream once the uncompressed bytes pass 8 MiB', async () => {
+    await mkdir(path.join(libraryDir, 'review-pr'));
+    await writeFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'old');
+    const raw = Buffer.alloc(8 * 1024 * 1024 + 64);
+    const compressed = deflateRawSync(raw);
+    const zipPath = path.join(home, 'bomb.zip');
+    await writeFile(
+      zipPath,
+      zipArchive([
+        { name: 'review-pr/SKILL.md', data: 'new' },
+        {
+          name: 'review-pr/bomb.bin',
+          data: raw,
+          method: 8,
+          compressed,
+          uncompressedSize: 32,
+        },
+      ])
+    );
+    await expect(importCall(libraryDir, zipPath, { overwrite: true })).rejects.toThrow(
+      'Skill archive is too large'
+    );
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe('old');
+    expect(await scratchNames(libraryDir)).toEqual([]);
+  });
+
+  it('rejects a zip larger than 8 MiB before reading it as an archive', async () => {
+    const zipPath = path.join(home, 'big.zip');
+    await writeFile(zipPath, Buffer.alloc(8 * 1024 * 1024 + 1));
+    await expect(importCall(libraryDir, zipPath)).rejects.toThrow('Skill archive is too large');
+  });
+
+  it('rejects encrypted, Zip64, and unknown methods', async () => {
+    const cases = [
+      zipArchive([{ name: 'review-pr/SKILL.md', data: 'x', flags: 1 }]),
+      zipArchive([{ name: 'review-pr/SKILL.md', data: 'x', cdUncompressedSize: 0xffffffff }]),
+      zipArchive([{ name: 'review-pr/SKILL.md', data: 'x', method: 1 }]),
+    ];
+    for (const [index, bytes] of cases.entries()) {
+      const zipPath = path.join(home, `bad-${index}.zip`);
+      await writeFile(zipPath, bytes);
+      await expect(importCall(libraryDir, zipPath)).rejects.toThrow('Unsupported zip');
+    }
+    await expect(lstat(path.join(libraryDir, 'review-pr'))).rejects.toThrow();
+  });
+
+  it('rejects a zip fifo without writing the skill', async () => {
+    const zipPath = path.join(home, 'fifo.zip');
+    await writeFile(
+      zipPath,
+      zipArchive([
+        { name: 'review-pr/SKILL.md', data: 'new' },
+        { name: 'review-pr/pipe', data: 'x', attr: unixAttr(0o010644) },
+      ])
+    );
+    await expect(importCall(libraryDir, zipPath)).rejects.toThrow(
+      'Unsupported file review-pr/pipe'
+    );
+    await expect(lstat(path.join(libraryDir, 'review-pr'))).rejects.toThrow();
+  });
+
+  it('throws when there are more than 50 skills and writes none', async () => {
+    await mkdir(path.join(libraryDir, 'keep'));
+    await writeFile(path.join(libraryDir, 'keep', 'SKILL.md'), 'stay');
+    const entries = Array.from({ length: 51 }, (_, index) => ({
+      name: `skill-${String(index).padStart(2, '0')}/SKILL.md`,
+      data: '---\nname: \n---\nbody\n',
+    }));
+    const zipPath = path.join(home, 'many.zip');
+    await writeFile(zipPath, zipArchive(entries));
+    await expect(importCall(libraryDir, zipPath, { overwrite: true })).rejects.toThrow(
+      'Too many skills'
+    );
+    expect(await readFile(path.join(libraryDir, 'keep', 'SKILL.md'), 'utf8')).toBe('stay');
+    expect(await readdir(libraryDir)).toEqual(['keep']);
+  });
+
+  it('counts dropped junk toward the file limit and does not write it', async () => {
+    const source = path.join(home, 'review-pr');
+    await mkdir(path.join(source, '__MACOSX'), { recursive: true });
+    await mkdir(path.join(source, '.git'), { recursive: true });
+    await writeFile(path.join(source, 'SKILL.md'), 'body');
+    await writeFile(path.join(source, '.DS_Store'), 'junk');
+    await writeFile(path.join(source, '__MACOSX', '._SKILL.md'), 'junk');
+    await writeFile(path.join(source, '.git', 'config'), 'junk');
+    await importCall(libraryDir, source);
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe('body');
+    await expect(lstat(path.join(libraryDir, 'review-pr', '.DS_Store'))).rejects.toThrow();
+    await expect(lstat(path.join(libraryDir, 'review-pr', '__MACOSX'))).rejects.toThrow();
+    await expect(lstat(path.join(libraryDir, 'review-pr', '.git'))).rejects.toThrow();
+
+    const crowded = path.join(home, 'crowded');
+    await mkdir(path.join(crowded, '__MACOSX'), { recursive: true });
+    await writeFile(path.join(crowded, 'SKILL.md'), 'body');
+    for (let index = 0; index < 500; index += 1) {
+      await writeFile(path.join(crowded, '__MACOSX', `f${index}`), 'x');
+    }
+    await expect(importCall(libraryDir, crowded, { overwrite: true })).rejects.toThrow(
+      'Skill archive is too large'
+    );
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe('body');
+  });
+
+  it('names skills from frontmatter, folder, and zip file, and skips bad duplicates', async () => {
+    const folder = path.join(home, 'v1.2_x');
+    await mkdir(folder);
+    await writeFile(path.join(folder, 'SKILL.md'), '---\nname: "   "\n---\nbody\n');
+    expect((await importCall(libraryDir, folder)).imported).toEqual(['v1.2_x']);
+
+    const named = path.join(home, 'ship.zip');
+    await writeFile(
+      named,
+      zipArchive([{ name: 'SKILL.md', data: '---\nname: ship-note\n---\nnote\n' }])
+    );
+    expect((await importCall(libraryDir, named)).imported).toEqual(['ship-note']);
+
+    const rooted = path.join(home, 'my-skill.zip');
+    await writeFile(rooted, zipArchive([{ name: 'SKILL.md', data: '---\n---\nroot\n' }]));
+    expect((await importCall(libraryDir, rooted)).imported).toEqual(['my-skill']);
+
+    const mixed = path.join(home, 'mixed.zip');
+    await writeFile(
+      mixed,
+      zipArchive([
+        { name: 'a/SKILL.md', data: '---\nname: same\n---\nfirst\n' },
+        { name: 'b/SKILL.md', data: '---\nname: same\n---\nsecond\n' },
+        { name: 'c/SKILL.md', data: '---\nname: "../x"\n---\nnope\n' },
+        { name: 'ok-name/SKILL.md', data: '---\nname: "bad name"\n---\nnope\n' },
+        { name: 'good/SKILL.md', data: '---\ndescription: ok\n---\nyes\n' },
+      ])
+    );
+    const result = await importCall(libraryDir, mixed);
+    expect(result.imported).toEqual(['same', 'good']);
+    expect(result.skipped).toEqual([
+      { name: 'same', reason: 'duplicate name' },
+      { name: '../x', reason: 'invalid name' },
+      { name: 'bad name', reason: 'invalid name' },
+    ]);
+    expect(await readFile(path.join(libraryDir, 'same', 'SKILL.md'), 'utf8')).toContain('first');
+    await expect(lstat(path.join(libraryDir, 'ok-name'))).rejects.toThrow();
+  });
+
+  it('resolves a relative path from cwd and does not expand a tilde', async () => {
+    const source = path.join(home, 'review-pr');
+    await mkdir(source);
+    await writeFile(path.join(source, 'SKILL.md'), 'relative');
+    const result = await importCall(libraryDir, 'review-pr', { cwd: home });
+    expect(result.imported).toEqual(['review-pr']);
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe('relative');
+
+    await expect(importCall(libraryDir, '~/skills/missing')).rejects.toThrow(
+      'Name an absolute path'
+    );
+    await expect(importCall(libraryDir, '~/skills/missing', { cwd: home })).rejects.toThrow(
+      'Pick a skill folder or a .zip'
+    );
+  });
+
+  it('rejects a source inside the library and a path that is not a skill archive', async () => {
+    await expect(importCall(libraryDir, libraryDir)).rejects.toThrow(
+      'Source is inside the skill library'
+    );
+    const note = path.join(home, 'note.txt');
+    await writeFile(note, 'nope');
+    await expect(importCall(libraryDir, note)).rejects.toThrow('Pick a skill folder or a .zip');
+    await expect(importCall(libraryDir, path.join(home, 'missing'))).rejects.toThrow(
+      'Pick a skill folder or a .zip'
+    );
+    const empty = path.join(home, 'empty.zip');
+    await writeFile(empty, zipArchive([{ name: 'README.md', data: 'hi' }]));
+    await expect(importCall(libraryDir, empty)).rejects.toThrow('No SKILL.md found');
+  });
+
+  it('leaves an existing skill untouched when overwrite is false', async () => {
+    await mkdir(path.join(libraryDir, 'review-pr'));
+    await writeFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'old');
+    const source = path.join(home, 'review-pr');
+    await mkdir(source);
+    await writeFile(path.join(source, 'SKILL.md'), 'new');
+    const result = await importCall(libraryDir, source, { overwrite: false, apply: true });
+    expect(result).toMatchObject({
+      imported: [],
+      replaced: [],
+      pendingReplace: ['review-pr'],
+    });
+    expect(await readFile(path.join(libraryDir, 'review-pr', 'SKILL.md'), 'utf8')).toBe('old');
   });
 });

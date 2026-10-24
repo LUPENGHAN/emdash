@@ -36,6 +36,9 @@ export function useSkills({ host, searchQuery = '' }: { host: HostRef; searchQue
 
   const refreshMutation = useMutation({
     mutationFn: async () => {
+      const skillsClient = await getSkillsClient();
+      const refreshed = await skillsClient.refresh({ host });
+      if (!refreshed.success) throw new Error(refreshed.error.message);
       const client = await getCatalogClient();
       const result = await client.refreshSkillsCatalog(undefined);
       if (result.success) return result.data;

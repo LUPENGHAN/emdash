@@ -12,6 +12,7 @@ export function createAgentLibraryWireController(service: AgentLibraryService): 
     setSkillSource: ({ name, url }) => service.setSkillSource(name, url),
     updateSkill: ({ name, force }) => service.updateSkill(name, force),
     scanGitHubSkills: ({ url }) => service.scanGitHubSkills(url),
+    importLocalSkills: (input) => service.importLocalSkills(input),
     installGitHubSkills: (input) => service.installGitHubSkills(input),
     checkMcpServer: ({ name }) => service.checkMcpServer(name),
     checkMcpHealth: ({ name }) => service.checkMcpHealth(name),

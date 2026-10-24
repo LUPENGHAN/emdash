@@ -22,6 +22,7 @@ export function SkillsPanel({ host, header }: SkillsPanelProps) {
   const skills = useSkills({ host, searchQuery });
   const openCreateSkillModal = useOpenModal('createSkillModal');
   const openImportGitHubSkillModal = useOpenModal('importGitHubSkillModal');
+  const openImportLocalSkillModal = useOpenModal('importLocalSkillModal');
   const sshConnectionId = sshConnectionIdOf(host);
 
   const handleOpenTerminal = useCallback(
@@ -46,6 +47,7 @@ export function SkillsPanel({ host, header }: SkillsPanelProps) {
       isRefreshing={skills.isRefreshing}
       onCreateSkill={() => void openCreateSkillModal({ host })}
       onImportFromGitHub={() => void openImportGitHubSkillModal()}
+      onImportLocal={isLocalHostRef(host) ? () => void openImportLocalSkillModal() : undefined}
     />
   );
 
@@ -64,6 +66,7 @@ export function SkillsPanel({ host, header }: SkillsPanelProps) {
       {/* The library reaches agents on this computer only. */}
       {isLocalHostRef(host) ? <AgentSkillsBanner /> : null}
       <SkillsList
+        host={host}
         skills={skills}
         onOpenTerminal={handleOpenTerminal}
         renderInstalledFooter={

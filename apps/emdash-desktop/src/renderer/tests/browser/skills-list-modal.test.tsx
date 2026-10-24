@@ -1,3 +1,4 @@
+import { LOCAL_HOST_REF } from '@emdash/core/primitives/host/api';
 import type { CatalogIndex, CatalogSkill } from '@emdash/core/primitives/skills/api';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -68,7 +69,7 @@ describe('SkillsList details modal', () => {
     await act(async () => {
       root.render(
         <ThemeProvider theme="emlight" onThemeChange={vi.fn()}>
-          <SkillsList skills={skills} />
+          <SkillsList host={LOCAL_HOST_REF} skills={skills} />
         </ThemeProvider>
       );
     });

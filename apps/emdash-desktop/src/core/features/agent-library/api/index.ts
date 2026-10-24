@@ -176,6 +176,21 @@ export const agentLibraryContract = defineContract({
     input: z.object({ url: z.string().min(1) }),
     output: githubSkillScanSchema,
   }),
+  /** Copies a local skill folder or .zip into the library. `cwd` resolves a relative path. */
+  importLocalSkills: procedure({
+    input: z.object({
+      sourcePath: z.string().min(1),
+      cwd: z.string().nullable().default(null),
+      overwrite: z.boolean().default(false),
+      apply: z.boolean().default(true),
+    }),
+    output: z.object({
+      imported: z.array(z.string()),
+      replaced: z.array(z.string()),
+      pendingReplace: z.array(z.string()),
+      skipped: z.array(z.object({ name: z.string(), reason: z.string() })),
+    }),
+  }),
   installGitHubSkills: procedure({
     input: z.object({
       repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),

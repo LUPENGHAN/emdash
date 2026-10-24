@@ -7,11 +7,13 @@ import {
   readdir,
   readFile,
   readlink,
+  realpath,
   rename,
   rm,
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { createInflateRaw } from 'node:zlib';
 import { frontmatterField } from './skill-library';
 
 export type SkillSourceRecord = {
@@ -55,6 +57,8 @@ export type GitHubSkillCandidate = {
 
 /** Repositories can hold thousands of skills; a scan lists at most this many. */
 const MAX_SCAN_SKILLS = 50;
+const MAX_SKILL_IMPORT_FILES = 500;
+const MAX_SKILL_IMPORT_BYTES = 8 * 1024 * 1024;
 
 const SOURCES_FILE = path.join('.emdash', 'sources.json');
 const UPDATE_DIR = path.join('.emdash', 'skill-update');
@@ -873,4 +877,489 @@ export async function installGitHubSkills(
     }
   }
   return { installed, skipped };
+}
+
+const DROPPED_SKILL_SEGMENTS = new Set(['__MACOSX', '.git', '.DS_Store']);
+const ZIP_EOCD = 0x06054b50;
+const ZIP_CENTRAL = 0x02014b50;
+const ZIP_LOCAL = 0x04034b50;
+
+export type LocalSkillImportResult = {
+  imported: string[];
+  replaced: string[];
+  pendingReplace: string[];
+  skipped: { name: string; reason: string }[];
+};
+
+type CollectedFile = { path: string; data: Buffer; executable: boolean };
+
+type PlannedSkill = {
+  name: string;
+  files: { relative: string; data: Buffer; executable: boolean }[];
+};
+
+type ZipEntry = {
+  name: string;
+  method: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  localOffset: number;
+  attr: number;
+};
+
+/**
+ * Copies a skill folder or .zip into the library. `overwrite` replaces an existing
+ * folder; it does not choose where the files land. `apply: false` returns the plan.
+ */
+export async function importLocalSkills(
+  libraryDir: string,
+  input: { sourcePath: string; cwd: string | null; overwrite: boolean; apply: boolean }
+): Promise<LocalSkillImportResult> {
+  const resolved = resolveImportPath(input.sourcePath, input.cwd);
+  const located = await locateImportSource(resolved);
+  await assertSourceOutsideLibrary(libraryDir, located.realPath);
+  const rootLabel = importRootLabel(resolved, located.kind);
+  const files =
+    located.kind === 'zip'
+      ? await readZipSkillFiles(located.realPath)
+      : await readDirectorySkillFiles(located.realPath);
+  const { planned, skipped } = planLocalSkills(files, rootLabel);
+  return writePlannedSkills(libraryDir, planned, skipped, input.overwrite, input.apply);
+}
+
+function resolveImportPath(sourcePath: string, cwd: string | null): string {
+  if (path.isAbsolute(sourcePath)) return sourcePath;
+  if (cwd === null || cwd.length === 0) throw new Error('Name an absolute path');
+  return path.resolve(cwd, sourcePath);
+}
+
+async function locateImportSource(
+  resolved: string
+): Promise<{ realPath: string; kind: 'dir' | 'zip' }> {
+  let info: Awaited<ReturnType<typeof lstat>>;
+  try {
+    info = await lstat(resolved);
+  } catch (error) {
+    if (isEnoent(error)) throw new Error('Pick a skill folder or a .zip');
+    throw error;
+  }
+  let realPath = resolved;
+  if (info.isSymbolicLink()) {
+    try {
+      realPath = await realpath(resolved);
+      info = await lstat(realPath);
+    } catch (error) {
+      if (isEnoent(error)) throw new Error('Pick a skill folder or a .zip');
+      throw error;
+    }
+  } else {
+    realPath = await realpath(resolved);
+  }
+  if (info.isDirectory()) return { realPath, kind: 'dir' };
+  if (info.isFile() && path.extname(resolved).toLowerCase() === '.zip') {
+    return { realPath, kind: 'zip' };
+  }
+  throw new Error('Pick a skill folder or a .zip');
+}
+
+async function assertSourceOutsideLibrary(libraryDir: string, sourceReal: string): Promise<void> {
+  const root = path.resolve(libraryDir);
+  let libraryReal = root;
+  try {
+    libraryReal = await realpath(root);
+  } catch (error) {
+    if (!isEnoent(error)) throw error;
+  }
+  if (isInsidePath(libraryReal, sourceReal)) {
+    throw new Error('Source is inside the skill library');
+  }
+}
+
+function importRootLabel(resolved: string, kind: 'dir' | 'zip'): string {
+  const base = path.basename(resolved);
+  if (kind === 'dir') return base;
+  const ext = path.extname(base);
+  return ext.toLowerCase() === '.zip' ? base.slice(0, -ext.length) : base;
+}
+
+async function readDirectorySkillFiles(rootReal: string): Promise<CollectedFile[]> {
+  const found: { rel: string; abs: string; executable: boolean }[] = [];
+  let bytes = 0;
+  const walk = async (dir: string): Promise<void> => {
+    for (const name of await readdir(dir)) {
+      const abs = path.join(dir, name);
+      const rel = path.relative(rootReal, abs).split(path.sep).join('/');
+      const info = await lstat(abs);
+      if (info.isSymbolicLink()) {
+        await assertDirectorySymlink(rootReal, abs, rel);
+        continue;
+      }
+      if (info.isFIFO() || info.isSocket() || info.isCharacterDevice() || info.isBlockDevice()) {
+        throw new Error(`Unsupported file ${rel}`);
+      }
+      if (info.isDirectory()) {
+        await walk(abs);
+        continue;
+      }
+      if (!info.isFile()) throw new Error(`Unsupported file ${rel}`);
+      found.push({ rel, abs, executable: (info.mode & 0o111) !== 0 });
+      bytes += info.size;
+      if (found.length > MAX_SKILL_IMPORT_FILES || bytes > MAX_SKILL_IMPORT_BYTES) {
+        throw new Error('Skill archive is too large');
+      }
+    }
+  };
+  await walk(rootReal);
+  const files: CollectedFile[] = [];
+  for (const file of found) {
+    if (isDroppedSkillPath(file.rel)) continue;
+    remoteFileTarget(probeRoot(rootReal), file.rel);
+    files.push({
+      path: file.rel,
+      data: await readFile(file.abs),
+      executable: file.executable,
+    });
+  }
+  return files;
+}
+
+async function assertDirectorySymlink(
+  rootReal: string,
+  linkPath: string,
+  rel: string
+): Promise<void> {
+  const lexical = path.resolve(path.dirname(linkPath), await readlink(linkPath));
+  let resolved = lexical;
+  try {
+    resolved = await realpath(lexical);
+  } catch (error) {
+    if (!isEnoent(error)) throw error;
+  }
+  if (!isInsidePath(rootReal, resolved)) {
+    throw new Error(`Symlink ${rel} points outside the skill folder`);
+  }
+}
+
+async function readZipSkillFiles(zipPath: string): Promise<CollectedFile[]> {
+  const info = await lstat(zipPath);
+  if (info.size > MAX_SKILL_IMPORT_BYTES) throw new Error('Skill archive is too large');
+  const buf = await readFile(zipPath);
+  const entries = readZipCentralDirectory(buf);
+  let declared = 0;
+  let fileCount = 0;
+  for (const entry of entries) {
+    const kind = zipEntryKind(entry);
+    if (kind === 'special') throw new Error(`Unsupported file ${entry.name}`);
+    if (kind !== 'file') continue;
+    fileCount += 1;
+    declared += entry.uncompressedSize;
+  }
+  if (fileCount > MAX_SKILL_IMPORT_FILES || declared > MAX_SKILL_IMPORT_BYTES) {
+    throw new Error('Skill archive is too large');
+  }
+  for (const entry of entries) {
+    if (zipEntryKind(entry) !== 'file' || isDroppedSkillPath(entry.name)) continue;
+    remoteFileTarget(probeRoot(zipPath), entry.name);
+  }
+  const budget = { used: 0 };
+  for (const entry of entries) {
+    if (zipEntryKind(entry) !== 'link') continue;
+    const target = (await readZipEntry(buf, entry, budget)).toString('utf8');
+    if (!zipLinkStaysInside(entry.name, target)) {
+      throw new Error(`Symlink ${entry.name} points outside the skill folder`);
+    }
+  }
+  const files: CollectedFile[] = [];
+  for (const entry of entries) {
+    if (zipEntryKind(entry) !== 'file') continue;
+    const data = await readZipEntry(buf, entry, budget);
+    if (isDroppedSkillPath(entry.name)) continue;
+    files.push({
+      path: entry.name,
+      data,
+      executable: ((entry.attr >>> 16) & 0o111) !== 0,
+    });
+  }
+  return files;
+}
+
+function planLocalSkills(
+  files: CollectedFile[],
+  rootLabel: string
+): { planned: PlannedSkill[]; skipped: { name: string; reason: string }[] } {
+  const outermost = outermostSkillDirs(files.map((file) => file.path));
+  if (outermost.length === 0) throw new Error('No SKILL.md found');
+  if (outermost.length > MAX_SCAN_SKILLS) throw new Error('Too many skills');
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const skipped: { name: string; reason: string }[] = [];
+  const planned: PlannedSkill[] = [];
+  const used = new Set<string>();
+  for (const dir of outermost) {
+    const skillMdPath = dir ? `${dir}/SKILL.md` : 'SKILL.md';
+    const markdown = byPath.get(skillMdPath)?.data.toString('utf8') ?? '';
+    const front = frontmatterField(markdown, 'name').trim();
+    const folderName = dir ? dir.slice(dir.lastIndexOf('/') + 1) : rootLabel;
+    const name = front.length === 0 ? folderName : front;
+    if (!isSafeSkillName(name)) {
+      skipped.push({ name, reason: 'invalid name' });
+      continue;
+    }
+    if (used.has(name)) {
+      skipped.push({ name, reason: 'duplicate name' });
+      continue;
+    }
+    used.add(name);
+    const prefix = dir ? `${dir}/` : '';
+    const skillFiles = files.flatMap((file) => {
+      if (dir && !file.path.startsWith(prefix)) return [];
+      const relative = dir ? file.path.slice(prefix.length) : file.path;
+      if (!relative) return [];
+      return [{ relative, data: file.data, executable: file.executable }];
+    });
+    for (const file of skillFiles) remoteFileTarget(probeRoot(dir || rootLabel), file.relative);
+    planned.push({ name, files: skillFiles });
+  }
+  return { planned, skipped };
+}
+
+async function writePlannedSkills(
+  libraryDir: string,
+  planned: PlannedSkill[],
+  skipped: { name: string; reason: string }[],
+  overwrite: boolean,
+  apply: boolean
+): Promise<LocalSkillImportResult> {
+  const imported: string[] = [];
+  const replaced: string[] = [];
+  const pendingReplace: string[] = [];
+  const toWrite: { skill: PlannedSkill; existed: boolean }[] = [];
+  for (const skill of planned) {
+    const existed = await skillDirectoryExists(libraryDir, skill.name);
+    if (!apply || (!overwrite && existed)) {
+      if (existed) pendingReplace.push(skill.name);
+      else imported.push(skill.name);
+      continue;
+    }
+    toWrite.push({ skill, existed });
+  }
+  if (toWrite.length === 0) return { imported, replaced, pendingReplace, skipped };
+  const updateRoot = path.join(libraryDir, UPDATE_DIR);
+  await mkdir(updateRoot, { recursive: true });
+  const scratch = await mkdtemp(path.join(updateRoot, 'import-'));
+  try {
+    await mkdir(libraryDir, { recursive: true });
+    const backupRoot = path.join(scratch, '.bak');
+    await mkdir(backupRoot);
+    for (const item of toWrite) {
+      const staged = path.join(scratch, item.skill.name);
+      await mkdir(staged, { recursive: true });
+      for (const file of item.skill.files) {
+        const target = remoteFileTarget(staged, file.relative);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, file.data);
+        await chmod(target, file.executable ? 0o755 : 0o644);
+      }
+      await replaceFolder(
+        staged,
+        skillFolder(libraryDir, item.skill.name),
+        path.join(backupRoot, item.skill.name)
+      );
+      if (item.existed) replaced.push(item.skill.name);
+      else imported.push(item.skill.name);
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+  return { imported, replaced, pendingReplace, skipped };
+}
+
+function outermostSkillDirs(files: string[]): string[] {
+  const folders = files
+    .filter((file) => file === 'SKILL.md' || file.endsWith('/SKILL.md'))
+    .map((file) => (file === 'SKILL.md' ? '' : file.slice(0, -'/SKILL.md'.length)))
+    .sort();
+  const outermost: string[] = [];
+  for (const folder of folders) {
+    if (outermost.some((kept) => kept === '' || folder.startsWith(`${kept}/`))) continue;
+    outermost.push(folder);
+  }
+  return outermost;
+}
+
+function isDroppedSkillPath(file: string): boolean {
+  return file.split('/').some((segment) => DROPPED_SKILL_SEGMENTS.has(segment));
+}
+
+function probeRoot(seed: string): string {
+  return path.join(path.resolve(seed), '.probe');
+}
+
+function isInsidePath(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+function isEnoent(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+async function skillDirectoryExists(libraryDir: string, name: string): Promise<boolean> {
+  try {
+    await lstat(skillFolder(libraryDir, name));
+    return true;
+  } catch (error) {
+    if (isEnoent(error)) return false;
+    throw error;
+  }
+}
+
+function zipEntryKind(entry: ZipEntry): 'dir' | 'file' | 'link' | 'special' {
+  const type = (entry.attr >>> 16) & 0o170000;
+  if (type === 0o120000) return 'link';
+  if (type === 0o010000 || type === 0o140000 || type === 0o020000 || type === 0o060000) {
+    return 'special';
+  }
+  if (type === 0o040000 || entry.name.endsWith('/')) return 'dir';
+  return 'file';
+}
+
+function zipLinkStaysInside(entryName: string, target: string): boolean {
+  if (target.includes('\\') || path.posix.isAbsolute(target) || path.win32.isAbsolute(target)) {
+    return false;
+  }
+  const dir = path.posix.dirname(entryName);
+  const lexical = path.posix.normalize(path.posix.join(dir === '.' ? '' : dir, target));
+  return lexical !== '..' && !lexical.startsWith('../') && !path.posix.isAbsolute(lexical);
+}
+
+function readZipCentralDirectory(buf: Buffer): ZipEntry[] {
+  if (buf.length < 22) throw new Error('Unsupported zip');
+  const min = Math.max(0, buf.length - 22 - 0xffff);
+  let eocd = -1;
+  for (let index = buf.length - 22; index >= min; index -= 1) {
+    if (buf.readUInt32LE(index) !== ZIP_EOCD) continue;
+    const commentLen = buf.readUInt16LE(index + 20);
+    if (index + 22 + commentLen !== buf.length) continue;
+    eocd = index;
+    break;
+  }
+  if (eocd < 0) throw new Error('Unsupported zip');
+  const disk = buf.readUInt16LE(eocd + 4);
+  const diskStart = buf.readUInt16LE(eocd + 6);
+  const entries = buf.readUInt16LE(eocd + 10);
+  const cdSize = buf.readUInt32LE(eocd + 12);
+  const cdOffset = buf.readUInt32LE(eocd + 16);
+  if (
+    disk !== 0 ||
+    diskStart !== 0 ||
+    entries === 0xffff ||
+    cdSize === 0xffffffff ||
+    cdOffset === 0xffffffff ||
+    cdOffset + cdSize > buf.length
+  ) {
+    throw new Error('Unsupported zip');
+  }
+  const parsed: ZipEntry[] = [];
+  let offset = cdOffset;
+  const end = cdOffset + cdSize;
+  for (let index = 0; index < entries; index += 1) {
+    if (offset + 46 > end || buf.readUInt32LE(offset) !== ZIP_CENTRAL) {
+      throw new Error('Unsupported zip');
+    }
+    const flags = buf.readUInt16LE(offset + 8);
+    const method = buf.readUInt16LE(offset + 10);
+    const compressedSize = buf.readUInt32LE(offset + 20);
+    const uncompressedSize = buf.readUInt32LE(offset + 24);
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    const attr = buf.readUInt32LE(offset + 38);
+    const localOffset = buf.readUInt32LE(offset + 42);
+    const nameStart = offset + 46;
+    const next = nameStart + nameLen + extraLen + commentLen;
+    if (next > end) throw new Error('Unsupported zip');
+    if ((flags & 1) !== 0 || (method !== 0 && method !== 8)) throw new Error('Unsupported zip');
+    if (
+      compressedSize === 0xffffffff ||
+      uncompressedSize === 0xffffffff ||
+      localOffset === 0xffffffff ||
+      extraHasZip64(buf.subarray(nameStart + nameLen, nameStart + nameLen + extraLen))
+    ) {
+      throw new Error('Unsupported zip');
+    }
+    parsed.push({
+      name: buf.subarray(nameStart, nameStart + nameLen).toString('utf8'),
+      method,
+      compressedSize,
+      uncompressedSize,
+      localOffset,
+      attr,
+    });
+    offset = next;
+  }
+  return parsed;
+}
+
+function extraHasZip64(extra: Buffer): boolean {
+  let offset = 0;
+  while (offset + 4 <= extra.length) {
+    const id = extra.readUInt16LE(offset);
+    const size = extra.readUInt16LE(offset + 2);
+    if (id === 1) return true;
+    offset += 4 + size;
+  }
+  return false;
+}
+
+async function readZipEntry(
+  buf: Buffer,
+  entry: ZipEntry,
+  budget: { used: number }
+): Promise<Buffer> {
+  const local = entry.localOffset;
+  if (local < 0 || local + 30 > buf.length || buf.readUInt32LE(local) !== ZIP_LOCAL) {
+    throw new Error('Unsupported zip');
+  }
+  const nameLen = buf.readUInt16LE(local + 26);
+  const extraLen = buf.readUInt16LE(local + 28);
+  const start = local + 30 + nameLen + extraLen;
+  const end = start + entry.compressedSize;
+  if (start < local || end > buf.length) throw new Error('Unsupported zip');
+  const payload = buf.subarray(start, end);
+  if (entry.method === 0) {
+    addImportBytes(budget, payload.length);
+    return Buffer.from(payload);
+  }
+  return inflateSkillEntry(payload, budget);
+}
+
+function addImportBytes(budget: { used: number }, size: number): void {
+  if (budget.used + size > MAX_SKILL_IMPORT_BYTES) throw new Error('Skill archive is too large');
+  budget.used += size;
+}
+
+function inflateSkillEntry(payload: Buffer, budget: { used: number }): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const inflater = createInflateRaw();
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const finish = (error: Error | null, value?: Buffer) => {
+      if (settled) return;
+      settled = true;
+      inflater.destroy();
+      if (error) reject(error);
+      else resolve(value ?? Buffer.concat(chunks));
+    };
+    inflater.on('data', (chunk: Buffer) => {
+      if (budget.used + chunk.length > MAX_SKILL_IMPORT_BYTES) {
+        finish(new Error('Skill archive is too large'));
+        return;
+      }
+      budget.used += chunk.length;
+      chunks.push(chunk);
+    });
+    inflater.on('error', () => finish(new Error('Unsupported zip')));
+    inflater.on('end', () => finish(null, Buffer.concat(chunks)));
+    inflater.end(payload);
+  });
 }

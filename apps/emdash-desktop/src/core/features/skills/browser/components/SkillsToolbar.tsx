@@ -1,6 +1,6 @@
 import { CollectionToolbar } from '@emdash/ui/react/patterns';
 import { Button } from '@emdash/ui/react/primitives';
-import { Github, Plus, RefreshCw } from 'lucide-react';
+import { FolderOpen, Github, Plus, RefreshCw } from 'lucide-react';
 import React from 'react';
 import { useSearchFocusHotkeys } from '@core/primitives/keybindings/browser';
 
@@ -11,6 +11,7 @@ type SkillsToolbarProps = {
   isRefreshing: boolean;
   onCreateSkill: () => void;
   onImportFromGitHub: () => void;
+  onImportLocal?: () => void;
 };
 
 export function SkillsToolbar({
@@ -20,6 +21,7 @@ export function SkillsToolbar({
   isRefreshing,
   onCreateSkill,
   onImportFromGitHub,
+  onImportLocal,
 }: SkillsToolbarProps) {
   const searchRef = useSearchFocusHotkeys();
   return (
@@ -43,6 +45,12 @@ export function SkillsToolbar({
             className={`text-muted-foreground h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`}
           />
         </Button>
+        {onImportLocal ? (
+          <Button variant="secondary" onClick={onImportLocal}>
+            <FolderOpen className="size-4" />
+            Import
+          </Button>
+        ) : null}
         <Button variant="secondary" onClick={onImportFromGitHub}>
           <Github className="size-4" />
           Import from GitHub

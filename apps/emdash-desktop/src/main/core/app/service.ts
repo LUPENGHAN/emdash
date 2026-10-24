@@ -621,6 +621,17 @@ class AppService implements Disposable {
     return result.filePaths[0];
   }
 
+  async openSelectZipDialog(args: { title: string; message: string }): Promise<string | undefined> {
+    const result = await dialog.showOpenDialog(getMainWindow()!, {
+      title: args.title,
+      properties: ['openFile'],
+      message: args.message,
+      filters: [{ name: 'Zip', extensions: ['zip'] }],
+    });
+    if (result.canceled) return undefined;
+    return result.filePaths[0];
+  }
+
   async saveTextFile(args: {
     title: string;
     defaultPath: string;

@@ -26,12 +26,14 @@ import {
 } from './skill-library';
 import {
   checkSkillUpdates,
+  importLocalSkills as importLocalSkillArchive,
   installGitHubSkills,
   listSkillSources,
   scanGitHubSkills,
   setSkillSource,
   updateSkill,
   type GitHubTokenSource,
+  type LocalSkillImportResult,
 } from './skill-sources';
 
 export type LocalWorkspace = { projectId: string; path: string };
@@ -140,6 +142,19 @@ export function createAgentLibraryService(deps: AgentLibraryServiceDeps) {
       setSkillSource(libraryDir, name, url, await token()),
     async scanGitHubSkills(url: string) {
       return scanGitHubSkills(libraryDir, url, await token());
+    },
+    async importLocalSkills(input: {
+      sourcePath: string;
+      cwd: string | null;
+      overwrite: boolean;
+      apply: boolean;
+    }): Promise<LocalSkillImportResult> {
+      const result = await importLocalSkillArchive(libraryDir, input);
+      if (input.apply && (result.imported.length > 0 || result.replaced.length > 0)) {
+        await deps.refreshSkillCatalog().catch(() => {});
+        await resyncAll();
+      }
+      return result;
     },
     async installGitHubSkills(input: Parameters<typeof installGitHubSkills>[1]) {
       const result = await installGitHubSkills(libraryDir, input, await token());

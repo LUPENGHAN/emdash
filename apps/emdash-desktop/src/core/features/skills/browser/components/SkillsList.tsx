@@ -1,3 +1,4 @@
+import type { HostRef } from '@emdash/core/primitives/host/api';
 import { CardGridSection } from '@emdash/ui/react/components';
 import { Loader2 } from 'lucide-react';
 import React, { useCallback } from 'react';
@@ -6,6 +7,7 @@ import type { UseSkillsResult } from '@core/features/skills/browser/components/u
 import { useOpenModal } from '@core/manifests/browser/modal-api';
 
 type SkillsListProps = {
+  host: HostRef;
   skills: UseSkillsResult;
   onOpenTerminal?: (skillPath: string) => void;
   /** Extra controls under an installed skill (e.g. where it applies). */
@@ -13,6 +15,7 @@ type SkillsListProps = {
 };
 
 export const SkillsList: React.FC<SkillsListProps> = ({
+  host,
   skills,
   onOpenTerminal,
   renderInstalledFooter,
@@ -39,12 +42,13 @@ export const SkillsList: React.FC<SkillsListProps> = ({
     (skill: UseSkillsResult['filteredSkills'][number]) => {
       void openSkillDetail({
         skill,
+        host,
         onInstall: skills.install,
         onUninstall: handleUninstallRequest,
         onOpenTerminal,
       });
     },
-    [handleUninstallRequest, onOpenTerminal, openSkillDetail, skills.install]
+    [handleUninstallRequest, host, onOpenTerminal, openSkillDetail, skills.install]
   );
 
   if (skills.isLoading) {

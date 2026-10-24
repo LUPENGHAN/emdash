@@ -5,6 +5,7 @@ import {
 import { shortName } from '@emdash/core/runtimes/git/api';
 import type { AgentProviderId } from '@emdash/plugins/agents/types';
 import { toast } from '@emdash/ui/react/primitives';
+import { getAgentLibraryClient } from '@core/features/agent-library/api/browser/client';
 import { captureBrowserPage } from '@core/features/browser/api/browser/browser-capture';
 import { browserControlsRegistry } from '@core/features/browser/api/browser/browser-controls-registry';
 import { browserDiagnosticsStore } from '@core/features/browser/api/browser/browser-diagnostics-store';
@@ -141,6 +142,9 @@ export async function executeAgentAction(
 
     case 'delete_task':
       return deleteTask(caller, who, action.taskId);
+
+    case 'import_skill':
+      return importSkill(caller, who, action.path, action.force);
 
     case 'open':
       return openTarget(caller, action.target);
@@ -293,6 +297,39 @@ async function createTaskForAgent(
       .filter(Boolean)
       .join('\n'),
   };
+}
+
+async function importSkill(
+  caller: AgentCaller,
+  who: string,
+  sourcePath: string,
+  force: boolean
+): Promise<AgentControlResult> {
+  const client = await getAgentLibraryClient();
+  const plan = await client.importLocalSkills({
+    sourcePath,
+    cwd: caller.cwd,
+    overwrite: false,
+    apply: false,
+  });
+  if (plan.pendingReplace.length > 0 && !force) {
+    const names = plan.pendingReplace.join(', ');
+    await confirm(`${who} wants to replace ${names}`, names, 'Replace');
+  }
+  const result = await client.importLocalSkills({
+    sourcePath,
+    cwd: caller.cwd,
+    overwrite: plan.pendingReplace.length > 0,
+    apply: true,
+  });
+  const lines = [
+    result.imported.length > 0 ? `Imported ${result.imported.join(', ')}.` : null,
+    result.replaced.length > 0 ? `Replaced ${result.replaced.join(', ')}.` : null,
+    result.skipped.length > 0
+      ? `Skipped ${result.skipped.map((entry) => `${entry.name} (${entry.reason})`).join(', ')}.`
+      : null,
+  ].filter((line) => line !== null);
+  return { text: lines.join('\n') || 'No skills imported.' };
 }
 
 async function confirm(title: string, detail: string, confirmLabel: string): Promise<void> {

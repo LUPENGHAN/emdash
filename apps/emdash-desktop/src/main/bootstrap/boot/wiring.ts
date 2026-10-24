@@ -113,6 +113,7 @@ export function createDesktopWireOptions(
       listInstalledFonts: (input) => appOperations.listInstalledFonts(input),
       openSelectDirectoryDialog: (input) => appOperations.openSelectDirectoryDialog(input),
       openSelectAudioFileDialog: (input) => appOperations.openSelectAudioFileDialog(input),
+      openSelectZipDialog: (input) => appOperations.openSelectZipDialog(input),
       saveTextFile: (input) => appOperations.saveTextFile(input),
       readAudioFileDataUrl: ({ filePath }) => appOperations.readAudioFileDataUrl(filePath),
       minimizeWindow: () => appOperations.minimizeWindow(),

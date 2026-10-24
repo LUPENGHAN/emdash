@@ -164,6 +164,8 @@ export const appOperations = {
     appService.openSelectDirectoryDialog(args),
   openSelectAudioFileDialog: (args: { title: string; message: string }) =>
     appService.openSelectAudioFileDialog(args),
+  openSelectZipDialog: (args: { title: string; message: string }) =>
+    appService.openSelectZipDialog(args),
   saveTextFile: async (args: { title: string; defaultPath: string; content: string }) => {
     try {
       return { success: true as const, path: await appService.saveTextFile(args) };

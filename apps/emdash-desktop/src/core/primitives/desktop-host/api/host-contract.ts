@@ -219,6 +219,10 @@ export const desktopHostContract = defineContract({
     input: z.object({ title: z.string(), message: z.string() }),
     output: z.string().optional(),
   }),
+  openSelectZipDialog: procedure({
+    input: z.object({ title: z.string(), message: z.string() }),
+    output: z.string().optional(),
+  }),
   saveTextFile: procedure({
     input: z.object({ title: z.string(), defaultPath: z.string(), content: z.string() }),
     output: z.custom<OptionalPathResult>(),

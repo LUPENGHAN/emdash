@@ -1,3 +1,4 @@
+import type { HostRef } from '@emdash/core/primitives/host/api';
 import type { CatalogSkill } from '@emdash/core/primitives/skills/api';
 import { parseFrontmatter } from '@emdash/core/primitives/skills/api';
 import { Markdown } from '@emdash/ui/react/components';
@@ -11,6 +12,8 @@ import { useMarkdownLinkOpener } from '@core/primitives/external-links/browser';
 import { ConfirmButton } from '@core/primitives/keybindings/browser/confirm-button';
 import { defineModal } from '@core/primitives/modals/react';
 import { useCloseGuard } from '@core/primitives/modals/react/use-close-guard';
+import { useInstalledSkillsLiveModel } from '../live-model-hooks';
+import { installedSkillBody } from './skill-detail-body';
 import { SkillIconRenderer } from './SkillIconRenderer';
 
 const sourceMeta = {
@@ -21,6 +24,7 @@ const sourceMeta = {
 
 export interface SkillDetailModalProps {
   skill: CatalogSkill;
+  host: HostRef;
   onInstall: (skillId: string) => Promise<boolean>;
   onUninstall: (skillId: string) => Promise<boolean>;
   onOpenTerminal?: (skillPath: string) => void;
@@ -28,12 +32,14 @@ export interface SkillDetailModalProps {
 
 export const SkillDetailModal: React.FC<SkillDetailModalProps> = ({
   skill,
+  host,
   onInstall,
   onUninstall,
   onOpenTerminal,
 }) => {
   const { dismiss } = useModalController('skillDetailModal');
   const [isProcessing, setIsProcessing] = useState(false);
+  const { data: liveSkills } = useInstalledSkillsLiveModel(host);
   const { data: detailedSkill = skill, isFetching: isLoading } = useQuery({
     queryKey: ['skills', 'detail', skill.id],
     queryFn: async () => {
@@ -43,6 +49,7 @@ export const SkillDetailModal: React.FC<SkillDetailModalProps> = ({
       throw new Error(result.error.message);
     },
     placeholderData: skill,
+    enabled: !skill.installed,
   });
 
   useCloseGuard(isProcessing);
@@ -75,12 +82,13 @@ export const SkillDetailModal: React.FC<SkillDetailModalProps> = ({
 
   const openLink = useMarkdownLinkOpener();
 
-  const body = detailedSkill.skillMdContent
+  const catalogBody = detailedSkill.skillMdContent
     ? parseFrontmatter(detailedSkill.skillMdContent).body.trim()
     : '';
+  const body = skill.installed ? installedSkillBody(liveSkills, skill).trim() : catalogBody;
   const visibleBody = isSkillShPathBody(body) ? '' : body;
   const meta = detailedSkill.source === 'local' ? null : sourceMeta[detailedSkill.source];
-  const showLoadingContent = isLoading && !detailedSkill.skillMdContent;
+  const showLoadingContent = !skill.installed && isLoading && !detailedSkill.skillMdContent;
 
   return (
     <>

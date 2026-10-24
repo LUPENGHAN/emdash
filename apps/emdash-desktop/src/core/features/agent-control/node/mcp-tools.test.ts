@@ -129,3 +129,38 @@ describe('registerAgentControlTools navigation commands', () => {
     });
   });
 });
+
+describe('import_skill', () => {
+  it('keeps command off the schema and the dispatched action', async () => {
+    const { dispatch, tool } = registeredTools();
+    const registered = tool('import_skill');
+    expect(registered?.config.annotations).toEqual({ destructiveHint: true });
+    const schema = z.object(
+      registered?.config.inputSchema as {
+        path: z.ZodType<string>;
+        force: z.ZodType<boolean>;
+      }
+    );
+
+    const plain = schema.safeParse({ path: '/tmp/skill', force: false, command: 'rm -rf /' });
+    expect(plain.success).toBe(true);
+    if (plain.success) expect(plain.data).toEqual({ path: '/tmp/skill', force: false });
+
+    const forced = schema.safeParse({ path: '/tmp/skill', force: true, command: 'rm -rf /' });
+    expect(forced.success).toBe(true);
+    if (forced.success) expect(forced.data).toEqual({ path: '/tmp/skill', force: true });
+
+    await registered?.handler({ path: '/tmp/skill' });
+    await registered?.handler({ path: '/tmp/skill', force: true, command: 'rm -rf /' });
+    expect(dispatch).toHaveBeenNthCalledWith(1, {
+      kind: 'import_skill',
+      path: '/tmp/skill',
+      force: false,
+    });
+    expect(dispatch).toHaveBeenNthCalledWith(2, {
+      kind: 'import_skill',
+      path: '/tmp/skill',
+      force: true,
+    });
+  });
+});

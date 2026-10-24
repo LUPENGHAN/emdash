@@ -25,6 +25,7 @@ const expectedModalIds = [
   'feedbackModal',
   'githubDeviceFlowModal',
   'importGitHubSkillModal',
+  'importLocalSkillModal',
   'integrationSetupModal',
   'languageServicesDialog',
   'linkConversationModal',
@@ -55,9 +56,10 @@ function openRemoteCreateSkillForTypeTest(host: HostRef) {
   return openModal('createSkillModal', { host });
 }
 
-function openSkillDetailForTypeTest(skill: CatalogSkill) {
+function openSkillDetailForTypeTest(skill: CatalogSkill, host: HostRef) {
   return openModal('skillDetailModal', {
     skill,
+    host,
     onInstall: async () => true,
     onUninstall: async () => true,
   });

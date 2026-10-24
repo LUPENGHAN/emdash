@@ -241,6 +241,28 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     ({ task_id }) => dispatch({ kind: 'delete_task', taskId: task_id })
   );
 
+  server.registerTool(
+    'import_skill',
+    {
+      description:
+        "Import a skill folder or .zip into Emdash's skill library (~/.agentskills). " +
+        'Creates missing skills. Replacing one that is already there asks the user in Emdash, unless force is true. ' +
+        'path is a filesystem path, never a shell command. Files stay inside the library.',
+      inputSchema: {
+        path: z
+          .string()
+          .min(1)
+          .describe('Absolute path, or a path relative to this task, of a skill folder or .zip'),
+        force: z
+          .boolean()
+          .default(false)
+          .describe('Replace an existing skill without the confirm dialog'),
+      },
+      annotations: { destructiveHint: true },
+    },
+    ({ path, force = false }) => dispatch({ kind: 'import_skill', path, force })
+  );
+
   // ── The project's requirements list ────────────────────────────────────────────
   server.registerTool(
     'add_requirement',
