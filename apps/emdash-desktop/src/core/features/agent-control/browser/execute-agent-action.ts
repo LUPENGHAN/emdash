@@ -35,6 +35,7 @@ import { getNavigation } from '@core/primitives/navigation/browser/navigation-se
 import { resolveTaskBranchName } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult, OpenTarget } from '../api';
 import { runBrowserOp, type AutomatableBrowser } from './browser-automation';
+import { listNavigationCommands, runNavigationCommand } from './navigation-command';
 import { removalBlocker } from './task-removal';
 import { readableTerminals, renderTerminalTail } from './terminal-reader';
 
@@ -181,6 +182,12 @@ export async function executeAgentAction(
       );
       return runBrowserOp(browser, action.browser);
     }
+
+    case 'list_commands':
+      return { text: listNavigationCommands() };
+
+    case 'run_command':
+      return { text: runNavigationCommand(action.commandId) };
   }
 }
 

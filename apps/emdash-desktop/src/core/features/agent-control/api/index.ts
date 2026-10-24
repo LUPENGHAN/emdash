@@ -34,6 +34,35 @@ export type OpenTarget =
   | { type: 'diff'; path: string; staged?: boolean }
   | { type: 'url'; url: string };
 
+/** UI commands an agent may list and run. Anything else stays on its own tool. */
+export const NAVIGATION_COMMAND_IDS = [
+  'app.toggleTheme',
+  'app.navigateBack',
+  'app.navigateForward',
+  'app.commandPalette',
+  'workbench.toggleLeftSidebar',
+  'workbench.zenMode',
+  'workbench.tabNext',
+  'workbench.tabPrev',
+  'workbench.tabReopen',
+  'task.sidebarChanges',
+  'task.sidebarFiles',
+  'task.sidebarConversations',
+  'task.viewTerminals',
+  'task.toggleTerminalDrawer',
+  'task.toggleRightSidebar',
+  'task.openBrowser',
+  'task.browserGoBack',
+  'task.browserGoForward',
+  'task.browserReload',
+  'task.browserFocusUrl',
+  'task.browserCopyUrl',
+  'task.nextTask',
+  'task.prevTask',
+] as const;
+
+export type NavigationCommandId = (typeof NAVIGATION_COMMAND_IDS)[number];
+
 export type AgentControlAction =
   | { kind: 'list_conversations'; scope: 'task' | 'project' }
   | {
@@ -63,7 +92,9 @@ export type AgentControlAction =
   | { kind: 'read_terminal'; name?: string; lines: number }
   | { kind: 'run_in_terminal'; command: string }
   | { kind: 'notify'; title?: string; message: string }
-  | { kind: 'browser'; browser: BrowserOp };
+  | { kind: 'browser'; browser: BrowserOp }
+  | { kind: 'list_commands' }
+  | { kind: 'run_command'; commandId: NavigationCommandId };
 
 export type AgentControlRequest = {
   requestId: string;

@@ -1,5 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import { NAVIGATION_COMMAND_IDS } from '../api';
 import type { AgentControlToolContext } from './mcp-tools';
 import { registerAgentControlTools } from './mcp-tools';
 
@@ -68,6 +70,62 @@ describe('registerAgentControlTools task tools', () => {
     expect(schema.include_archived?.safeParse(undefined)).toMatchObject({
       success: true,
       data: false,
+    });
+  });
+});
+
+const REFUSED_COMMAND_IDS = [
+  'task.deleteSelected',
+  'task.archive',
+  'task.gitPush',
+  'task.gitPull',
+  'task.gitFetch',
+  'app.voiceInput',
+] as const;
+
+describe('registerAgentControlTools navigation commands', () => {
+  it('lists commands with an empty read-only input and does not run them', async () => {
+    const { dispatch, tool } = registeredTools();
+    const listed = tool('list_commands');
+
+    expect(listed?.config.annotations).toEqual({ readOnlyHint: true });
+    expect(listed?.config.inputSchema).toBeUndefined();
+
+    await listed?.handler({});
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({ kind: 'list_commands' });
+  });
+
+  it('accepts only the navigation allowlist and drops extra fields', async () => {
+    const { dispatch, tool } = registeredTools();
+    const shape = tool('run_command')?.config.inputSchema as {
+      command_id: z.ZodType<string>;
+    };
+    const schema = z.object(shape);
+
+    for (const commandId of NAVIGATION_COMMAND_IDS) {
+      expect(schema.safeParse({ command_id: commandId }).success).toBe(true);
+    }
+    for (const commandId of REFUSED_COMMAND_IDS) {
+      expect(schema.safeParse({ command_id: commandId }).success).toBe(false);
+    }
+
+    const parsed = schema.safeParse({
+      command_id: 'task.sidebarFiles',
+      skipConfirm: true,
+      force: true,
+      source: 'menu',
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data).toEqual({ command_id: 'task.sidebarFiles' });
+
+    await tool('run_command')?.handler({
+      command_id: 'task.sidebarFiles',
+      skipConfirm: true,
+    });
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: 'run_command',
+      commandId: 'task.sidebarFiles',
     });
   });
 });

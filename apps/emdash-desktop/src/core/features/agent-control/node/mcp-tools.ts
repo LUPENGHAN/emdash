@@ -7,7 +7,12 @@ import {
   type Requirement,
   type RequirementsOperations,
 } from '@core/features/requirements/api/types';
-import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
+import {
+  NAVIGATION_COMMAND_IDS,
+  type AgentCaller,
+  type AgentControlAction,
+  type AgentControlResult,
+} from '../api';
 
 /** Agents Emdash can start; the ids tools accept for `agent`. */
 export const AGENT_IDS = ['claude', 'codex', 'opencode', 'pi', 'oh-my-pi', 'cursor'] as const;
@@ -346,6 +351,29 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       inputSchema: { message: z.string().min(1), title: z.string().optional() },
     },
     ({ message, title }) => dispatch({ kind: 'notify', message, title })
+  );
+
+  // ── Driving the UI ─────────────────────────────────────────────────────────────
+  server.registerTool(
+    'list_commands',
+    {
+      description:
+        'Commands you can run in the Emdash UI. Each line is the command id, whether it is enabled, disabled, or hidden, and its title.',
+      annotations: { readOnlyHint: true },
+    },
+    () => dispatch({ kind: 'list_commands' })
+  );
+
+  server.registerTool(
+    'run_command',
+    {
+      description:
+        'Run one enabled command from list_commands. This does the same thing as choosing that command in the command palette.',
+      inputSchema: {
+        command_id: z.enum(NAVIGATION_COMMAND_IDS).describe('A command id from list_commands'),
+      },
+    },
+    ({ command_id }) => dispatch({ kind: 'run_command', commandId: command_id })
   );
 
   // ── The built-in browser ───────────────────────────────────────────────────────
