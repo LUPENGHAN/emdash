@@ -34,6 +34,7 @@ let releaseStage: Deferred<void>;
 let failStage: boolean;
 let unstageStarted: Deferred<void>;
 let releaseUnstage: Deferred<void>;
+const switchBranchMock = vi.fn(async (_context: { input: { branch: unknown } }) => ok<void>());
 
 vi.mock('@core/features/source-control/api/browser/client', async (importOriginal) => {
   const actual = await importOriginal<typeof SourceControlClientModule>();
@@ -75,6 +76,8 @@ describe('GitCheckoutStore', () => {
     failStage = false;
     unstageStarted = deferred<void>();
     releaseUnstage = deferred<void>();
+    switchBranchMock.mockReset();
+    switchBranchMock.mockImplementation(async () => ok<void>());
     mocks.getChangedFiles.mockResolvedValue(ok({ files: [] }));
     mocks.getPullRequestsForHead.mockResolvedValue(ok({ prs: [] }));
     mocks.refreshPullRequest.mockResolvedValue(ok(undefined));
@@ -452,6 +455,33 @@ describe('GitCheckoutStore', () => {
       store.dispose();
     }
   });
+
+  it('does not call switchBranch when the checkout is already on that branch', async () => {
+    headState.set(head('main'));
+    const store = new GitCheckoutStore('project-1', 'workspace-1', '/repo');
+    store.start();
+    await waitFor(() => store.branchName === 'main');
+
+    await expect(store.switchBranch({ type: 'local', branch: 'main' })).resolves.toEqual(
+      ok(undefined)
+    );
+    expect(switchBranchMock).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it('sends switchBranch on this workspace model', async () => {
+    headState.set(head('main'));
+    const store = new GitCheckoutStore('project-1', 'workspace-1', '/repo');
+    store.start();
+    await waitFor(() => store.branchName === 'main');
+    const branch = { type: 'local' as const, branch: 'feature' };
+
+    await store.switchBranch(branch);
+
+    expect(switchBranchMock).toHaveBeenCalledTimes(1);
+    expect(switchBranchMock.mock.calls[0]?.[0].input.branch).toEqual(branch);
+    store.dispose();
+  });
 });
 
 function createSourceControlWire(statusQuery?: Query<CheckoutStatusState>) {
@@ -504,6 +534,9 @@ function createSourceControlWire(statusQuery?: Query<CheckoutStatusState>) {
         },
         async commit() {
           return ok({ hash: 'abc123' });
+        },
+        async switchBranch(context) {
+          return switchBranchMock(context);
         },
       },
     }

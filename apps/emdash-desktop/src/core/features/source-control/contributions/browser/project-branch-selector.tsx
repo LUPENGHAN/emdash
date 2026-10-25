@@ -21,6 +21,7 @@ export interface ProjectBranchSelectorProps {
   branchLabelRemote?: BranchLabelRemoteMode;
   trigger?: React.ReactNode;
   showRemoteSelectorFooter?: boolean;
+  selectionDisabledReason?: string | null;
 }
 
 export const ProjectBranchSelector = observer(function ProjectBranchSelector({
@@ -32,6 +33,7 @@ export const ProjectBranchSelector = observer(function ProjectBranchSelector({
   branchLabelRemote,
   trigger,
   showRemoteSelectorFooter = false,
+  selectionDisabledReason = null,
 }: ProjectBranchSelectorProps) {
   const repo = getGitRepositoryStore(projectId);
   const context = asAvailableProject(getProjectStore(projectId));
@@ -59,6 +61,7 @@ export const ProjectBranchSelector = observer(function ProjectBranchSelector({
       trigger={trigger}
       onRefresh={() => repo?.refresh()}
       refreshDisabledReason={refreshDisabledReason}
+      selectionDisabledReason={selectionDisabledReason}
       observationKind={repo?.refsObservation.kind ?? 'unavailable'}
       isRefreshing={repo?.loading ?? false}
       remotes={canSelectRemote ? repo?.remotes : undefined}

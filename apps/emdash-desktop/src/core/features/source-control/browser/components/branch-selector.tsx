@@ -27,6 +27,7 @@ interface BranchSelectorProps {
   onRefresh?: () => void;
   isRefreshing?: boolean;
   refreshDisabledReason?: string | null;
+  selectionDisabledReason?: string | null;
   observationKind?: 'fresh' | 'stale' | 'unavailable';
   remotes?: GitRemote[];
   selectedRemoteName?: string;
@@ -42,6 +43,7 @@ export function BranchSelector({
   onRefresh,
   isRefreshing = false,
   refreshDisabledReason,
+  selectionDisabledReason = null,
   observationKind = 'fresh',
   remotes,
   selectedRemoteName,
@@ -103,6 +105,7 @@ export function BranchSelector({
         if (reason !== 'item-press') setInputValue(nextInputValue);
       }}
       onOpenChange={(nextOpen) => {
+        if (selectionDisabledReason && nextOpen) return;
         if (!nextOpen && keepOpenForRemoteSelectRef.current) {
           setOpen(true);
           return;
@@ -121,7 +124,10 @@ export function BranchSelector({
             }
           : undefined
       }
-      onValueChange={(v) => v !== null && onValueChange(v.value)}
+      onValueChange={(v) => {
+        if (selectionDisabledReason) return;
+        if (v !== null) onValueChange(v.value);
+      }}
       isItemEqualToValue={(a, b) => {
         if (a.value.type !== b.value.type) return false;
         if (a.value.branch !== b.value.branch) return false;
@@ -132,7 +138,11 @@ export function BranchSelector({
       }}
     >
       {trigger ?? (
-        <Combobox.Trigger className="hover:bg-muted/30 flex h-9 items-center justify-between rounded-md border border-border px-2.5 py-1 text-left text-sm outline-none">
+        <Combobox.Trigger
+          className="hover:bg-muted/30 flex h-9 items-center justify-between rounded-md border border-border px-2.5 py-1 text-left text-sm outline-none"
+          aria-disabled={selectionDisabledReason ? true : undefined}
+          aria-description={selectionDisabledReason ?? undefined}
+        >
           <div className="text-muted-foreground flex items-center gap-2">
             <GitBranch />
             <Combobox.Value placeholder="Select a branch" />

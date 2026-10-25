@@ -17,6 +17,7 @@ import {
   type DownloadError,
   type DownloadMeta,
   type GitChange,
+  type GitBranchRef,
   type GitCommandError,
   type BoundGitFileContentKey,
   type GitFileContentState,
@@ -139,6 +140,39 @@ export class GitCheckout {
       if (!options.includeUntracked) return;
       const untracked = await this.untrackedPathsWithoutSymlinks();
       if (untracked.length > 0) await this.exec.exec(['clean', '-fd', '--', ...untracked]);
+    });
+  }
+
+  async switchBranch(target: GitBranchRef): Promise<Result<void, GitCommandError>> {
+    const name = target.branch;
+    return this.commandMutation(async () => {
+      try {
+        const { stdout } = await this.exec.exec(['symbolic-ref', 'HEAD']);
+        if (stdout.trim() === `refs/heads/${name}`) return;
+      } catch (error) {
+        if (!checkoutFailures.isDetachedHead(error)) throw error;
+      }
+
+      let localRefExists = false;
+      try {
+        await this.exec.exec(['show-ref', '--verify', '--quiet', `refs/heads/${name}`]);
+        localRefExists = true;
+      } catch {
+        localRefExists = false;
+      }
+
+      if (localRefExists || target.type === 'local') {
+        await this.exec.exec(['switch', '--no-guess', '--', name]);
+        return;
+      }
+
+      await this.exec.exec([
+        'switch',
+        '-c',
+        name,
+        '--track',
+        `refs/remotes/${target.remote.name}/${name}`,
+      ]);
     });
   }
 

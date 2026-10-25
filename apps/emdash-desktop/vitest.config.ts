@@ -39,7 +39,10 @@ export default defineConfig({
           name: 'node',
           environment: 'node',
           setupFiles: [resolve(__dirname, 'tooling/vitest/setup-app-config.ts')],
-          include: ['src/**/*.test.ts'],
+          include: [
+            'src/**/*.test.ts',
+            'src/core/features/source-control/browser/diff-view/changes-panel/git-status-section.test.tsx',
+          ],
           exclude: [
             '**/_*/**',
             '**/*.db.test.ts',

@@ -1,6 +1,8 @@
-import { Button, Tooltip } from '@emdash/ui/react/primitives';
+import type { GitBranchRef } from '@emdash/core/runtimes/git/api';
+import { Button, Combobox, Tooltip, useToast } from '@emdash/ui/react/primitives';
 import { ArrowDown, ArrowUp, GitBranch, RefreshCcw } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
+import { useRef, useState } from 'react';
 import {
   asAvailableProject,
   getProjectStore,
@@ -9,6 +11,7 @@ import {
 import { getGitRepositoryStore } from '@core/features/source-control/api/browser/stores/source-control-selectors';
 import { getTaskGitCheckoutStore } from '@core/features/source-control/api/browser/stores/task-source-control-selectors';
 import { useGitActions } from '@core/features/source-control/api/browser/use-git-actions';
+import { ProjectBranchSelector } from '@core/features/source-control/contributions/browser/project-branch-selector';
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
 import { useOpenModal } from '@core/manifests/browser/modal-api';
@@ -46,6 +49,30 @@ export const GitStatusSection = observer(function GitStatusSection() {
     isPushing,
   } = useGitActions(projectId, taskId);
   const shouldOfferAddRemote = (repositoryStore?.remotes.length ?? 0) === 0;
+  const { toast } = useToast();
+  const [switching, setSwitching] = useState(false);
+  const switchingRef = useRef(false);
+  const selectedBranch =
+    git?.headKind === 'branch'
+      ? repositoryStore?.branchRefs.find(
+          (branch) => branch.type === 'local' && branch.branch === git.branchName
+        )
+      : undefined;
+
+  const handleBranchChange = async (branch: GitBranchRef) => {
+    if (!git || switching || switchingRef.current) return;
+    switchingRef.current = true;
+    setSwitching(true);
+    try {
+      const result = await git.switchBranch(branch);
+      if (!result.success) {
+        toast.error('Could not switch branch', { description: result.error.message });
+      }
+    } finally {
+      switchingRef.current = false;
+      setSwitching(false);
+    }
+  };
 
   const handlePublishClick = () => {
     if (hostActionDisabled || !headDisplay || headKind !== 'branch' || !workspaceId) return;
@@ -65,12 +92,30 @@ export const GitStatusSection = observer(function GitStatusSection() {
       <div className="flex flex-col gap-2 border-t border-border p-2">
         <div className="flex items-center justify-between gap-2 text-foreground-muted">
           <Tooltip.Root>
-            <Tooltip.Trigger className="flex min-w-0 items-center gap-2">
-              <GitBranch className="size-3 shrink-0" />
-              <span className="truncate text-xs">{headDisplay}</span>
-            </Tooltip.Trigger>
+            <ProjectBranchSelector
+              projectId={projectId}
+              value={selectedBranch}
+              selectionDisabledReason={hostActionReason}
+              onValueChange={(branch) => {
+                void handleBranchChange(branch);
+              }}
+              trigger={
+                <Tooltip.Trigger
+                  render={
+                    <Combobox.Trigger
+                      className="flex min-w-0 items-center gap-2"
+                      aria-disabled={hostActionDisabled}
+                      aria-description={hostActionReason ?? undefined}
+                    >
+                      <GitBranch className="size-3 shrink-0" />
+                      <span className="truncate text-xs">{headDisplay}</span>
+                    </Combobox.Trigger>
+                  }
+                />
+              }
+            />
             <Tooltip.Content side="bottom">
-              {getBranchTooltipText(headDisplay, headKind)}
+              {hostActionReason ?? getBranchTooltipText(headDisplay, headKind)}
             </Tooltip.Content>
           </Tooltip.Root>
           <div className="flex items-center gap-1">

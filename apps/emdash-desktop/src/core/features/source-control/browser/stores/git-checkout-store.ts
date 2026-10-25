@@ -2,6 +2,7 @@ import { encodeResourceUri } from '@emdash/core/primitives/path/api';
 import {
   shortName,
   type CheckoutHeadState,
+  type GitBranchRef,
   type CheckoutStatusState,
   type GitChange,
 } from '@emdash/core/runtimes/git/api';
@@ -339,6 +340,12 @@ export class GitCheckoutStore {
     return settleMutation(
       model.mutations.revertAll({ includeUntracked: options.includeUntracked })
     );
+  }
+
+  async switchBranch(branch: GitBranchRef) {
+    if (this.headKind === 'branch' && this.branchName === branch.branch) return ok(undefined);
+    const model = await this.requireModel();
+    return settleMutation(model.mutations.switchBranch({ branch }));
   }
 
   async commit(message: string) {

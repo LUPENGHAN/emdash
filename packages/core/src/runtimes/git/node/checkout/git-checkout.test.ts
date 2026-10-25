@@ -71,6 +71,56 @@ async function makeCheckout(existingRepo?: string) {
   return { repo, checkout, cleanup };
 }
 
+function openCheckout(repo: string) {
+  const calls: string[][] = [];
+  const gitDir = path.join(repo, '.git');
+  const identity = {
+    repositoryId: gitDir,
+    objectStoreId: path.join(gitDir, 'objects'),
+    checkoutId: JSON.stringify([repo, gitDir]),
+    checkoutRoot: repo,
+    gitDir,
+    gitCommonDir: gitDir,
+    objectStoreDir: path.join(gitDir, 'objects'),
+  } as CheckoutIdentity;
+  const bound = createBoundExec({ file: 'git', cwd: repo });
+  const exec = bound.exec.bind(bound);
+  const checkout = new GitCheckout({
+    identity,
+    exec: Object.assign(bound, {
+      async exec(args: string[], options?: Parameters<typeof bound.exec>[1]) {
+        calls.push([...args]);
+        return exec(args, options);
+      },
+    }),
+  });
+  return { checkout, calls };
+}
+
+const originRemote = { name: 'origin', url: 'https://example.com/repo.git' };
+
+async function git(repo: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd: repo });
+  return stdout.trim();
+}
+
+async function showRef(repo: string, ref: string): Promise<boolean> {
+  try {
+    await execFileAsync('git', ['show-ref', '--verify', '--quiet', ref], { cwd: repo });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function gitConfig(repo: string, key: string): Promise<string | null> {
+  try {
+    return await git(repo, ['config', '--get', key]);
+  } catch {
+    return null;
+  }
+}
+
 function okStatus(model: CheckoutStatusState): Extract<CheckoutStatusState, { kind: 'ok' }> {
   expect(model.kind).toBe('ok');
   if (model.kind !== 'ok') throw new Error(`expected ok status, got ${model.kind}`);
@@ -618,4 +668,281 @@ describe('GitCheckout', () => {
       }
     }
   );
+});
+
+describe('GitCheckout.switchBranch', () => {
+  it('leaves a dirty checkout in place when git refuses the switch', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      await git(repo, ['checkout', '-b', 'other']);
+      await writeFile(path.join(repo, 'tracked.txt'), 'other\n', 'utf8');
+      await git(repo, ['commit', '-am', 'other']);
+      await git(repo, ['checkout', 'main']);
+      await writeFile(path.join(repo, 'tracked.txt'), 'third\n', 'utf8');
+
+      const refused = await checkout.switchBranch({ type: 'local', branch: 'other' });
+      expect(refused.success).toBe(false);
+      if (refused.success) throw new Error('expected git to refuse the switch');
+      expect(refused.error.type).toBe('git_error');
+      expect(refused.error.message.toLowerCase()).toMatch(/overwritten|local changes/);
+      await expect(checkout.getHead()).resolves.toMatchObject({ ref: 'refs/heads/main' });
+      await expect(readFile(path.join(repo, 'tracked.txt'), 'utf8')).resolves.toBe('third\n');
+
+      await git(repo, ['checkout', '-b', 'topic']);
+      await writeFile(path.join(repo, 'tracked.txt'), 'remote\n', 'utf8');
+      await git(repo, ['commit', '-am', 'remote topic']);
+      const topic = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', 'main']);
+      await git(repo, ['branch', '-D', 'topic']);
+      await git(repo, ['remote', 'add', 'origin', originRemote.url]);
+      await git(repo, ['update-ref', 'refs/remotes/origin/topic', topic]);
+      await writeFile(path.join(repo, 'tracked.txt'), 'third\n', 'utf8');
+
+      const created = await checkout.switchBranch({
+        type: 'remote',
+        branch: 'topic',
+        remote: originRemote,
+      });
+      expect(created.success).toBe(false);
+      if (created.success) throw new Error('expected git to refuse creating the branch');
+      expect(created.error.type).toBe('git_error');
+      expect(await showRef(repo, 'refs/heads/topic')).toBe(false);
+      await expect(checkout.getHead()).resolves.toMatchObject({ ref: 'refs/heads/main' });
+      await expect(readFile(path.join(repo, 'tracked.txt'), 'utf8')).resolves.toBe('third\n');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('carries a non-conflicting dirty file across a branch switch', async () => {
+    const { repo, cleanup } = await makeCheckout();
+    const { checkout, calls } = openCheckout(repo);
+    try {
+      await git(repo, ['checkout', '-b', 'other']);
+      await git(repo, ['checkout', 'main']);
+      await writeFile(path.join(repo, 'extra.txt'), 'keep\n', 'utf8');
+      calls.length = 0;
+
+      const result = await checkout.switchBranch({ type: 'local', branch: 'other' });
+      expect(result.success).toBe(true);
+      await expect(readFile(path.join(repo, 'extra.txt'), 'utf8')).resolves.toBe('keep\n');
+      const argv = calls.flat();
+      expect(argv).not.toContain('--force');
+      expect(argv).not.toContain('-f');
+      expect(argv).not.toContain('reset');
+      expect(argv).not.toContain('-D');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('attaches a detached HEAD to the selected local branch', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      await git(repo, ['checkout', '-b', 'other']);
+      await git(repo, ['checkout', 'main']);
+      await git(repo, ['checkout', '--detach']);
+
+      const result = await checkout.switchBranch({ type: 'local', branch: 'other' });
+      expect(result.success).toBe(true);
+      await expect(checkout.getHead()).resolves.toMatchObject({
+        kind: 'branch',
+        ref: 'refs/heads/other',
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('does not run checkout when HEAD is already that branch', async () => {
+    const { repo, cleanup } = await makeCheckout();
+    const { checkout, calls } = openCheckout(repo);
+    try {
+      await git(repo, ['checkout', '-b', 'feature']);
+      await git(repo, ['remote', 'add', 'origin', originRemote.url]);
+      await git(repo, ['update-ref', 'refs/remotes/origin/feature', 'HEAD']);
+      calls.length = 0;
+
+      const local = await checkout.switchBranch({ type: 'local', branch: 'feature' });
+      const remote = await checkout.switchBranch({
+        type: 'remote',
+        branch: 'feature',
+        remote: originRemote,
+      });
+      expect(local.success).toBe(true);
+      expect(remote.success).toBe(true);
+      expect(calls.some((args) => args[0] === 'switch' || args[0] === 'checkout')).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('checks out the existing local branch for a remote ref', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      await git(repo, ['checkout', '-b', 'feature']);
+      await writeFile(path.join(repo, 'tracked.txt'), 'local\n', 'utf8');
+      await git(repo, ['commit', '-am', 'local feature']);
+      const localOid = await git(repo, ['rev-parse', 'refs/heads/feature']);
+      await git(repo, ['checkout', 'main']);
+      await writeFile(path.join(repo, 'tracked.txt'), 'remote\n', 'utf8');
+      await git(repo, ['commit', '-am', 'remote feature']);
+      const remoteOid = await git(repo, ['rev-parse', 'HEAD']);
+      expect(localOid).not.toBe(remoteOid);
+      await git(repo, ['remote', 'add', 'origin', originRemote.url]);
+      await git(repo, ['update-ref', 'refs/remotes/origin/feature', remoteOid]);
+      const remoteBefore = await gitConfig(repo, 'branch.feature.remote');
+      const mergeBefore = await gitConfig(repo, 'branch.feature.merge');
+
+      const result = await checkout.switchBranch({
+        type: 'remote',
+        branch: 'feature',
+        remote: originRemote,
+      });
+      expect(result.success).toBe(true);
+      await expect(checkout.getHead()).resolves.toMatchObject({ oid: localOid });
+      await expect(git(repo, ['rev-parse', 'refs/heads/feature'])).resolves.toBe(localOid);
+      expect(await gitConfig(repo, 'branch.feature.remote')).toBe(remoteBefore);
+      expect(await gitConfig(repo, 'branch.feature.merge')).toBe(mergeBefore);
+      const listed = await git(repo, ['for-each-ref', 'refs/heads/feature']);
+      expect(listed.split('\n').filter(Boolean)).toHaveLength(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('creates a tracking branch for a remote ref with no local branch', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      await git(repo, ['remote', 'add', 'origin', originRemote.url]);
+      await git(repo, ['update-ref', 'refs/remotes/origin/topic', 'HEAD']);
+      const remoteOid = await git(repo, ['rev-parse', 'refs/remotes/origin/topic']);
+      expect(await showRef(repo, 'refs/heads/topic')).toBe(false);
+
+      const result = await checkout.switchBranch({
+        type: 'remote',
+        branch: 'topic',
+        remote: originRemote,
+      });
+      expect(result.success).toBe(true);
+      await expect(checkout.getHead()).resolves.toMatchObject({ oid: remoteOid });
+      expect(await gitConfig(repo, 'branch.topic.remote')).toBe('origin');
+      expect(await gitConfig(repo, 'branch.topic.merge')).toBe('refs/heads/topic');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('does not restore a tracked path when the branch ref is absent', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      await writeFile(path.join(repo, 'tracked.txt'), 'third\n', 'utf8');
+      expect(await showRef(repo, 'refs/heads/tracked.txt')).toBe(false);
+
+      const result = await checkout.switchBranch({ type: 'local', branch: 'tracked.txt' });
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('expected a missing ref to fail');
+      expect(result.error.type).toBe('git_error');
+      await expect(readFile(path.join(repo, 'tracked.txt'), 'utf8')).resolves.toBe('third\n');
+      await expect(checkout.getHead()).resolves.toMatchObject({ ref: 'refs/heads/main' });
+      expect(await showRef(repo, 'refs/heads/tracked.txt')).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('does not create a local branch when only the remote ref exists', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      await git(repo, ['update-ref', 'refs/remotes/origin/topic', 'HEAD']);
+      expect(await showRef(repo, 'refs/heads/topic')).toBe(false);
+      const before = await checkout.getHead();
+      expect(before.kind).toBe('branch');
+      if (before.kind !== 'branch') throw new Error('expected HEAD to be a branch');
+
+      const result = await checkout.switchBranch({ type: 'local', branch: 'topic' });
+      expect(result.success).toBe(false);
+      await expect(checkout.getHead()).resolves.toMatchObject({ ref: before.ref });
+      expect(await showRef(repo, 'refs/heads/topic')).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('checks out an option-like branch name without discarding edits', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      await git(repo, ['update-ref', 'refs/heads/--force', 'HEAD']);
+      await writeFile(path.join(repo, 'tracked.txt'), 'uncommitted\n', 'utf8');
+
+      const result = await checkout.switchBranch({ type: 'local', branch: '--force' });
+      expect(result.success).toBe(true);
+      await expect(checkout.getHead()).resolves.toMatchObject({ ref: 'refs/heads/--force' });
+      await expect(readFile(path.join(repo, 'tracked.txt'), 'utf8')).resolves.toBe('uncommitted\n');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('tracks the remote oid when a local branch is named origin/topic', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      await git(repo, ['checkout', '-b', 'origin/topic']);
+      await writeFile(path.join(repo, 'tracked.txt'), 'local-name\n', 'utf8');
+      await git(repo, ['commit', '-am', 'local name']);
+      const localOid = await git(repo, ['rev-parse', 'refs/heads/origin/topic']);
+      await git(repo, ['checkout', 'main']);
+      const remoteOid = await git(repo, ['rev-parse', 'HEAD']);
+      expect(localOid).not.toBe(remoteOid);
+      await git(repo, ['remote', 'add', 'origin', originRemote.url]);
+      await git(repo, ['update-ref', 'refs/remotes/origin/topic', remoteOid]);
+      expect(await showRef(repo, 'refs/heads/topic')).toBe(false);
+
+      const result = await checkout.switchBranch({
+        type: 'remote',
+        branch: 'topic',
+        remote: originRemote,
+      });
+      expect(result.success).toBe(true);
+      await expect(checkout.getHead()).resolves.toMatchObject({ oid: remoteOid });
+      expect(await gitConfig(repo, 'branch.topic.remote')).toBe('origin');
+      expect(await gitConfig(repo, 'branch.topic.merge')).toBe('refs/heads/topic');
+      await expect(git(repo, ['rev-parse', 'refs/heads/origin/topic'])).resolves.toBe(localOid);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('switches only this checkout and leaves the other worktree alone', async () => {
+    const { repo, checkout: mainCheckout, cleanup } = await makeCheckout();
+    const parent = await mkdtemp(path.join(tmpdir(), 'emdash-git-worktree-'));
+    const worktree = path.join(parent, 'wt');
+    try {
+      await git(repo, ['checkout', '-b', 'feature']);
+      await git(repo, ['checkout', 'main']);
+      await git(repo, ['branch', 'topic']);
+      await git(repo, ['worktree', 'add', worktree, 'feature']);
+      const worktreeRoot = await realpath(worktree);
+      const { checkout: worktreeCheckout } = openCheckout(worktreeRoot);
+
+      const switched = await worktreeCheckout.switchBranch({ type: 'local', branch: 'topic' });
+      expect(switched.success).toBe(true);
+      await expect(worktreeCheckout.getHead()).resolves.toMatchObject({
+        ref: 'refs/heads/topic',
+      });
+      await expect(mainCheckout.getHead()).resolves.toMatchObject({ ref: 'refs/heads/main' });
+
+      const worktreeHead = await worktreeCheckout.getHead();
+      const mainHead = await mainCheckout.getHead();
+      const refused = await worktreeCheckout.switchBranch({ type: 'local', branch: 'main' });
+      expect(refused.success).toBe(false);
+      if (refused.success) throw new Error('expected the occupied branch to stay put');
+      expect(refused.error.type).toBe('git_error');
+      expect(await worktreeCheckout.getHead()).toEqual(worktreeHead);
+      expect(await mainCheckout.getHead()).toEqual(mainHead);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+      await cleanup();
+    }
+  });
 });

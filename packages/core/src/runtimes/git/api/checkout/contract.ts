@@ -18,6 +18,7 @@ import {
   pullErrorSchema,
   pushErrorSchema,
 } from '#runtimes/git/api/errors';
+import { gitBranchRefSchema } from '#runtimes/git/api/repository/states/refs';
 import { transferProgressSchema } from '#runtimes/git/api/schemas';
 import { checkoutSelectorSchema } from '#runtimes/git/api/selectors';
 import { gitFileContentKeySchema } from './file-content-key';
@@ -74,6 +75,11 @@ export const gitCheckoutContract = defineContract({
         input: z.object({ message: z.string(), options: commitOptionsSchema.optional() }),
         data: z.object({ hash: z.string() }),
         error: commitErrorSchema,
+      }),
+      switchBranch: mutation({
+        input: z.object({ branch: gitBranchRefSchema }),
+        data: z.void(),
+        error: gitCommandErrorSchema,
       }),
     },
   }),

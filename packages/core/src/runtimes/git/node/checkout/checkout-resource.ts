@@ -185,6 +185,12 @@ export class CheckoutResource {
     return result;
   }
 
+  async switchBranch(context: CheckoutMutationContext<'switchBranch'>) {
+    const result = await this.execute(() => this.commands.switchBranch(context.input.branch));
+    this.historyChanged(result.success);
+    return result;
+  }
+
   async commit(context: CheckoutMutationContext<'commit'>) {
     const result = await this.execute(() =>
       this.commands.commit(context.input.message, context.input.options)
