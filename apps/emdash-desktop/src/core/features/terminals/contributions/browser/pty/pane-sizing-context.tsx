@@ -8,8 +8,7 @@
  * The controller (usePtyPaneResize) owns:
  *   - Converting pane pixel dimensions → cols/rows
  *   - Broadcasting runtime resize calls to ALL sessions (active + background)
- *   - Exposing an observable controllerDims box so mounted terminals can call
- *     term.resize() reactively without re-measuring themselves
+ *   - Exposing controllerDims as the last flushed cols/rows for pre-mount sizing
  */
 
 import type { IObservableValue } from 'mobx';
@@ -22,9 +21,7 @@ import { usePaneDimensions } from '@core/primitives/workbench-shell/browser/tabs
 
 export interface PaneSizingContextValue {
   /**
-   * Observable box: the current cols/rows computed by the per-pane controller.
-   * Mounted terminals subscribe to this to resize their xterm grid without
-   * re-measuring themselves.
+   * Last cols/rows written by a scheduler flush. Null until that first flush.
    */
   controllerDims: IObservableValue<{ cols: number; rows: number } | null>;
   /**
@@ -32,7 +29,7 @@ export interface PaneSizingContextValue {
    * Refines the controller's cell size for accurate cols/rows computation.
    */
   calibrateCell(width: number, height: number): void;
-  /** Returns the latest computed cols/rows synchronously (for pre-mount sizing). */
+  /** Last flushed cols/rows, for pre-mount sizing. Null before the first flush. */
   getCurrentDimensions(): { cols: number; rows: number } | null;
   /** Ref to the pane container element (used for pre-mount dimension fallback). */
   containerRef: React.RefObject<HTMLDivElement | null>;

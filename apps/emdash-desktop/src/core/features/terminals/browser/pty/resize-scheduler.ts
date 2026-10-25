@@ -1,13 +1,12 @@
 import { createDebounced } from '@emdash/shared/scheduling';
 
 /**
- * Leading + trailing debounce for PTY resizes.
+ * Leading + trailing debounce for pane resizes.
  *
- * measureAndResize() resizes the xterm grid SYNCHRONOUSLY (reflowing the
- * buffer).  A pure trailing debounce on the matching PTY resize left the child
- * TUI drawing against stale dimensions for the whole debounce window — its
- * in-place redraws (spinners, the input box) landed at the wrong rows and baked
- * overlapping output into scrollback that only a later full repaint cleared
+ * The flush callback is the only place a pane size change resizes the xterm
+ * grid and calls `resizeBackend` together. Widths that arrive inside the quiet
+ * window stay in the trailing pending value, so a drag does not reflow the
+ * grid on frames where the child has not been told the new cols/rows
  * (ENG-1577: "Claude Code output overlaps input field, fixed by resizing").
  *
  * Firing on the LEADING edge keeps the SIGWINCH the child receives in lockstep

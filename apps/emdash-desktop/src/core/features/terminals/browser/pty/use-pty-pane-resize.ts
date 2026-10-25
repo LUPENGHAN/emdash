@@ -7,8 +7,8 @@
  *   3. Publishes nothing before that calibration, so xterm grids and PTYs are only
  *      ever resized together.
  *   4. Broadcasts runtime resize calls to ALL session IDs in the pane.
- *   5. Exposes an observable `controllerDims` box so mounted terminals can call
- *      term.resize() reactively without re-measuring.
+ *   5. Exposes `controllerDims` as the last flushed cols/rows, for pre-mount sizing.
+ *      The grid is resized in the same flush as the PTY, not on intermediate frames.
  *   6. Listens to terminal-font-changed events and recomputes when font settings change.
  *
  * Must be called inside a PaneDimensionProvider so the sink is available.
@@ -37,9 +37,8 @@ const PTY_RESIZE_DEBOUNCE_MS = 60;
 
 export interface PtyPaneResizeControls {
   /**
-   * Observable box tracking the current cols/rows computed by the controller.
-   * Mounted terminals subscribe to this to keep their xterm grid in sync without
-   * re-measuring themselves.
+   * Last cols/rows written by a scheduler flush. Null until that first flush.
+   * Pre-mount sizing reads this; intermediate drag frames do not update it.
    */
   controllerDims: IObservableValue<{ cols: number; rows: number } | null>;
   /**
@@ -49,8 +48,7 @@ export interface PtyPaneResizeControls {
    */
   calibrateCell(width: number, height: number): void;
   /**
-   * Returns the latest known cols/rows synchronously, for pre-mount sizing.
-   * Returns null until a mounted terminal has calibrated this pane.
+   * Last flushed cols/rows, for pre-mount sizing. Null before the first flush.
    */
   getCurrentDimensions(): { cols: number; rows: number } | null;
 }
@@ -90,12 +88,15 @@ export function usePtyPaneResize(
           term.resize(dims.cols, dims.rows);
         }
       }
+      runInAction(() => {
+        controllerDimsBoxRef.current!.set(dims);
+      });
     }, PTY_RESIZE_DEBOUNCE_MS);
   }
 
   // ── Core recompute ──────────────────────────────────────────────────────────
-  // Converts the pane's pixel dimensions + current cell size → cols/rows,
-  // updates the observable box, and schedules a backend broadcast.
+  // Converts the pane's pixel dimensions + current cell size → cols/rows
+  // and hands that pair to the scheduler. The flush resizes the PTY and the grid.
   const sinkRef = useRef<PaneDimensionSink | null>(sink);
   sinkRef.current = sink;
 
@@ -128,9 +129,6 @@ export function usePtyPaneResize(
     // painting against a grid that reflowed underneath it (#2985).
     if (!hasCalibratedRef.current) return;
 
-    runInAction(() => {
-      controllerDimsBoxRef.current!.set(dims);
-    });
     schedulerRef.current?.schedule(dims);
   }, []);
 

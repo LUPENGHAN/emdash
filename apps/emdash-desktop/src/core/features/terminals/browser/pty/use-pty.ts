@@ -1,5 +1,4 @@
 import { type Terminal } from '@xterm/xterm';
-import { reaction } from 'mobx';
 import { useCallback, useEffect, useRef } from 'react';
 import type { FrontendPty, SessionTheme } from '@core/features/terminals/api/browser/pty/pty';
 import { TERMINAL_PADDING_PX } from '@core/features/terminals/api/browser/pty/pty';
@@ -124,11 +123,10 @@ export function usePty(
   const inputContextRef = useRef(inputContext);
   inputContextRef.current = inputContext;
 
-  // The per-pane controller owns PTY backend resizes (broadcast to ALL sessions)
-  // and exposes an observable controllerDims box so this terminal can call
-  // term.resize() reactively. PtyPane guarantees a context is always present by
-  // self-provisioning a PaneDimensionProvider + PaneSizingContextProvider when
-  // no ancestor provides one.
+  // The per-pane controller resizes every session's PTY and xterm grid in one
+  // flush, and exposes the last flushed cols/rows for pre-mount sizing.
+  // PtyPane guarantees a context is always present by self-provisioning a
+  // PaneDimensionProvider + PaneSizingContextProvider when no ancestor provides one.
   const paneSizing = usePaneSizingContext();
   // Ref so the main effect (which only re-runs on sessionId change) always
   // accesses the latest context value without needing it as a dependency.
@@ -153,15 +151,14 @@ export function usePty(
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   // Calibrates the per-pane controller with the mounted terminal's real cell
-  // metrics. The controller recomputes cols/rows, updates controllerDims, and
-  // broadcasts runtime resize calls to ALL sessions. The MobX reaction below then
-  // applies term.resize() to the visible grid.
+  // metrics. The controller recomputes cols/rows and, on a scheduler flush,
+  // resizes the PTY and the xterm grid together.
   //
   // Cold-path retry: the terminal is opened off-DOM so xterm's font measurement
   // may not be populated yet on the first call — retries up to 5 times.
   //
-  // Runs synchronously so the xterm DOM catches up in the same paint as the
-  // new container size (ENG-1577).
+  // The first flush still runs inside the ResizeObserver turn when the debounce
+  // leading edge fires, so the grid catches up before the next paint (ENG-1577).
   const measureAndResize = useCallback(
     (retries = 0) => {
       try {
@@ -183,10 +180,8 @@ export function usePty(
           return;
         }
 
-        // Calibrate the controller with exact cell metrics.
-        // The controller recomputes cols/rows, updates controllerDims, and
-        // broadcasts runtime resize calls to all sessions. The MobX reaction below
-        // applies term.resize() when controllerDims changes.
+        // Calibrate the controller with exact cell metrics. A flush then resizes
+        // the PTY and the xterm grid together.
         pane.calibrateCell(cell.width, cell.height);
       } catch (e) {
         log.warn('useTerminal: measureAndResize failed', { sessionId, error: e });
@@ -323,10 +318,8 @@ export function usePty(
       frontendPty.mount(container as HTMLElement, targetDims);
 
       // Always sync after mounting — targetDims may be stale if the pane was
-      // resized while this session was off-screen.
-      // Pane path: calibrate the controller cell metrics so it recomputes
-      //   cols/rows and applies term.resize() via the controllerDims reaction.
-      // Standalone path: measure locally and queue PTY resize.
+      // resized while this session was off-screen. Calibrate the controller so
+      // its next flush resizes the PTY and the grid together.
       measureAndResize();
 
       // ── Load settings ──────────────────────────────────────────────────────
@@ -612,36 +605,12 @@ export function usePty(
             handleMacOptionIsMetaChange
           )
       );
-
-      // ── Resize trigger ────────────────────────────────────────────────────
-      // React to controllerDims — the observable box updated by the per-pane
-      // resize controller when pane pixel dimensions or cell size changes.
-      // The controller owns PTY backend broadcasts; here we only apply
-      // term.resize() to keep the visible xterm grid in sync. The reaction
-      // fires synchronously within the ResizeObserver → MobX action → reaction
-      // chain, preserving the "resize before next paint" guarantee (ENG-1577).
-      const paneAtMount = paneSizingRef.current;
-      if (paneAtMount) {
-        const disposeReaction = reaction(
-          () => paneAtMount.controllerDims.get(),
-          (dims) => {
-            if (!dims) return;
-            const term = termRef.current;
-            if (!term) return;
-            if (term.cols !== dims.cols || term.rows !== dims.rows) {
-              term.resize(dims.cols, dims.rows);
-            }
-          }
-        );
-        cleanups.push(disposeReaction);
-      }
     }
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
     return () => {
-      // controllerDims reaction and other cleanups run BEFORE unmount —
-      // preserving the invariant that they are torn down before the
-      // ownedContainer is reparented off-screen.
+      // Cleanups run BEFORE unmount — preserving the invariant that they are
+      // torn down before the ownedContainer is reparented off-screen.
       for (const fn of cleanups) {
         try {
           fn();
