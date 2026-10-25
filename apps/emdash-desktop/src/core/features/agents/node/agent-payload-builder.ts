@@ -124,7 +124,7 @@ async function buildOne(
     usedId: sourceKey(used),
   };
   if (connectionId || !view?.resolved?.path) return payload;
-  return applyAgentRelease(payload, await agentReleaseForDisplay(id, view.resolved.path));
+  return applyAgentRelease(payload, await agentReleaseForDisplay(id, view.resolved.path, provider));
 }
 
 export async function buildAgentPayload(

@@ -1,7 +1,8 @@
 import { CollectionView, useQueryListSource } from '@emdash/ui/react/patterns';
 import { BotIcon } from 'lucide-react';
-import React, { useLayoutEffect, useState } from 'react';
+import React, { useLayoutEffect, useMemo, useState } from 'react';
 import { hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
+import { useAgentInstallationStatuses } from '@core/features/agents/api/browser/use-agent-installation-statuses';
 import { useAgents } from '@core/features/agents/api/browser/use-agents';
 import { AgentDetailSheet } from '@core/features/settings/browser/agents-page/AgentDetailSheet';
 import { AgentRow } from '@core/features/settings/browser/agents-page/AgentRow';
@@ -25,6 +26,11 @@ export const CliAgentsList: React.FC<CliAgentsListProps> = ({
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const host = hostRefFromConnectionId(connectionId);
   const agentsQuery = useAgents(host);
+  const { data: statuses } = useAgentInstallationStatuses(host);
+  const statusById = useMemo(
+    () => new Map((statuses ?? []).map((status) => [status.id, status])),
+    [statuses]
+  );
 
   const source = useQueryListSource(agentsQuery, (agents: AgentPayload[]) => agents);
   const [view] = useState(() => createAgentsListView(source));
@@ -42,7 +48,7 @@ export const CliAgentsList: React.FC<CliAgentsListProps> = ({
       <view.Root>
         <CollectionView
           view={view}
-          renderRow={(agent) => <AgentRow agent={agent} />}
+          renderRow={(agent) => <AgentRow agent={agent} status={statusById.get(agent.id)} />}
           layout="grouped"
           density="compact"
           toolbar={toolbar}

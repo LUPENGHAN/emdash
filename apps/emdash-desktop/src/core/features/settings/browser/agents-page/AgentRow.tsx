@@ -2,20 +2,31 @@ import { getAgentUpdateActionState } from '@core/features/agents/api/browser/com
 import { AgentCapabilityIcons } from '@core/features/agents/contributions/browser/agent-capability-icons';
 import { AgentIcon } from '@core/features/agents/contributions/browser/agent-icon';
 import { UpdateAvailableBadge } from '@core/features/settings/browser/agents-page/agent-status-badge';
-import { agentSupportsAcp, type AgentPayload } from '@core/primitives/agents/api';
+import {
+  agentSupportsAcp,
+  type AgentInstallationStatus,
+  type AgentPayload,
+} from '@core/primitives/agents/api';
 
 /** Row content (icon tile + name + capability cluster) — the CollectionView shell owns interaction. */
-export const AgentRow = ({ agent }: { agent: AgentPayload }) => {
+export const AgentRow = ({
+  agent,
+  status,
+}: {
+  agent: AgentPayload;
+  status?: AgentInstallationStatus;
+}) => {
   // Installed state is not repeated here: the list sections already group by it.
   const supportsChatUi = agentSupportsAcp(agent.capabilities);
 
   const updates = agent.capabilities.hostDependency.updates;
   const updateStrategyKind = updates.kind === 'supported' ? updates.update.kind : 'none';
+  const versions = status ?? agent;
   const updateState = getAgentUpdateActionState({
-    updateAvailable: agent.updateAvailable,
+    updateAvailable: versions.updateAvailable,
     updateStrategyKind,
-    version: agent.version,
-    latestVersion: agent.latestVersion,
+    version: versions.version,
+    latestVersion: versions.latestVersion,
     isUpdating: false,
   });
 

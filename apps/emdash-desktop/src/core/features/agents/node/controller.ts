@@ -13,7 +13,7 @@ import { runtimeResolveErrorAsError } from '@emdash/core/services/runtime-broker
 import type { AgentProviderId } from '@emdash/plugins/agents/types';
 import { err, ok, type Result } from '@emdash/shared';
 import type { ContractClient } from '@emdash/wire/rpc';
-import { getPlugin } from '@core/features/agents/api/node/plugin-registry';
+import { getPlugin, isValidProviderId } from '@core/features/agents/api/node/plugin-registry';
 import type { InstallMethod } from '@core/primitives/agents/api';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import { runRuntimeLiveJob } from '@core/services/runtime-clients/node/live-job';
@@ -78,7 +78,10 @@ export function createAgentOperations(dependencies: {
         statuses.map(async (status) => {
           const path = snapshot.dependencies[status.id]?.resolved?.path ?? null;
           if (!path) return status;
-          return applyAgentRelease(status, await agentReleaseForDisplay(status.id, path));
+          const release = isValidProviderId(status.id)
+            ? await agentReleaseForDisplay(status.id, path, getPlugin(status.id))
+            : await agentReleaseForDisplay(status.id, path);
+          return applyAgentRelease(status, release);
         })
       );
     },
@@ -208,10 +211,9 @@ export function createAgentOperations(dependencies: {
     },
 
     refreshLatestVersion: async (id: DependencyId, connectionId?: string): Promise<void> => {
-      clearAgentRelease(id);
       if (connectionId) return;
+      clearAgentRelease(id);
       const provider = getPlugin(id as AgentProviderId);
-      if (!provider) return;
       const mgr = await resolveDependencyManager(getDependencyManager, connectionId);
       const snapshot = await snapshotFor(mgr);
       await loadAgentRelease(id, snapshot.dependencies[id]?.resolved?.path ?? null, provider);
@@ -252,7 +254,7 @@ async function installationStatusAfterLocalChange(
   if (connectionId) return status;
   clearAgentRelease(id);
   if (!status.command) return status;
-  return applyAgentRelease(status, await agentReleaseForDisplay(id, status.command));
+  return applyAgentRelease(status, await agentReleaseForDisplay(id, status.command, getPlugin(id)));
 }
 
 async function snapshotFor(manager: HostDependenciesClient): Promise<HostDependencySnapshot> {

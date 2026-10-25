@@ -1,6 +1,8 @@
 import type { CLIAgentPluginProvider } from '@emdash/core/services/agent-plugins/api/plugins';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getAgentUpdateActionState } from '@core/features/agents/api/browser/components/agent-selector/agent-install';
 import type { Installation } from '@core/primitives/agents/api';
+import { resolveActiveInstallation } from '@core/primitives/agents/api';
 import {
   agentReleaseForDisplay,
   applyAgentRelease,
@@ -10,6 +12,7 @@ import {
   isNewerVersion,
   loadAgentRelease,
   npmPackageFromCommand,
+  npmPackageFromProvider,
   parseVersion,
   peekAgentRelease,
 } from './agent-release';
@@ -77,6 +80,31 @@ describe('agent release parsing', () => {
   it('reads a version out of a --version line', () => {
     expect(parseVersion('claude 2.1.140 (Claude Code)')).toBe('2.1.140');
     expect(parseVersion('no version here')).toBeNull();
+    expect(parseVersion('v18.12.6')).toBe('18.12.6');
+    expect(isNewerVersion('18.12.6', '18.11.1')).toBe(true);
+    expect(isNewerVersion('v18.12.6', '18.12.6')).toBe(false);
+  });
+
+  it('hides the update action when the latest version is unknown', () => {
+    expect(isNewerVersion(null, '2.1.310')).toBe(false);
+    expect(
+      getAgentUpdateActionState({
+        updateAvailable: false,
+        updateStrategyKind: 'cli',
+        version: '2.1.310',
+        latestVersion: null,
+        isUpdating: false,
+      }).render
+    ).toBe(false);
+    expect(
+      getAgentUpdateActionState({
+        updateAvailable: false,
+        updateStrategyKind: 'package-manager',
+        version: '1.0.0',
+        latestVersion: null,
+        isUpdating: false,
+      }).render
+    ).toBe(false);
   });
 
   it('treats a higher latest version as an update', () => {
@@ -122,10 +150,33 @@ describe('applyAgentRelease', () => {
       version: null,
       latestVersion: '1.1.0',
       method: null,
+      versionCheckedAt: 0,
       checkedAt: 0,
     });
     expect(next).toMatchObject({ version: '1.0.0', latestVersion: '1.1.0', updateAvailable: true });
     expect(next.installations[0]).toMatchObject({ version: '1.0.0', updateAvailable: true });
+  });
+
+  it('puts the probed version on the active installation, not the cached latest', () => {
+    const next = applyAgentRelease(
+      {
+        installations: [installation({ isActive: true, latestVersion: '18.11.1' })],
+        version: null,
+        latestVersion: '18.11.1',
+        updateAvailable: false,
+      },
+      {
+        version: '18.12.6',
+        latestVersion: '18.11.1',
+        method: null,
+        versionCheckedAt: 1,
+        checkedAt: 1,
+      }
+    );
+    expect(resolveActiveInstallation(next.installations, { kind: 'auto' })?.version).toBe(
+      '18.12.6'
+    );
+    expect(next.updateAvailable).toBe(false);
   });
 
   it('applies an update method only where the install agrees with it', () => {
@@ -133,6 +184,7 @@ describe('applyAgentRelease', () => {
       version: '1.0.0',
       latestVersion: '1.1.0',
       method: 'npm' as const,
+      versionCheckedAt: 0,
       checkedAt: 0,
     };
     expect(applyAgentRelease(status, release).installations[0]).toMatchObject({
@@ -179,6 +231,9 @@ describe('local agent version cache', () => {
     execState.reset();
     clearAgentRelease('claude');
     clearAgentRelease('codex');
+    clearAgentRelease('muse');
+    clearAgentRelease('continue');
+    clearAgentRelease('grok');
   });
 
   afterEach(() => {
@@ -313,5 +368,129 @@ describe('local agent version cache', () => {
     await agentReleaseForDisplay('claude', null);
     expect(execState.calls).toHaveLength(0);
     expect(peekAgentRelease('claude')).toBeUndefined();
+  });
+
+  it('does not mark the latest version as checked when only --version ran', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ version: '9.9.9' })));
+    vi.stubGlobal('fetch', fetchMock);
+    execState.setImpl(async () => ({ stdout: 'codex-cli 0.163.0\n', stderr: '' }));
+    const npmProvider = {
+      capabilities: {
+        hostDependency: {
+          installCommands: {
+            macos: [{ command: 'npm install -g @openai/codex' }],
+            linux: [{ command: 'npm install -g @openai/codex' }],
+            windows: [{ command: 'npm install -g @openai/codex' }],
+          },
+        },
+      },
+    } as CLIAgentPluginProvider;
+
+    const shown = await agentReleaseForDisplay('codex', '/bin/codex', npmProvider);
+
+    expect(shown).toMatchObject({ version: '0.163.0', latestVersion: null, checkedAt: 0 });
+    expect(shown?.versionCheckedAt).toBe(now);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://registry.npmjs.org/@openai%2fcodex/latest'
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('@latest');
+    await vi.waitFor(() => expect(peekAgentRelease('codex')?.latestVersion).toBe('9.9.9'));
+    expect(execState.calls).toHaveLength(1);
+  });
+
+  it('keeps the version timestamp when the release lookup reuses a fresh local version', async () => {
+    execState.setImpl(async () => ({ stdout: 'claude 1.0.0\n', stderr: '' }));
+    await agentReleaseForDisplay('claude', '/bin/claude');
+    const versionCheckedAt = peekAgentRelease('claude')?.versionCheckedAt;
+    const calls = execState.calls.length;
+
+    await loadAgentRelease('claude', '/bin/claude', offlineProvider);
+
+    expect(execState.calls).toHaveLength(calls);
+    expect(peekAgentRelease('claude')).toMatchObject({
+      version: '1.0.0',
+      latestVersion: null,
+      versionCheckedAt,
+    });
+    expect(peekAgentRelease('claude')?.checkedAt).toBe(now);
+  });
+
+  it('keeps the known version when a later --version has no parseable version', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ tag_name: 'v18.12.6' })));
+    execState.setImpl(async () => ({ stdout: '2.1.310\n', stderr: '' }));
+    await loadAgentRelease('claude', '/bin/claude', githubProvider);
+    expect(peekAgentRelease('claude')).toMatchObject({
+      version: '2.1.310',
+      latestVersion: '18.12.6',
+    });
+
+    now += 6 * 60 * 1000;
+    execState.setImpl(async () => ({ stdout: 'no version here\n', stderr: '' }));
+    const shown = await agentReleaseForDisplay('claude', '/bin/claude');
+
+    expect(shown).toMatchObject({ version: '2.1.310', latestVersion: '18.12.6' });
+  });
+
+  it('stores a null latest version when the release source is none', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    execState.setImpl(async () => ({ stdout: '1.0.0\n', stderr: '' }));
+    const noneProvider = {
+      capabilities: {
+        hostDependency: {
+          updates: { releaseSource: { kind: 'none' } },
+          installCommands: {
+            macos: [{ command: 'npm install -g should-not-run' }],
+            linux: [{ command: 'npm install -g should-not-run' }],
+            windows: [{ command: 'npm install -g should-not-run' }],
+          },
+        },
+      },
+    } as CLIAgentPluginProvider;
+
+    await loadAgentRelease('muse', '/bin/muse', noneProvider);
+
+    expect(peekAgentRelease('muse')).toMatchObject({ version: '1.0.0', latestVersion: null });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(npmPackageFromProvider(noneProvider)).toBeNull();
+  });
+
+  it('asks the named npm package and not the install command', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('continuedev')) {
+        return new Response(JSON.stringify({ version: '1.5.47' }));
+      }
+      return new Response(JSON.stringify({ version: '1.0.70' }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const continueProvider = {
+      capabilities: {
+        hostDependency: {
+          updates: { releaseSource: { kind: 'npm', package: '@continuedev/cli' } },
+          installCommands: { macos: [{ command: 'npm i -g @continuedev/cli' }] },
+        },
+      },
+    } as CLIAgentPluginProvider;
+    const grokProvider = {
+      capabilities: {
+        hostDependency: {
+          updates: { releaseSource: { kind: 'npm', package: '@xai-official/grok' } },
+          installCommands: {
+            macos: [{ command: 'npm install -g @xai-official/grok@latest' }],
+          },
+        },
+      },
+    } as CLIAgentPluginProvider;
+
+    await loadAgentRelease('continue', null, continueProvider);
+    await loadAgentRelease('grok', null, grokProvider);
+
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      'https://registry.npmjs.org/@continuedev%2fcli/latest',
+      'https://registry.npmjs.org/@xai-official%2fgrok/latest',
+    ]);
+    expect(peekAgentRelease('continue')?.latestVersion).toBe('1.5.47');
+    expect(peekAgentRelease('grok')?.latestVersion).toBe('1.0.70');
   });
 });
