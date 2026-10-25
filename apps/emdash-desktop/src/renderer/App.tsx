@@ -3,7 +3,6 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAccountSession } from '@core/features/account/api/browser/useAccount';
 import { ResumeWritingWatcher } from '@core/features/conversations/browser/resume-writing-watcher';
-import { useGitHubAuthEvents } from '@core/features/github/api/browser/use-github-auth-events';
 import { useIntegrationAccountEvents } from '@core/features/integrations/api/browser/use-integration-account-events';
 import { IntegrationsProvider } from '@core/features/integrations/contributions/browser/integrations-provider';
 import { useLegacyPortStatus } from '@core/features/legacy-port/api/browser/useLegacyPort';
@@ -34,7 +33,6 @@ type OnboardingStep = 'sign-in' | 'import';
 
 function AppContent() {
   useIntegrationAccountEvents();
-  useGitHubAuthEvents();
   const [view, setView] = useState<AppView>(() =>
     // A window opened for another computer, or a browser using this one remotely, runs
     // on that computer's setup: onboarding belongs to the computer, not the viewer.

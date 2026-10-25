@@ -21,6 +21,7 @@ import { ProjectWorkspacesView } from '@core/features/projects/browser/component
 import type { ProjectView } from '@core/features/projects/browser/stores/project-view';
 import { projectViewDef } from '@core/features/projects/contributions/views';
 import { RequirementsView } from '@core/features/requirements/contributions/browser/requirements-view';
+import { getGitRepositoryStore } from '@core/features/source-control/api/browser/stores/source-control-selectors';
 import { useCurrentViewParams } from '@core/primitives/navigation/browser/navigation-hooks';
 import { cn } from '@core/primitives/styling/browser/cn';
 
@@ -53,10 +54,17 @@ export const ActiveProject = observer(function ActiveProject() {
   if (!context || !view) return null;
 
   const activeView = view.activeView;
+  const provider = getGitRepositoryStore(projectId)?.providerRepository?.provider;
+  const items =
+    provider === 'gitlab'
+      ? projectViewItems.map((item) =>
+          item.value === 'pull-request' ? { ...item, label: 'Merge Requests' } : item
+        )
+      : projectViewItems;
   return (
     <div className="flex min-h-0 w-full flex-col gap-6">
       <PillTabs
-        items={projectViewItems}
+        items={items}
         value={activeView}
         onValueChange={(nextView) => view.setProjectView(nextView)}
         ariaLabel="Project sections"

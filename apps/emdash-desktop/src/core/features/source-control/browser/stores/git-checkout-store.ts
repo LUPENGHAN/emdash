@@ -31,6 +31,7 @@ import {
 import { getGitRepositoryStore } from '@core/features/source-control/api/browser/stores/source-control-selectors';
 import { resolveWorkspacePath } from '@core/features/workspaces/api/browser/workspace-path';
 import { hostFileRefFromNativePath } from '@core/primitives/desktop-runtime/api';
+import type { ProviderAccountRef } from '@core/primitives/provider-accounts/api';
 import { runDesktopLiveJob } from '@core/primitives/wire/browser/run-live-job';
 import { getPullRequestsRuntimeClient } from '@core/services/pull-requests/api/client';
 import { getPrNumber } from '@core/services/pull-requests/api/repository';
@@ -373,7 +374,7 @@ export class GitCheckoutStore {
     return result;
   }
 
-  async publishCurrentBranch() {
+  async publishCurrentBranch(credentialAccount?: ProviderAccountRef) {
     const repository = getGitRepositoryStore(this.projectId);
     const pushRemote = repository?.pushRemote;
     if (pushRemote === null || pushRemote === undefined) {
@@ -388,6 +389,7 @@ export class GitCheckoutStore {
       {
         ...checkoutSelector(this.workspaceId),
         remote: pushRemote.name,
+        credentialAccount,
       }
     );
     if (result.success) {

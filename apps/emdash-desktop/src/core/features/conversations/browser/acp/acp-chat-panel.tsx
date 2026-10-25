@@ -457,6 +457,7 @@ const ComposerForStore = observer(function ComposerForStore({
         getGitRepositoryStore(store.projectId)?.issueRepositoryUrl ??
         getGitRepositoryStore(store.projectId)?.canonicalRepositoryUrl ??
         undefined,
+      repositoryProvider: getGitRepositoryStore(store.projectId)?.providerRepository?.provider,
       selectedIssueProvider: getProjectViewStore(store.projectId)?.selectedIssueProvider ?? null,
     };
   });

@@ -2,10 +2,15 @@ import type { PullRequest } from '@emdash/plugins/pull-requests/schemas';
 import { Dialog } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
 import { useMemo } from 'react';
+import {
+  issueTerms,
+  preferredIssueProvider,
+} from '@core/features/integrations/api/browser/integration-display';
 import { useConnectedIssueProviders } from '@core/features/integrations/api/browser/use-connected-issue-providers';
 import {
   firstAvailableProjectId,
   getProjectStore,
+  getProjectViewStore,
   projectData as selectProjectData,
 } from '@core/features/projects/api/browser/stores/project-selectors';
 import { getGitRepositoryStore } from '@core/features/source-control/api/browser/stores/source-control-selectors';
@@ -23,10 +28,11 @@ import { ConfirmButton } from '@core/primitives/keybindings/browser/confirm-butt
 import { defineModal } from '@core/primitives/modals/react';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getNavigation } from '@core/primitives/navigation/browser/navigation-selectors';
+import { createTaskModalDefaults, type CreateTaskStrategy } from './create-task-modal-defaults';
 import { LinkedEntitySection } from './linked-entity-section';
 import { TaskNameField } from './task-name-field';
 import { useCreateTaskCallback } from './use-create-task-callback';
-import { type LinkedType, useCreateTaskState } from './use-create-task-state';
+import { useCreateTaskState } from './use-create-task-state';
 
 function useDefaultProjectId(propProjectId?: string): string | undefined {
   return useMemo(() => {
@@ -44,14 +50,14 @@ function useDefaultProjectId(propProjectId?: string): string | undefined {
 
 export const CreateTaskModal = observer(function CreateTaskModal({
   projectId,
-  strategy: initialStrategy = 'from-branch',
+  strategy: initialStrategy,
   initialPR,
   initialWorkspaceId,
   initialName,
   initialPrompt,
 }: {
   projectId?: string;
-  strategy?: 'from-branch' | 'from-issue' | 'from-pull-request';
+  strategy?: CreateTaskStrategy;
   initialPR?: PullRequest;
   initialWorkspaceId?: string;
   /** Prefills, e.g. for a task an agent suggested. */
@@ -74,17 +80,27 @@ export const CreateTaskModal = observer(function CreateTaskModal({
 
   const projectPath = projectData?.path;
 
-  const { hasAnyIssueIntegration } = useConnectedIssueProviders({ repositoryUrl, projectPath });
-  const hasPrSupport = !!pullRequestRepositoryUrl;
+  const repositoryProvider = repositoryStore?.providerRepository?.provider;
+  const { connectedProviders, hasAnyIssueIntegration } = useConnectedIssueProviders({
+    projectId: selectedProjectId,
+    repositoryUrl,
+    projectPath,
+    repositoryProvider,
+  });
+  const issueProvider = preferredIssueProvider(
+    selectedProjectId
+      ? (getProjectViewStore(selectedProjectId)?.selectedIssueProvider ?? null)
+      : null,
+    connectedProviders,
+    repositoryProvider
+  );
+  const hasPrSupport =
+    !!pullRequestRepositoryUrl && !!repositoryStore?.providerRepository?.capabilities.pullRequests;
 
-  const defaultLinkedType = useMemo((): LinkedType => {
-    if (initialStrategy === 'from-pull-request') return 'pr';
-    if (initialStrategy === 'from-issue') return 'issue';
-    if (hasAnyIssueIntegration) return 'issue';
-    if (hasPrSupport) return 'pr';
-    return null;
-    // oxlint-disable-next-line react/exhaustive-deps
-  }, []); // computed once on mount
+  const defaults = createTaskModalDefaults(initialStrategy, {
+    hasIssues: hasAnyIssueIntegration,
+    hasPullRequests: hasPrSupport,
+  });
 
   const resolvedInitialPR = initialStrategy === 'from-pull-request' ? initialPR : undefined;
   const state = useCreateTaskState(
@@ -95,7 +111,7 @@ export const CreateTaskModal = observer(function CreateTaskModal({
     currentBranch,
     repositoryWorkspaceId,
     resolvedInitialPR,
-    defaultLinkedType,
+    defaults.linkedType,
     initialWorkspaceId,
     initialName
   );
@@ -135,6 +151,8 @@ export const CreateTaskModal = observer(function CreateTaskModal({
             state={state}
             hasAnyIssueIntegration={hasAnyIssueIntegration}
             hasPrSupport={hasPrSupport}
+            requestProvider={repositoryProvider}
+            issueLabel={issueTerms(issueProvider ?? repositoryProvider).title}
             projectId={selectedProjectId}
             repositoryUrl={repositoryUrl}
             projectPath={projectPath}
@@ -146,12 +164,14 @@ export const CreateTaskModal = observer(function CreateTaskModal({
             isUnborn={isUnborn}
             hasRepository={hasRepository}
             hasPR={state.linkedType === 'pr' && state.linkedPR !== null}
+            requestProvider={repositoryProvider}
             linkedIssue={
               state.linkedType === 'issue' ? (state.linkedIssue ?? undefined) : undefined
             }
             includeIssueContextByDefault={includeIssueContextByDefault}
           >
             <TaskConfigPanel
+              defaultTab={defaults.tab}
               tabs={[
                 {
                   value: 'conversation',
@@ -161,7 +181,11 @@ export const CreateTaskModal = observer(function CreateTaskModal({
                 {
                   value: 'workspace',
                   label: 'Workspace Settings',
-                  content: <WorkspaceSettingsSection defaultOpen={!!initialWorkspaceId} />,
+                  content: (
+                    <WorkspaceSettingsSection
+                      defaultOpen={defaults.tab === 'workspace' || !!initialWorkspaceId}
+                    />
+                  ),
                 },
               ]}
             />

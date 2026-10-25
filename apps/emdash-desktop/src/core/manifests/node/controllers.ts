@@ -69,6 +69,7 @@ import { createProjectsWireController } from '@core/features/projects/node/wire-
 import type { RemoteAccessService, RemoteClientService } from '@core/features/remote-access/api';
 import { createRemoteClientWireController } from '@core/features/remote-access/node/remote-client-wire-controller';
 import { createRemoteAccessWireController } from '@core/features/remote-access/node/wire-controller';
+import type { GitLabRepositoryService } from '@core/features/repository/node/gitlab-repository-service';
 import { createRepositoryWireController } from '@core/features/repository/node/wire-controller';
 import type { RequirementsService } from '@core/features/requirements/node/requirements-service';
 import { createRequirementsWireController } from '@core/features/requirements/node/wire-controller';
@@ -153,6 +154,7 @@ export type DesktopControllerContext = {
   readonly devPerfOperations: DevPerfOperations;
   readonly editorBuffer: EditorBufferService;
   readonly github: Omit<Parameters<typeof createGithubWireController>[0], 'logger'>;
+  readonly gitlabRepositories: GitLabRepositoryService;
   readonly gitCredentials: GitCredentialsService;
   readonly hostAvailability: HostAvailabilityService;
   readonly hostIsReachable: HostReachabilityProbe;
@@ -341,10 +343,11 @@ export const desktopNodeControllers = {
     create: ({ requirements }) => createRequirementsWireController(requirements),
   },
   repository: {
-    create: ({ db, projects }) =>
+    create: ({ db, projects, gitlabRepositories }) =>
       createRepositoryWireController({
         projects,
         loadProject: (projectId) => getProjectById(db, projectId),
+        gitlab: gitlabRepositories,
       }),
   },
   search: {

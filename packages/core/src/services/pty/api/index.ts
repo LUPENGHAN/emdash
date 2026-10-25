@@ -53,5 +53,5 @@ export {
   tmuxIdentityActivityKey,
   type ResolvedTmuxSession,
 } from './tmux';
-export { buildTerminalEnv } from './terminal-env';
+export { buildTerminalEnv, XTERM_PTY_DEFAULT_ENV } from './terminal-env';
 export type { PtyDimensions, PtyExitInfo, PtyProcess, PtySpawner, PtySpawnSpec } from './types';
