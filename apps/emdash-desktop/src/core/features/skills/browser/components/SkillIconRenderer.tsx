@@ -56,7 +56,7 @@ export const SkillIconRenderer: React.FC<SkillIconRendererProps> = ({ skill }) =
   };
 
   return (
-    <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background-2 p-2 font-semibold text-foreground/60 transition-colors group-hover:bg-background-3">
+    <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-background-2 p-2 font-semibold text-foreground/60 transition-colors group-hover:bg-background-3">
       {renderIcon()}
     </div>
   );

@@ -2,7 +2,14 @@ import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import { Dialog } from '@emdash/ui/react/primitives';
 import { reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type CSSProperties,
+} from 'react';
 import { modalScope } from '@core/features/workbench/contributions/scopes';
 import { modalCatalog } from '@core/manifests/browser/modal-catalog';
 import { confirmRegistry } from '@core/primitives/keybindings/browser';
@@ -38,6 +45,13 @@ const POSITION_CLASSES: Record<ModalPosition, string> = {
   center: 'top-1/2 -translate-y-1/2',
   top: 'top-[15%] translate-y-0',
 };
+
+// The borderless titlebar is a native drag region and ignores z-index. A tall
+// dialog (skill details fill the viewport) puts its close button in that strip,
+// so the click drags the window unless the popup and backdrop opt out. The
+// popup also stays above the backdrop, which is z-index 50.
+const noDragStyle = { WebkitAppRegion: 'no-drag' } as CSSProperties;
+const popupStyle = { ...noDragStyle, position: 'fixed', zIndex: 51 } as CSSProperties;
 
 export const ModalRenderer = observer(function ModalRenderer() {
   // Restore focus to the element captured when the first modal in a flow opens.
@@ -189,12 +203,13 @@ const ModalDialog = observer(function ModalDialog({
       onOpenChangeComplete={handleOpenChangeComplete}
     >
       <Dialog.Portal>
-        <Dialog.Overlay />
+        <Dialog.Overlay style={noDragStyle} />
         <DialogPrimitive.Popup
           ref={attachPopupRef}
           finalFocus={false}
           initialFocus={initialFocus}
           data-slot="dialog-content"
+          style={popupStyle}
           onPointerDownCapture={() => {
             if (runtimeEntry.ignoreOutsidePressAfterWindowBlur) {
               ignoreNextOutsidePressRef.current = false;

@@ -4,7 +4,13 @@ import { kfFadeIn, kfFadeOut, kfPopupIn, kfPopupOut } from '@styles/effects/anim
 import { vars } from '@theme/core/contract/contract.css';
 import { tokenVars } from '@theme/tokens.css';
 
+// Electron treats `-webkit-app-region: drag` as a native hit target that ignores
+// z-index. A dialog over the borderless titlebar must opt out or the close
+// button (and the backdrop behind the titlebar) drags the window instead.
+const noDragRegion = { WebkitAppRegion: 'no-drag' } as Record<string, string>;
+
 export const overlay = style({
+  ...noDragRegion,
   position: 'fixed',
   inset: 0,
   zIndex: 50,
@@ -28,6 +34,7 @@ export const positioner = style({
 
 export const content = recipe({
   base: {
+    ...noDragRegion,
     pointerEvents: 'auto',
     zIndex: 50,
     display: 'flex',
@@ -73,6 +80,7 @@ export const header = style({
 export const headerInner = style({
   display: 'flex',
   minWidth: 0,
+  flex: '1 1 auto',
   flexDirection: 'column',
   gap: '0.25rem',
 });
@@ -125,6 +133,7 @@ export const body = style({
 });
 
 export const closeButtonOverride = style({
+  ...noDragRegion,
   marginTop: '-0.25rem',
   marginRight: '-0.25rem',
   flexShrink: 0,

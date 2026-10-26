@@ -93,10 +93,10 @@ export const SkillDetailModal: React.FC<SkillDetailModalProps> = ({
   return (
     <>
       <Dialog.Header>
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <SkillIconRenderer skill={detailedSkill} />
           <div className="min-w-0 flex-1">
-            <Dialog.Title className="font-sans text-base tracking-normal text-foreground normal-case">
+            <Dialog.Title className="truncate font-sans text-base tracking-normal text-foreground normal-case">
               {detailedSkill.displayName}
             </Dialog.Title>
             {meta && (
