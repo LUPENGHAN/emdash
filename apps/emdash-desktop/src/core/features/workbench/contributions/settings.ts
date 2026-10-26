@@ -30,6 +30,9 @@ const interfaceSettingsSchema = z.object({
   showLeftSidebarLineChanges: z.boolean(),
   showLeftSidebarPrStatus: z.boolean(),
   showLeftSidebarTimestamps: z.boolean(),
+  showLeftSidebarClaudeUsage: z.boolean(),
+  showLeftSidebarCodexUsage: z.boolean(),
+  showLeftSidebarCursorUsage: z.boolean(),
   hideContextBar: z.boolean(),
 });
 
@@ -62,6 +65,9 @@ export const interfaceSettingsContribution = defineSettingsContribution<
     showLeftSidebarLineChanges: true,
     showLeftSidebarPrStatus: true,
     showLeftSidebarTimestamps: true,
+    showLeftSidebarClaudeUsage: true,
+    showLeftSidebarCodexUsage: true,
+    showLeftSidebarCursorUsage: true,
     hideContextBar: false,
   },
 });

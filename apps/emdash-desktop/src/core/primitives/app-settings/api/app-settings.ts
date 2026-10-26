@@ -56,6 +56,9 @@ export type InterfaceSettings = {
   showLeftSidebarLineChanges: boolean;
   showLeftSidebarPrStatus: boolean;
   showLeftSidebarTimestamps: boolean;
+  showLeftSidebarClaudeUsage: boolean;
+  showLeftSidebarCodexUsage: boolean;
+  showLeftSidebarCursorUsage: boolean;
   hideContextBar: boolean;
 };
 

@@ -4,6 +4,12 @@ import { ExternalLink, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 import { getAgentsClient } from '@core/features/agents/api/browser/client';
 import type { AgentUsage, UsageLimits, UsageWindow } from '@core/features/model-providers/api';
+import {
+  SIDEBAR_USAGE_AGENTS,
+  sidebarUsageAgentVisible,
+  type SidebarUsageVisibility,
+} from '@core/features/model-providers/browser/sidebar-usage-visibility';
+import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { openExternal } from '@core/primitives/desktop-host/browser/host-client';
 import { cn } from '@core/primitives/styling/browser/cn';
 
@@ -22,18 +28,22 @@ function tone(percent: number): string {
 }
 
 /**
- * Always-visible subscription usage (5h / weekly for Claude Code and Codex; the month's
- * Auto and API pools for Cursor, or its plan and dashboard link), so it is obvious
- * when to hand work to another agent. Clicking it opens every account's windows (see
- * {@link AllUsagePopover}).
+ * Subscription usage for the agents left on in Settings → Interface: 5h / weekly
+ * for Claude Code and Codex, and Cursor's plan or its monthly pools. Clicking it
+ * opens those accounts' windows (see {@link AllUsagePopover}).
  */
 export function UsageLimitsPanel() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
+  const { value: interfaceSettings } = useAppSettingsKey('interface');
+  const anyVisible = SIDEBAR_USAGE_AGENTS.some((agent) =>
+    sidebarUsageAgentVisible(agent, interfaceSettings)
+  );
   const { data } = useQuery<UsageLimits>({
     queryKey: QUERY_KEY,
     queryFn: async () => (await getAgentsClient()).getUsageLimits({}),
-    refetchInterval: 60_000,
+    enabled: anyVisible,
+    refetchInterval: anyVisible ? 60_000 : false,
     staleTime: 30_000,
   });
 
@@ -47,8 +57,10 @@ export function UsageLimitsPanel() {
     }
   };
 
-  const agents = data?.agents ?? [];
-  if (agents.length === 0) return null;
+  const agents = (data?.agents ?? []).filter((agent) =>
+    sidebarUsageAgentVisible(agent.agent, interfaceSettings)
+  );
+  if (!anyVisible || agents.length === 0) return null;
 
   return (
     <Popover.Root>
@@ -82,7 +94,7 @@ export function UsageLimitsPanel() {
         }
       />
       <Popover.Content align="start" side="top" className="w-96">
-        <AllUsagePopover agents={agents} />
+        <AllUsagePopover agents={agents} settings={interfaceSettings} />
       </Popover.Content>
     </Popover.Root>
   );
@@ -95,7 +107,13 @@ const ACCOUNT_QUERY_KEY = ['accountUsage'];
  * official accounts added in Settings → Providers. Accounts are probed only while this
  * is open (each probe runs the agent's CLI), then cached for a few minutes.
  */
-function AllUsagePopover({ agents }: { agents: AgentUsage[] }) {
+function AllUsagePopover({
+  agents,
+  settings,
+}: {
+  agents: AgentUsage[];
+  settings: SidebarUsageVisibility | undefined;
+}) {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const { data: accounts, isLoading } = useQuery<AgentUsage[]>({
@@ -119,7 +137,7 @@ function AllUsagePopover({ agents }: { agents: AgentUsage[] }) {
     }
   };
 
-  const groups = (['claude', 'codex', 'cursor'] as const)
+  const groups = SIDEBAR_USAGE_AGENTS.filter((agent) => sidebarUsageAgentVisible(agent, settings))
     .map((agent) => ({
       agent,
       rows: [

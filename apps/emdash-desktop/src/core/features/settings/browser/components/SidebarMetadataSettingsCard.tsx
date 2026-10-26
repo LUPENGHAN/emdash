@@ -19,6 +19,9 @@ const SidebarMetadataSettingsCard: React.FC = () => {
   const showLineChanges = interfaceSettings?.showLeftSidebarLineChanges ?? true;
   const showPrStatus = interfaceSettings?.showLeftSidebarPrStatus ?? true;
   const showTimestamps = interfaceSettings?.showLeftSidebarTimestamps ?? true;
+  const showClaudeUsage = interfaceSettings?.showLeftSidebarClaudeUsage ?? true;
+  const showCodexUsage = interfaceSettings?.showLeftSidebarCodexUsage ?? true;
+  const showCursorUsage = interfaceSettings?.showLeftSidebarCursorUsage ?? true;
 
   return (
     <SettingsCard>
@@ -79,6 +82,66 @@ const SidebarMetadataSettingsCard: React.FC = () => {
                 onCheckedChange={(checked) => update({ showLeftSidebarTimestamps: checked })}
                 disabled={busy}
                 aria-label="Show left sidebar timestamps"
+              />
+            </>
+          }
+        />
+        <SettingRow
+          title="Claude usage"
+          description="Show Claude subscription usage in the left sidebar."
+          control={
+            <>
+              <ResetToDefaultButton
+                visible={isFieldOverridden('showLeftSidebarClaudeUsage')}
+                defaultLabel="on"
+                onReset={() => resetField('showLeftSidebarClaudeUsage')}
+                disabled={busy}
+              />
+              <Switch
+                checked={showClaudeUsage}
+                onCheckedChange={(checked) => update({ showLeftSidebarClaudeUsage: checked })}
+                disabled={busy}
+                aria-label="Claude usage"
+              />
+            </>
+          }
+        />
+        <SettingRow
+          title="Codex usage"
+          description="Show Codex subscription usage in the left sidebar."
+          control={
+            <>
+              <ResetToDefaultButton
+                visible={isFieldOverridden('showLeftSidebarCodexUsage')}
+                defaultLabel="on"
+                onReset={() => resetField('showLeftSidebarCodexUsage')}
+                disabled={busy}
+              />
+              <Switch
+                checked={showCodexUsage}
+                onCheckedChange={(checked) => update({ showLeftSidebarCodexUsage: checked })}
+                disabled={busy}
+                aria-label="Codex usage"
+              />
+            </>
+          }
+        />
+        <SettingRow
+          title="Cursor usage"
+          description="Show Cursor subscription usage in the left sidebar."
+          control={
+            <>
+              <ResetToDefaultButton
+                visible={isFieldOverridden('showLeftSidebarCursorUsage')}
+                defaultLabel="on"
+                onReset={() => resetField('showLeftSidebarCursorUsage')}
+                disabled={busy}
+              />
+              <Switch
+                checked={showCursorUsage}
+                onCheckedChange={(checked) => update({ showLeftSidebarCursorUsage: checked })}
+                disabled={busy}
+                aria-label="Cursor usage"
               />
             </>
           }

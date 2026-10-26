@@ -114,6 +114,9 @@ describe('SettingsStore contributions', () => {
     const value = await settings.get('interface');
     expect(value.showTrayIcon).toBe(true);
     expect(value.hideContextBar).toBe(true);
+    expect(value.showLeftSidebarClaudeUsage).toBe(true);
+    expect(value.showLeftSidebarCodexUsage).toBe(true);
+    expect(value.showLeftSidebarCursorUsage).toBe(true);
 
     await settings.update('interface', { ...value, showTrayIcon: false });
     const restarted = new SettingsStore(db, appSettingsContributions);

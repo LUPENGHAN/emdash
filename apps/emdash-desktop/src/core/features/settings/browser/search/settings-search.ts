@@ -330,6 +330,27 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['time'],
   },
   {
+    id: 'left-sidebar-claude-usage',
+    label: 'Claude usage',
+    tab: 'interface',
+    description: 'Show Claude subscription usage in the left sidebar.',
+    keywords: ['claude', 'usage', 'sidebar'],
+  },
+  {
+    id: 'left-sidebar-codex-usage',
+    label: 'Codex usage',
+    tab: 'interface',
+    description: 'Show Codex subscription usage in the left sidebar.',
+    keywords: ['codex', 'usage', 'sidebar'],
+  },
+  {
+    id: 'left-sidebar-cursor-usage',
+    label: 'Cursor usage',
+    tab: 'interface',
+    description: 'Show Cursor subscription usage in the left sidebar.',
+    keywords: ['cursor', 'usage', 'sidebar'],
+  },
+  {
     id: 'resource-monitor',
     label: 'Resource monitor',
     tab: 'interface',
