@@ -42,6 +42,11 @@ import {
   type ModelProvider,
   type ProviderProtocol,
 } from '../api';
+import {
+  applyContextWindowToSelected,
+  canApplyContextToSelected,
+  claudeRolesForEveryRole,
+} from './provider-form-bulk';
 import { ProviderTransfer } from './provider-transfer';
 
 const keyStatusQueryKey = (providerId: string) => ['modelProviderKeyStatus', providerId];
@@ -209,6 +214,7 @@ function ProviderForm({
   const [claudeRoles, setClaudeRoles] = useState<ClaudeModelRoles>(initial?.claude ?? {});
   const [filter, setFilter] = useState('');
   const [manualModel, setManualModel] = useState('');
+  const [bulkContext, setBulkContext] = useState('');
   const [testState, setTestState] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { data: keyStatus } = useQuery({
@@ -251,6 +257,7 @@ function ProviderForm({
   const invalidContext = selected.some(
     (model) => (contexts[model] ?? '').trim() !== '' && !parseContextWindow(contexts[model] ?? '')
   );
+  const bulkContextInvalid = bulkContext.trim() !== '' && parseContextWindow(bulkContext) === null;
   const defaultModelsUrl = baseUrl.trim()
     ? providerModelsUrl({ ...draft, modelsUrl: undefined })
     : 'Filled in from the base URL';
@@ -405,6 +412,29 @@ function ProviderForm({
                 onClick={() => setSelected((current) => current.filter((m) => !listed.includes(m)))}
               >
                 Remove all shown
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              <div className="min-w-0 flex-1">
+                <Input
+                  value={bulkContext}
+                  placeholder="1m"
+                  aria-label="Context window for selected models"
+                  aria-invalid={bulkContextInvalid}
+                  onChange={(event) => setBulkContext(event.target.value)}
+                />
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!canApplyContextToSelected(selected.length, bulkContext)}
+                onClick={() =>
+                  setContexts((current) =>
+                    applyContextWindowToSelected(current, selected, bulkContext)
+                  )
+                }
+              >
+                Apply to selected
               </Button>
             </div>
             <ul className="max-h-60 overflow-y-auto rounded-md border border-border py-1">
@@ -933,9 +963,51 @@ function ClaudeModelRolesField({
   value: ClaudeModelRoles;
   onChange: (next: ClaudeModelRoles) => void;
 }) {
+  const [roleTarget, setRoleTarget] = useState('');
+  const soleModel = models.length === 1 ? models[0] : undefined;
+  const target = soleModel ?? (models.includes(roleTarget) ? roleTarget : '');
   return (
     <Field.Root>
-      <Field.Label>Claude Code models</Field.Label>
+      <div className="flex items-center justify-between gap-2">
+        <Field.Label>Claude Code models</Field.Label>
+        <div className="flex min-w-0 items-center gap-2">
+          {soleModel ? null : (
+            <Select.Root
+              value={target}
+              onValueChange={(next) => setRoleTarget(next ? String(next) : '')}
+            >
+              <Select.Trigger appearance="input" className="h-7 w-40">
+                <Select.Value>
+                  {target ? (
+                    <span className="truncate font-mono text-xs">{target}</span>
+                  ) : (
+                    <span className="text-foreground-passive">Model</span>
+                  )}
+                </Select.Value>
+              </Select.Trigger>
+              <Select.Content align="end">
+                {models.map((model) => (
+                  <Select.Item key={model} value={model}>
+                    <span className="font-mono text-xs">{model}</span>
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+          )}
+          <Button
+            size="sm"
+            variant="secondary"
+            className="shrink-0"
+            disabled={!target}
+            onClick={() => {
+              if (!target) return;
+              onChange(claudeRolesForEveryRole(value, target));
+            }}
+          >
+            Use for every role
+          </Button>
+        </div>
+      </div>
       <div className="grid grid-cols-[5.5rem_minmax(0,1fr)_minmax(0,0.8fr)] items-center gap-x-2 gap-y-1.5">
         {CLAUDE_ROLE_ROWS.map(({ role, label }) => {
           const alias = (CLAUDE_MODEL_ALIASES as readonly string[]).includes(role)
