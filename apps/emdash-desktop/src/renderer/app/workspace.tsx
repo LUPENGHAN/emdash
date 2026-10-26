@@ -1,4 +1,5 @@
 import { Toaster } from '@emdash/ui/react/primitives';
+import { BrowserWebviewHost } from '@core/features/browser/browser/browser-webview-host';
 import { LeftSidebar } from '@core/features/workbench/browser/sidebar/left-sidebar';
 import { WindowScope } from '@core/features/workbench/browser/window-scope';
 import {
@@ -26,6 +27,7 @@ export function Workspace() {
           </WrapView>
         }
       />
+      <BrowserWebviewHost />
       <Toaster />
     </WindowScope>
   );

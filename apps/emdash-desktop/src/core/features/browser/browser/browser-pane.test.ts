@@ -2,8 +2,10 @@ import { JSDOM } from 'jsdom';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { browserControlsRegistry } from '@core/features/browser/api/browser/browser-controls-registry';
 import { browserSessionStore } from '@core/features/browser/api/browser/browser-session-store';
 import { BrowserPane } from './browser-pane';
+import { BrowserWebviewHost, browserPageAdapters } from './browser-webview-host';
 
 const browserRpc = vi.hoisted(() => ({
   bindWebContents: vi.fn(),
@@ -65,10 +67,23 @@ describe('BrowserPane', () => {
   afterEach(() => {
     act(() => root.unmount());
     browserSessionStore.clear();
+    browserControlsRegistry.clear();
+    browserPageAdapters.clear();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
     dom.window.close();
   });
+
+  function renderPane(browserId: string) {
+    root.render(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(BrowserPane, { browserId, visible: true }),
+        React.createElement(BrowserWebviewHost)
+      )
+    );
+  }
 
   it('does not load the submitted URL twice when the webview becomes ready', async () => {
     const session = browserSessionStore.createSession({
@@ -79,15 +94,13 @@ describe('BrowserPane', () => {
     });
 
     await act(async () => {
-      root.render(
-        React.createElement(BrowserPane, { browserId: session.browserId, visible: true })
-      );
+      renderPane(session.browserId);
     });
     await act(async () => {
       container.querySelector('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    const webview = container.querySelector<HTMLElement>('webview')!;
+    const webview = dom.window.document.querySelector<HTMLElement>('webview')!;
     const loadURL = vi.fn();
     Object.assign(webview, {
       canGoBack: () => false,
@@ -115,12 +128,10 @@ describe('BrowserPane', () => {
     });
 
     await act(async () => {
-      root.render(
-        React.createElement(BrowserPane, { browserId: session.browserId, visible: true })
-      );
+      renderPane(session.browserId);
     });
 
-    const webview = container.querySelector<HTMLElement>('webview')!;
+    const webview = dom.window.document.querySelector<HTMLElement>('webview')!;
     Object.assign(webview, {
       canGoBack: () => false,
       canGoForward: () => false,
@@ -148,11 +159,11 @@ describe('BrowserPane', () => {
       );
     });
 
-    expect(container.querySelector('webview')).toBe(webview);
+    expect(dom.window.document.querySelector('webview')).toBe(webview);
 
     await act(async () => webview.dispatchEvent(new Event('did-stop-loading')));
 
-    expect(container.querySelector('webview')).toBe(webview);
+    expect(dom.window.document.querySelector('webview')).toBe(webview);
     expect(container.querySelector('h1')).toBeNull();
     expect(browserSessionStore.getSession(session.browserId)).toMatchObject({
       currentUrl: 'http://localhost:3000/',
@@ -180,9 +191,7 @@ describe('BrowserPane', () => {
     });
 
     await act(async () => {
-      root.render(
-        React.createElement(BrowserPane, { browserId: session.browserId, visible: true })
-      );
+      renderPane(session.browserId);
     });
 
     expect(container.querySelector('h1')?.textContent).toBe("This site can't be reached");
@@ -195,5 +204,40 @@ describe('BrowserPane', () => {
         .map((button) => button.textContent)
         .filter(Boolean)
     ).toEqual(['Reload', 'Open externally']);
+  });
+
+  it('keeps the webview mounted when the pane goes away', async () => {
+    const session = browserSessionStore.createSession({
+      browserId: 'browser-1',
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      taskId: 'task-1',
+      initialUrl: 'http://localhost:3000/',
+    });
+    let showPane = true;
+    function Harness() {
+      return React.createElement(
+        React.Fragment,
+        null,
+        showPane
+          ? React.createElement(BrowserPane, { browserId: session.browserId, visible: true })
+          : null,
+        React.createElement(BrowserWebviewHost)
+      );
+    }
+
+    await act(async () => {
+      root.render(React.createElement(Harness));
+    });
+    const webview = dom.window.document.querySelector('webview');
+    expect(webview?.getAttribute('src')).toBe('http://localhost:3000/');
+
+    showPane = false;
+    await act(async () => {
+      root.render(React.createElement(Harness));
+    });
+
+    expect(dom.window.document.querySelector('webview')).toBe(webview);
+    expect(webview?.getAttribute('src')).toBe('http://localhost:3000/');
   });
 });

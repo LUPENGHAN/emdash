@@ -1,6 +1,6 @@
 import { Button } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { browserControlsRegistry } from '@core/features/browser/api/browser/browser-controls-registry';
 import { browserSessionStore } from '@core/features/browser/api/browser/browser-session-store';
 import { getBrowserClient } from '@core/features/browser/api/browser/client';
@@ -21,14 +21,7 @@ import { decideBrowserReload } from './browser-navigation-controls';
 import { BrowserStartPage } from './browser-start-page';
 import { BrowserToolbar } from './browser-toolbar';
 import { canOpenBrowserUrlExternally, openBrowserUrlExternally } from './browser-toolbar-actions';
-import { bindBrowserWebviewEvents } from './browser-webview-events';
-import {
-  createBrowserWebviewAdapter,
-  type BrowserWebviewAdapter,
-  type BrowserWebviewElement,
-} from './browser-webview-types';
-
-const WEBVIEW_ALLOW_POPUPS_ATTRIBUTE = 'true' as unknown as boolean;
+import { browserPageAdapters, claimBrowserWebviewSlot } from './browser-webview-host';
 
 export const BrowserPane = observer(function BrowserPane({
   browserId,
@@ -40,19 +33,10 @@ export const BrowserPane = observer(function BrowserPane({
   const session = browserSessionStore.getSession(browserId);
   const { scopeInstance } = usePaneContext();
   const previewServers = usePreviewServers();
-  const webviewRef = useRef<BrowserWebviewElement | null>(null);
   const focusUrlRef = useRef<() => void>(() => {});
-  const [adapter, setAdapter] = useState<BrowserWebviewAdapter | null>(null);
-  const [webviewElement, setWebviewElement] = useState<BrowserWebviewElement | null>(null);
-  const [webviewMount, setWebviewMount] = useState<{
-    browserId: string;
-    partition: string;
-    src: string;
-    revision: number;
-  } | null>(null);
-  const [isRegistered, setIsRegistered] = useState(false);
+  const slotRef = useRef<HTMLDivElement>(null);
+  const adapter = browserPageAdapters.get(browserId) ?? null;
   const sessionBrowserId = session?.browserId;
-  const sessionPartition = session?.partition;
   const showStartPage = session?.currentUrl === 'about:blank' && !session.isLoading;
   const loadError = session && !session.isLoading ? session.loadError : undefined;
   const loadErrorUrl = loadError ? (loadError.url ?? session?.currentUrl ?? '') : '';
@@ -65,43 +49,18 @@ export const BrowserPane = observer(function BrowserPane({
     [loadError, loadErrorUrl]
   );
 
-  useEffect(() => {
-    if (!sessionBrowserId || !sessionPartition || !session) {
-      setWebviewMount(null);
-      return;
-    }
-    setWebviewMount((current) => {
-      if (current?.browserId === sessionBrowserId && current.partition === sessionPartition) {
-        return current;
-      }
-      return {
-        browserId: sessionBrowserId,
-        partition: sessionPartition,
-        src: session.currentUrl,
-        revision: 0,
-      };
-    });
-  }, [session, sessionBrowserId, sessionPartition]);
+  const showPage = !showStartPage && !(loadError && loadErrorPresentation);
 
   useEffect(() => {
-    if (!sessionBrowserId || !sessionPartition) return;
-    let disposed = false;
-    setIsRegistered(false);
-    void getBrowserClient()
-      .then((client) =>
-        client.registerSession({
-          browserId: sessionBrowserId,
-          partition: sessionPartition,
-        })
-      )
-      .then((result) => {
-        if (!disposed) setIsRegistered(result.success);
-      });
-    return () => {
-      disposed = true;
-      setIsRegistered(false);
-    };
-  }, [sessionBrowserId, sessionPartition]);
+    if (!showPage) return;
+    const node = slotRef.current;
+    if (!node) return;
+    return claimBrowserWebviewSlot(browserId, {
+      element: node,
+      visible,
+      focusUrl: () => focusUrlRef.current(),
+    });
+  }, [browserId, showPage, visible]);
 
   useEffect(() => {
     return () => {
@@ -144,39 +103,11 @@ export const BrowserPane = observer(function BrowserPane({
     };
   }, [sessionBrowserId, scopeInstance, visible]);
 
-  const webviewProps = useMemo(() => {
-    if (!webviewMount) return null;
-    return {
-      src: webviewMount.src,
-      partition: webviewMount.partition,
-      allowpopups: WEBVIEW_ALLOW_POPUPS_ATTRIBUTE,
-      'data-browser-id': webviewMount.browserId,
-    };
-  }, [webviewMount]);
-
   const loadUrl = useCallback(
     (url: string) => {
-      if (!sessionBrowserId) return;
-      browserSessionStore.updateSession(sessionBrowserId, {
-        currentUrl: url,
-        faviconUrl: null,
-        isLoading: true,
-        loadError: null,
-      });
-      if (adapter) {
-        void adapter.loadUrl(url);
-        return;
-      }
-      setWebviewMount((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          src: url,
-          revision: current.revision + 1,
-        };
-      });
+      browserControlsRegistry.get(browserId)?.loadUrl(url);
     },
-    [adapter, sessionBrowserId]
+    [browserId]
   );
 
   const navigateTo = useCallback(
@@ -231,44 +162,6 @@ export const BrowserPane = observer(function BrowserPane({
     [adapter, sessionBrowserId]
   );
 
-  // Must stay referentially stable: React re-invokes inline ref callbacks with
-  // null + node on every render, which would wipe the adapter until the next
-  // dom-ready and break everything adapter-backed (zoom, stop, force reload).
-  const attachWebview = useCallback((node: Element | null) => {
-    const next = node as BrowserWebviewElement | null;
-    if (webviewRef.current === next) return;
-    webviewRef.current = next;
-    setWebviewElement(next);
-    setAdapter(null);
-  }, []);
-
-  useEffect(() => {
-    if (!sessionBrowserId || !webviewElement) return;
-    return bindBrowserWebviewEvents(sessionBrowserId, webviewElement, {
-      onDomReady: () => {
-        if (webviewRef.current !== webviewElement) return;
-        // Browsers can share profile partitions, so the main process cannot infer
-        // which browser a webview belongs to; bind it explicitly.
-        void getBrowserClient().then((client) =>
-          client.bindWebContents({
-            browserId: sessionBrowserId,
-            webContentsId: webviewElement.getWebContentsId(),
-          })
-        );
-        setAdapter(createBrowserWebviewAdapter(webviewElement));
-      },
-    });
-  }, [sessionBrowserId, webviewElement]);
-
-  useEffect(() => {
-    if (!sessionBrowserId) return;
-    return browserControlsRegistry.register(sessionBrowserId, {
-      adapter,
-      focusUrl: () => focusUrlRef.current(),
-      loadUrl,
-    });
-  }, [adapter, loadUrl, sessionBrowserId]);
-
   if (!session) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center bg-background text-sm text-foreground-muted">
@@ -305,17 +198,8 @@ export const BrowserPane = observer(function BrowserPane({
           />
         ) : showStartPage ? (
           <BrowserStartPage devServerUrls={previewServers.urls} onOpenUrl={navigateTo} />
-        ) : webviewProps && isRegistered ? (
-          <webview
-            key={`${webviewMount?.browserId ?? 'browser'}:${webviewMount?.partition ?? 'partition'}:${webviewMount?.revision ?? 0}`}
-            ref={attachWebview}
-            {...webviewProps}
-            className="h-full w-full bg-background"
-          />
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-foreground-muted">
-            Preparing browser session
-          </div>
+          <div ref={slotRef} className="h-full w-full" />
         )}
       </div>
     </div>

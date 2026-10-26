@@ -588,15 +588,6 @@ async function taskBrowser(caller: AgentCaller, openUrl?: string): Promise<Autom
   const inBackground =
     (await fetchAppSettingsMeta('browser').catch(() => undefined))?.value.agentOpensInBackground ===
     true;
-  // A browser runs only while its task is on screen: the task's panes (and every tab in
-  // them, hidden ones included) are not mounted while another view is showing. Unless the
-  // user asked not to be pulled away, the agent's request brings its task to the front.
-  if (inBackground && !composition.paneLayout.isViewActive) {
-    throw new Error(
-      'Auto-switching to the built-in browser is off in Emdash settings, and this task is not ' +
-        'on screen, so the browser is not running. Ask the user to open the task, then try again.'
-    );
-  }
   let browserId = findBrowserId();
   if (!browserId) {
     // Blank first: callers load their URL once the tab's webview is ready.
@@ -609,7 +600,9 @@ async function taskBrowser(caller: AgentCaller, openUrl?: string): Promise<Autom
   }
   if (!browserId) throw new Error('Could not open the built-in browser');
   const id = browserId;
-  if (!inBackground && !browserControlsRegistry.get(id)) {
+  // The page stays mounted off this task, so showing the task does not reload it.
+  // Background opens leave the current view alone.
+  if (!inBackground && !composition.paneLayout.isViewActive) {
     getNavigation().navigate(taskViewDef({ projectId: caller.projectId, taskId: caller.taskId }));
   }
   const controls = await waitFor(
