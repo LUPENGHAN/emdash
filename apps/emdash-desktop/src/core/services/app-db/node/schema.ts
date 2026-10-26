@@ -61,6 +61,18 @@ export const sshConnections = sqliteTable(
   })
 );
 
+/** One level of sidebar grouping. Deleting a folder ungroups its projects. */
+export const projectFolders = sqliteTable('project_folders', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  createdAt: text('created_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text('updated_at')
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const projects = sqliteTable(
   'projects',
   {
@@ -79,6 +91,10 @@ export const projects = sqliteTable(
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
     deletedAt: text('deleted_at'),
+    /** Null when the project sits in the ungrouped sidebar band. */
+    folderId: text('folder_id').references(() => projectFolders.id, { onDelete: 'set null' }),
+    /** Null when the project is in the working list. A timestamp sets it aside. */
+    archivedAt: text('archived_at'),
   },
   (table) => ({
     repositoryWorkspaceIdIdx: uniqueIndex('idx_projects_repository_workspace_id')

@@ -70,6 +70,15 @@ export function createProjectsWireController(
       updateProjectConnection: ({ projectId, connectionId }) =>
         projectOperations.updateProjectConnection(projectId, connectionId),
       renameProject: ({ projectId, name }) => projectOperations.renameProject(projectId, name),
+      createProjectFolder: ({ name, projectId }) =>
+        projectOperations.createProjectFolder(name, projectId),
+      renameProjectFolder: ({ folderId, name }) =>
+        projectOperations.renameProjectFolder(folderId, name),
+      deleteProjectFolder: ({ folderId }) => projectOperations.deleteProjectFolder(folderId),
+      moveProjectToFolder: ({ projectId, folderId }) =>
+        projectOperations.moveProjectToFolder(projectId, folderId),
+      archiveProject: ({ projectId }) => projectOperations.archiveProject(projectId),
+      restoreProject: ({ projectId }) => projectOperations.restoreProject(projectId),
       recoverAttachment: ({ projectId }) => dependencies.projects.recover(projectId),
       getHostHomeDir: async (input) => {
         const runtime = await acquireHostRuntime(dependencies, input);
@@ -115,7 +124,10 @@ function createProjectListProvider(projectOperations: ReturnType<typeof createPr
     projectsWireContract.projectList,
     {
       list: query<ProjectListData>({
-        fetch: async () => ({ projects: await projectOperations.getProjects() }),
+        fetch: async () => ({
+          projects: await projectOperations.getProjects(),
+          folders: await projectOperations.listProjectFolders(),
+        }),
         pokes: [appDbPokes.projects.subscription()],
         scope,
       }),

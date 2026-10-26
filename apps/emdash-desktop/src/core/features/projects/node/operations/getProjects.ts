@@ -51,6 +51,8 @@ export function projectFromRow(
         baseRef: row.baseRef,
         connectionId: repository.sshConnectionId ?? '',
         repositoryWorkspaceId: row.repositoryWorkspaceId ?? null,
+        folderId: row.folderId,
+        archivedAt: row.archivedAt,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       }
@@ -61,6 +63,8 @@ export function projectFromRow(
         path: repository.path,
         baseRef: row.baseRef,
         repositoryWorkspaceId: row.repositoryWorkspaceId ?? null,
+        folderId: row.folderId,
+        archivedAt: row.archivedAt,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       };

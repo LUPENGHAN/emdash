@@ -47,8 +47,17 @@ export function createAutomationsWireController(options: {
     },
     adoptRun: ({ automationId, runId }) => adoptRun(options, automationId, runId),
     getTargetAvailability: ({ projectId }) => automationsService.getTargetAvailability(projectId),
-    startRun: async ({ projectId, ...input }) =>
-      (await resolveClient(projectId)).automations.startRun(input),
+    startRun: async ({ projectId, ...input }) => {
+      const project = await options.getProjectById(projectId);
+      if (project?.archivedAt) {
+        return err({
+          type: 'automation-disabled',
+          automationId: input.automationId,
+          message: 'This project is archived.',
+        });
+      }
+      return (await resolveClient(projectId)).automations.startRun(input);
+    },
     cancelRun: async ({ projectId, ...input }) =>
       (await resolveClient(projectId)).automations.cancelRun(input),
     getRun: async ({ projectId, ...input }) =>

@@ -96,8 +96,14 @@ const projectIdInputSchema = z.object({
   projectId: z.string(),
 });
 
+export type ProjectFolder = {
+  id: string;
+  name: string;
+};
+
 export type ProjectListData = {
   projects: Project[];
+  folders?: ProjectFolder[];
 };
 
 export const projectsDomain = 'projects' as const;
@@ -185,6 +191,30 @@ export const projectsWireContract = defineContract({
   }),
   renameProject: procedure({
     input: z.object({ projectId: z.string(), name: z.string().min(1) }),
+    output: z.void(),
+  }),
+  createProjectFolder: procedure({
+    input: z.object({ name: z.string().min(1), projectId: z.string().optional() }),
+    output: z.custom<ProjectFolder>(),
+  }),
+  renameProjectFolder: procedure({
+    input: z.object({ folderId: z.string(), name: z.string().min(1) }),
+    output: z.void(),
+  }),
+  deleteProjectFolder: procedure({
+    input: z.object({ folderId: z.string() }),
+    output: z.void(),
+  }),
+  moveProjectToFolder: procedure({
+    input: z.object({ projectId: z.string(), folderId: z.string().nullable() }),
+    output: z.void(),
+  }),
+  archiveProject: procedure({
+    input: projectIdInputSchema,
+    output: z.void(),
+  }),
+  restoreProject: procedure({
+    input: projectIdInputSchema,
     output: z.void(),
   }),
   recoverAttachment: procedure({

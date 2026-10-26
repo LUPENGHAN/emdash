@@ -81,10 +81,13 @@ function automationFixture(overrides: Partial<Automation> = {}): Automation {
     ...overrides,
   };
 }
-function createService(): AutomationsService {
+function createService(
+  isProjectArchived?: (projectId: string) => Promise<boolean>
+): AutomationsService {
   return new AutomationsService({
     buildDeployment: mocks.buildAutomationDeployment,
     db: {} as never,
+    isProjectArchived,
     runtime: {
       runtimes: { client: mocks.client },
       getProjectById: mocks.getProjectById,
@@ -248,6 +251,12 @@ describe('AutomationsService run projection', () => {
     expect(mocks.buildAutomationDeployment).toHaveBeenCalledOnce();
     expect(mocks.buildAutomationDeployment).toHaveBeenCalledWith(localAutomation);
     expect(mocks.deploy).toHaveBeenCalledOnce();
+  });
+  it('does not deploy an automation whose project is archived', async () => {
+    const service = createService(async () => true);
+    mocks.listAutomations.mockResolvedValue([automationFixture()]);
+    await service.initialize();
+    expect(mocks.deploy).not.toHaveBeenCalled();
   });
   it('projects runtime events and logs projection failures without stopping telemetry hooks', async () => {
     const service = createService();

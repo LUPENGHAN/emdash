@@ -8,12 +8,24 @@ import type {
   MigrateProjectConfigRequest,
   WriteProjectConfigRequest,
 } from '@core/primitives/project-settings/api';
+import {
+  archiveProject,
+  restoreProject,
+  type ProjectArchiveAutomations,
+} from './operations/archiveProject';
 import type { CreateProjectDependencies } from './operations/create-project';
 import { createProject, inspectProjectPath } from './operations/create-project';
 import { deleteProject, type ProjectDeletionDependencies } from './operations/deleteProject';
 import { ensureDefaultRepositoriesRoot } from './operations/ensure-default-repositories-root';
 import { getProjects } from './operations/getProjects';
 import { initializeRepository } from './operations/initialize-repository';
+import {
+  createProjectFolder,
+  deleteProjectFolder,
+  listProjectFolders,
+  moveProjectToFolder,
+  renameProjectFolder,
+} from './operations/project-folders';
 import { renameProject } from './operations/renameProject';
 import { resolveRepositoryDestination } from './operations/resolve-repository-destination';
 import { updateProjectConnection } from './operations/updateProjectConnection';
@@ -22,6 +34,7 @@ import { countProjectsUsingProviderAccount } from './settings/count-projects-usi
 export type ProjectOperationDependencies = CreateProjectDependencies & {
   placement: WorkspacePlacementResolver;
   projectDeletion: ProjectDeletionDependencies;
+  projectAutomations: ProjectArchiveAutomations;
   projectSettings: ProjectSettingsService;
   projects: Pick<ProjectAttachmentManager, 'invalidate' | 'recover' | 'track'>;
   mintCloneCredentials: GitCredentialsService['mintCloneCredentials'];
@@ -60,5 +73,17 @@ export function createProjectOperations(dependencies: ProjectOperationDependenci
     updateProjectConnection: (projectId: string, connectionId: string) =>
       updateProjectConnection(db, dependencies.runtimes, projects, projectId, connectionId),
     renameProject: (projectId: string, name: string) => renameProject(db, projectId, name),
+    listProjectFolders: () => listProjectFolders(db),
+    createProjectFolder: (name: string, projectId?: string) =>
+      createProjectFolder(db, name, projectId),
+    renameProjectFolder: (folderId: string, name: string) =>
+      renameProjectFolder(db, folderId, name),
+    deleteProjectFolder: (folderId: string) => deleteProjectFolder(db, folderId),
+    moveProjectToFolder: (projectId: string, folderId: string | null) =>
+      moveProjectToFolder(db, projectId, folderId),
+    archiveProject: (projectId: string) =>
+      archiveProject(db, dependencies.projectAutomations, projectId),
+    restoreProject: (projectId: string) =>
+      restoreProject(db, dependencies.projectAutomations, projectId),
   };
 }

@@ -57,6 +57,8 @@ export class AutomationsService implements Hookable<AutomationsServiceHooks> {
       buildDeployment(automation: Automation): ReturnType<typeof buildAutomationDeployment>;
       db: AppDb;
       runtime: AutomationRuntimeDependencies;
+      /** When set, an archived project is not deployed, so its schedule does not fire. */
+      isProjectArchived?(projectId: string): Promise<boolean>;
     }
   ) {}
 
@@ -186,6 +188,23 @@ export class AutomationsService implements Hookable<AutomationsServiceHooks> {
     );
   }
 
+  /** Puts the project's saved definitions back on the runtime after restore. */
+  async resumeProjectDeployments(projectId: string): Promise<void> {
+    const definitions = await listAutomationDefinitions(this.dependencies.db, projectId);
+    if (definitions.length === 0) return;
+    const client = await resolveAutomationRuntimeClient(this.dependencies.runtime, projectId);
+    await Promise.all(
+      definitions.map((automation) =>
+        this.definitionMutationMutex.runExclusive(automation.id, async () => {
+          const current = await getAutomation(this.dependencies.db, automation.id);
+          if (!current || current.projectId !== projectId) return;
+          const deployed = await this.deployToTarget(current, client.automations);
+          if (!deployed.success) throw new Error(deployed.error.message);
+        })
+      )
+    );
+  }
+
   private async initializeOnce(): Promise<void> {
     const client = await resolveAutomationRuntimeClient(this.dependencies.runtime);
     this.runEventsUnsubscribe = await client.automations.runEvents.subscribe(
@@ -227,6 +246,7 @@ export class AutomationsService implements Hookable<AutomationsServiceHooks> {
         continue;
       }
       if (target.data !== hostRefKey(host)) continue;
+      if (await this.isProjectArchived(automation.projectId)) continue;
       const normalized = normalizeDefinition(automation);
       const migrated =
         normalized === automation
@@ -375,10 +395,16 @@ export class AutomationsService implements Hookable<AutomationsServiceHooks> {
     });
   }
 
+  private async isProjectArchived(projectId: string | null | undefined): Promise<boolean> {
+    if (!projectId || !this.dependencies.isProjectArchived) return false;
+    return this.dependencies.isProjectArchived(projectId);
+  }
+
   private async deployToTarget(
     automation: Automation,
     client: AutomationRuntimeClient
   ): Promise<DefinitionResult<void>> {
+    if (await this.isProjectArchived(automation.projectId)) return ok();
     const valid = validateDefinition(automation);
     if (!valid.success) return valid;
     let deployment: Awaited<ReturnType<typeof buildAutomationDeployment>>;

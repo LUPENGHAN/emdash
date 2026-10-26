@@ -35,6 +35,8 @@ import {
   useWorkspaceSlots,
 } from '@core/primitives/navigation/browser/navigation-hooks';
 import { SidebarProjectItem } from './project-item';
+import { SidebarArchivedHeader } from './sidebar-archived-header';
+import { SidebarFolderHeader } from './sidebar-folder-header';
 import { SidebarTaskItem } from './task-item';
 
 const ROW_HEIGHT = 32;
@@ -158,24 +160,39 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
     if (!aParsed || !oParsed) return;
 
     const isAbove = isCursorAbove(pointerY, active.rect.current.translated, over.rect);
+    const sidebar = getSidebarStore();
+
+    if (aParsed.kind === 'folder') {
+      if (oParsed.kind !== 'folder') return;
+      sidebar.applyFolderDrop(aParsed.folderId, oParsed.folderId, isAbove);
+      return;
+    }
 
     if (aParsed.kind === 'project') {
-      const overRowIdx = rows.findIndex((r) => rowToDndId(r) === String(over.id));
-      if (overRowIdx === -1) return;
-      const insertionRowIdx = isAbove ? overRowIdx : overRowIdx + 1;
-      const ids = getSidebarStore()
-        .orderedProjects.map((p) => (p.state === 'unregistered' ? p.id : (p.data?.id ?? '')))
-        .filter(Boolean);
-      const oldIdx = ids.indexOf(aParsed.projectId);
-      if (oldIdx === -1) return;
-      const projectsAbove = rows
-        .slice(0, insertionRowIdx)
-        .filter((r) => r.kind === 'project').length;
-      let newIdx = projectsAbove;
-      if (newIdx > oldIdx) newIdx -= 1;
-      if (newIdx === oldIdx) return;
-      getSidebarStore().setProjectOrder(arrayMove(ids, oldIdx, newIdx));
-    } else if (oParsed.kind === 'task' && oParsed.projectId === aParsed.projectId) {
+      if (oParsed.kind === 'folder') {
+        sidebar.applyProjectDrop(aParsed.projectId, { kind: 'folder', folderId: oParsed.folderId });
+        return;
+      }
+      const overProjectId =
+        oParsed.kind === 'project'
+          ? oParsed.projectId
+          : oParsed.kind === 'task'
+            ? oParsed.projectId
+            : null;
+      if (!overProjectId || overProjectId === aParsed.projectId) return;
+      sidebar.applyProjectDrop(aParsed.projectId, {
+        kind: 'project',
+        projectId: overProjectId,
+        before: isAbove,
+      });
+      return;
+    }
+
+    if (
+      aParsed.kind === 'task' &&
+      oParsed.kind === 'task' &&
+      oParsed.projectId === aParsed.projectId
+    ) {
       const projectId = aParsed.projectId;
       const taskIds = rows
         .filter(
@@ -189,7 +206,7 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
       let newIdx = isAbove ? overTaskIdx : overTaskIdx + 1;
       if (newIdx > oldIdx) newIdx -= 1;
       if (newIdx === oldIdx) return;
-      getSidebarStore().setTaskOrder(projectId, arrayMove(taskIds, oldIdx, newIdx));
+      sidebar.setTaskOrder(projectId, arrayMove(taskIds, oldIdx, newIdx));
     }
   }
 
@@ -221,13 +238,43 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
               if (row.kind === 'project') {
                 return (
                   <SortableRow key={row.projectId} dndId={dndId} style={vStyle}>
-                    <SidebarProjectItem projectId={row.projectId} />
+                    <SidebarProjectItem projectId={row.projectId} nested={row.nested} />
+                  </SortableRow>
+                );
+              }
+              if (row.kind === 'task') {
+                return (
+                  <SortableRow key={`${row.projectId}:${row.taskId}`} dndId={dndId} style={vStyle}>
+                    <SidebarTaskItem
+                      projectId={row.projectId}
+                      taskId={row.taskId}
+                      nested={row.nested}
+                    />
+                  </SortableRow>
+                );
+              }
+              if (row.kind === 'folder') {
+                return (
+                  <SortableRow key={row.folderId} dndId={dndId} style={vStyle}>
+                    <SidebarFolderHeader folderId={row.folderId} />
+                  </SortableRow>
+                );
+              }
+              if (row.kind === 'archived-header') {
+                return (
+                  <SortableRow key="archived-header" dndId={dndId} style={vStyle} disabled>
+                    <SidebarArchivedHeader count={row.count} />
                   </SortableRow>
                 );
               }
               return (
-                <SortableRow key={`${row.projectId}:${row.taskId}`} dndId={dndId} style={vStyle}>
-                  <SidebarTaskItem projectId={row.projectId} taskId={row.taskId} />
+                <SortableRow
+                  key={`archived:${row.projectId}`}
+                  dndId={dndId}
+                  style={vStyle}
+                  disabled
+                >
+                  <SidebarProjectItem projectId={row.projectId} archived />
                 </SortableRow>
               );
             })}
@@ -244,18 +291,38 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
 
 const toProjectDndId = (id: string) => `proj::${id}`;
 const toTaskDndId = (projectId: string, taskId: string) => `task::${projectId}::${taskId}`;
+const toFolderDndId = (id: string) => `folder::${id}`;
+const archivedHeaderDndId = 'archived::header';
 
 type SidebarDndId =
   | { kind: 'project'; projectId: string }
-  | { kind: 'task'; projectId: string; taskId: string };
+  | { kind: 'task'; projectId: string; taskId: string }
+  | { kind: 'folder'; folderId: string }
+  | { kind: 'archived-header' }
+  | { kind: 'archived-project'; projectId: string };
 
 function rowToDndId(row: SidebarRow): string {
-  if (row.kind === 'project') return toProjectDndId(row.projectId);
-  return toTaskDndId(row.projectId, row.taskId);
+  switch (row.kind) {
+    case 'project':
+      return toProjectDndId(row.projectId);
+    case 'task':
+      return toTaskDndId(row.projectId, row.taskId);
+    case 'folder':
+      return toFolderDndId(row.folderId);
+    case 'archived-header':
+      return archivedHeaderDndId;
+    case 'archived-project':
+      return `archived-project::${row.projectId}`;
+  }
 }
 
 function parseDndId(id: string): SidebarDndId | null {
   if (id.startsWith('proj::')) return { kind: 'project', projectId: id.slice(6) };
+  if (id.startsWith('folder::')) return { kind: 'folder', folderId: id.slice(8) };
+  if (id === archivedHeaderDndId) return { kind: 'archived-header' };
+  if (id.startsWith('archived-project::')) {
+    return { kind: 'archived-project', projectId: id.slice('archived-project::'.length) };
+  }
   if (id.startsWith('task::')) {
     const [, projectId, taskId] = id.split('::');
     if (projectId && taskId) return { kind: 'task', projectId, taskId };
@@ -277,7 +344,12 @@ const sidebarCollision: CollisionDetection = (args) => {
       const cParsed = parseDndId(id);
       return cParsed?.kind === 'task' && cParsed.projectId === parsed.projectId;
     }
-    return true;
+    const cParsed = parseDndId(id);
+    if (!cParsed || cParsed.kind === 'archived-header' || cParsed.kind === 'archived-project') {
+      return false;
+    }
+    if (parsed.kind === 'folder') return cParsed.kind === 'folder';
+    return cParsed.kind === 'project' || cParsed.kind === 'task' || cParsed.kind === 'folder';
   });
   const filteredArgs = { ...args, droppableContainers: containers };
   const pointerCollisions = pointerWithin(filteredArgs);
@@ -313,9 +385,11 @@ function DragOverlayContent({ dndId }: { dndId: string }) {
       <div className="rounded-lg bg-background-tertiary-2 shadow-md">
         {parsed.kind === 'project' ? (
           <SidebarProjectItem projectId={parsed.projectId} />
-        ) : (
+        ) : parsed.kind === 'task' ? (
           <SidebarTaskItem projectId={parsed.projectId} taskId={parsed.taskId} />
-        )}
+        ) : parsed.kind === 'folder' ? (
+          <SidebarFolderHeader folderId={parsed.folderId} />
+        ) : null}
       </div>
     </div>
   );
@@ -359,12 +433,14 @@ function InsertionIndicator({ pointerY }: { pointerY: number | null }) {
 interface SortableRowProps {
   dndId: string;
   style: React.CSSProperties;
+  disabled?: boolean;
   children: React.ReactNode;
 }
 
-function SortableRow({ dndId, style, children }: SortableRowProps) {
+function SortableRow({ dndId, style, disabled = false, children }: SortableRowProps) {
   const { setNodeRef, transform, transition, isDragging, listeners } = useSortable({
     id: dndId,
+    disabled,
   });
 
   const combinedStyle: React.CSSProperties = {
@@ -376,7 +452,7 @@ function SortableRow({ dndId, style, children }: SortableRowProps) {
   };
 
   return (
-    <div ref={setNodeRef} style={combinedStyle} {...listeners}>
+    <div ref={setNodeRef} style={combinedStyle} {...(disabled ? {} : listeners)}>
       {children}
     </div>
   );

@@ -11,7 +11,12 @@ import {
 import { remote, type RemoteModel } from '@emdash/wire/state';
 import { makeObservable, observable, runInAction } from 'mobx';
 import { getGithubClient } from '@core/features/github/api/browser/client';
-import { projectsWireContract, type ProjectCreationProgress } from '@core/features/projects/api';
+import {
+  projectsWireContract,
+  type ProjectCreationProgress,
+  type ProjectFolder,
+  type ProjectListData,
+} from '@core/features/projects/api';
 import { getProjectsWireClient } from '@core/features/projects/api/browser/client';
 import {
   createRegisteredProject,
@@ -58,6 +63,7 @@ interface ProjectContextHydration {
 
 export class ProjectManagerStore {
   projects = observable.map<string, ProjectStore>();
+  folders = observable.array<ProjectFolder>([]);
   pendingCreationIds = observable.set<string>();
   private _projectCreationJobs = new Map<string, { cancel(): Promise<void> }>();
   private _projectContextHydrations = new Map<string, ProjectContextHydration>();
@@ -78,7 +84,11 @@ export class ProjectManagerStore {
   constructor(
     private readonly projectStoreContributions: readonly ScopedStoreContribution<ProjectScopedStoreContext>[]
   ) {
-    makeObservable(this, { projects: observable, pendingCreationIds: observable });
+    makeObservable(this, {
+      projects: observable,
+      folders: observable,
+      pendingCreationIds: observable,
+    });
   }
 
   dispose(): void {
@@ -126,7 +136,7 @@ export class ProjectManagerStore {
             return;
           }
           if (!current.value) return;
-          this._applyProjectListSnapshot(current.value.projects);
+          this._applyProjectListSnapshot(current.value);
           if (resolved) return;
           resolved = true;
           resolve();
@@ -136,13 +146,15 @@ export class ProjectManagerStore {
     });
   }
 
-  private _applyProjectListSnapshot(rows: readonly (LocalProject | SshProject)[]): void {
+  private _applyProjectListSnapshot(data: ProjectListData): void {
     if (this._disposed) return;
+    const rows = data.projects;
     const seen = new Set(rows.map((project) => project.id));
     for (const project of rows) {
       this._applyProjectSnapshot(project);
     }
     runInAction(() => {
+      this.folders.replace(data.folders ?? []);
       for (const [projectId, project] of this.projects) {
         if (seen.has(projectId) || this.pendingCreationIds.has(projectId)) continue;
         this.projects.delete(projectId);
@@ -154,8 +166,11 @@ export class ProjectManagerStore {
 
   private _applyProjectSnapshot(project: LocalProject | SshProject): void {
     let store: ProjectStore | undefined;
+    let becameArchived = false;
     runInAction(() => {
       const current = this.projects.get(project.id);
+      const wasArchived = Boolean(current?.data?.archivedAt);
+      becameArchived = !wasArchived && Boolean(project.archivedAt);
       if (!current) {
         store = createRegisteredProject(project);
         this.projects.set(project.id, store);
@@ -168,9 +183,29 @@ export class ProjectManagerStore {
       }
       current.updateData(project);
     });
+    if (becameArchived) this._leaveArchivedProject(project.id);
     if (store?.data && store.context === null) {
       void this._startOrReuseProjectContext(store.id);
     }
+  }
+
+  /** Leaves a project or task view that belongs to a project just set aside. */
+  private _leaveArchivedProject(projectId: string): void {
+    const navigation = getNavigation();
+    const current = navigation.currentRef;
+    const currentProjectId =
+      current.viewId === 'project' || current.viewId === 'task'
+        ? (current.params as { projectId?: string }).projectId
+        : undefined;
+    if (currentProjectId !== projectId) return;
+    const next = [...this.projects.values()].find(
+      (store) => store.id !== projectId && !store.data?.archivedAt
+    );
+    navigation.navigate(next ? projectViewDef({ projectId: next.id }) : homeViewDef());
+    getNavigationHistory().prune((entry) => {
+      const params = entry.ref.params as { projectId?: string };
+      return params.projectId === projectId;
+    });
   }
 
   private _startOrReuseProjectContext(projectId: string): Promise<void> {
@@ -665,6 +700,46 @@ export class ProjectManagerStore {
     runInAction(() => {
       store.updateData({ ...data, name });
     });
+  }
+
+  async createProjectFolder(name: string, projectId?: string): Promise<void> {
+    await (await getProjectsWireClient()).createProjectFolder({ name, projectId });
+  }
+
+  async renameProjectFolder(folderId: string, name: string): Promise<void> {
+    await (await getProjectsWireClient()).renameProjectFolder({ folderId, name });
+  }
+
+  async deleteProjectFolder(folderId: string): Promise<void> {
+    await (await getProjectsWireClient()).deleteProjectFolder({ folderId });
+  }
+
+  async moveProjectToFolder(projectId: string, folderId: string | null): Promise<void> {
+    const store = this.projects.get(projectId);
+    const previous = store?.data?.folderId ?? null;
+    if (store?.data && previous !== folderId) {
+      runInAction(() => {
+        store.updateData({ ...store.data!, folderId });
+      });
+    }
+    try {
+      await (await getProjectsWireClient()).moveProjectToFolder({ projectId, folderId });
+    } catch (error) {
+      if (store?.data) {
+        runInAction(() => {
+          store.updateData({ ...store.data!, folderId: previous });
+        });
+      }
+      throw error;
+    }
+  }
+
+  async archiveProject(projectId: string): Promise<void> {
+    await (await getProjectsWireClient()).archiveProject({ projectId });
+  }
+
+  async restoreProject(projectId: string): Promise<void> {
+    await (await getProjectsWireClient()).restoreProject({ projectId });
   }
 
   async updateProjectConnection(projectId: string, newConnectionId: string): Promise<void> {

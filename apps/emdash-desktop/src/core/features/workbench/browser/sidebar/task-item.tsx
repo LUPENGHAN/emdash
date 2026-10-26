@@ -31,12 +31,15 @@ interface SidebarTaskItemProps {
   projectId: string;
   /** Pinned strip uses tighter padding than tasks nested under a project. */
   rowVariant?: 'underProject' | 'pinned';
+  /** Extra indent when the project itself sits inside a folder. */
+  nested?: boolean;
 }
 
 export const SidebarTaskItem = observer(function SidebarTaskItem({
   taskId,
   projectId,
   rowVariant = 'underProject',
+  nested = false,
 }: SidebarTaskItemProps) {
   const { navigate } = useNavigate();
   const openRename = useOpenModal('renameTaskModal');
@@ -110,7 +113,7 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
       <SidebarMenuRow
         className={cn(
           'group/row flex items-center justify-between px-1 py-1.5 h-8 gap-1',
-          rowVariant === 'pinned' ? 'pl-2' : 'pl-8'
+          rowVariant === 'pinned' ? 'pl-2' : nested ? 'pl-12' : 'pl-8'
         )}
         isActive={isActive}
         onMouseDown={(e) => e.preventDefault()}

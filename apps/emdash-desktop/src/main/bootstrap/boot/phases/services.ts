@@ -826,6 +826,10 @@ export async function bootServices(
   const automationsService = new AutomationsService({
     db,
     runtime: automationRuntime,
+    isProjectArchived: async (projectId) => {
+      const project = await getProjectById(db, projectId);
+      return project?.archivedAt != null;
+    },
     buildDeployment: (automation) =>
       buildAutomationDeployment(
         {

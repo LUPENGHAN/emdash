@@ -7,13 +7,16 @@ import { createProjectPaletteProvider } from './project-palette-provider';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  restoreProject: vi.fn(async () => {}),
+  projects: new Map<string, { data: { archivedAt: string | null } }>(),
 }));
 
 vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
   asAvailableProject: () => undefined,
-  getProjectManagerStore: () => {
-    throw new Error('Idle project inventory is not used by this test');
-  },
+  getProjectManagerStore: () => ({
+    projects: mocks.projects,
+    restoreProject: mocks.restoreProject,
+  }),
 }));
 
 vi.mock('@core/primitives/navigation/browser/navigation-hooks', () => ({
@@ -31,6 +34,7 @@ describe('project palette row', () => {
   let root: Root;
 
   beforeEach(() => {
+    mocks.projects.clear();
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -81,5 +85,44 @@ describe('project palette row', () => {
     expect(onSelect.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.navigate.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
     );
+    expect(mocks.restoreProject).not.toHaveBeenCalled();
+  });
+
+  it('labels an archived project and restores it before opening', async () => {
+    mocks.projects.set('project-1', { data: { archivedAt: '2026-01-02T00:00:00.000Z' } });
+    const provider = createProjectPaletteProvider({
+      search: async () => [],
+      idle: () => [],
+    });
+    const Row = provider.render;
+
+    await act(async () => {
+      root.render(
+        <Command shouldFilter={false}>
+          <Command.List>
+            <Row
+              match={{
+                id: 'project-1',
+                title: 'Emdash',
+                subtitle: '/repos/emdash',
+                relevance: { band: 'exact', score: 1 },
+              }}
+              value="projects:project-1"
+              onSelect={vi.fn()}
+            />
+          </Command.List>
+        </Command>
+      );
+    });
+
+    expect(host.textContent).toContain('Archived');
+
+    await act(async () => {
+      host.querySelector<HTMLElement>('[cmdk-item]')?.click();
+      await Promise.resolve();
+    });
+
+    expect(mocks.restoreProject).toHaveBeenCalledWith('project-1');
+    expect(mocks.navigate).toHaveBeenCalledWith(projectViewDef({ projectId: 'project-1' }));
   });
 });

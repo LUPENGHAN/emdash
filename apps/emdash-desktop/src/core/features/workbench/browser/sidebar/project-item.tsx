@@ -1,5 +1,7 @@
 import { ContextMenu, Tooltip } from '@emdash/ui/react/primitives';
 import {
+  Archive,
+  ArchiveRestore,
   ChevronRight,
   FolderClosed,
   FolderInput,
@@ -19,6 +21,7 @@ import {
 } from '@core/features/projects/api/browser/stores/project';
 import {
   getProjectHostAccess,
+  getProjectManagerStore,
   getProjectStore,
   projectViewKind,
 } from '@core/features/projects/api/browser/stores/project-selectors';
@@ -52,8 +55,12 @@ const UNREGISTERED_STAGE_LABEL: Record<ProjectCreationStage, string> = {
 
 export const SidebarProjectItem = observer(function SidebarProjectItem({
   projectId,
+  nested = false,
+  archived = false,
 }: {
   projectId: string;
+  nested?: boolean;
+  archived?: boolean;
 }) {
   const { navigate } = useNavigate();
   const { currentView } = useWorkspaceSlots();
@@ -62,6 +69,7 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
   const openCreateTaskModal = useOpenModal('taskModal');
   const confirmDeleteProject = useConfirmDeleteProject();
   const openRenameProject = useOpenModal('renameProjectModal');
+  const openProjectFolder = useOpenModal('projectFolderModal');
 
   const project = getProjectStore(projectId);
 
@@ -134,15 +142,17 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
     <ContextMenu.Root>
       <ContextMenu.Trigger>
         <SidebarMenuRow
-          className={cn('group/row h-8 justify-between flex px-1')}
+          className={cn('group/row h-8 justify-between flex px-1', nested && 'pl-4')}
           data-active={isProjectActive || undefined}
           isActive={isProjectActive}
           onMouseDown={(e) => e.preventDefault()}
-          onClick={navigateToProject}
+          onClick={archived ? undefined : navigateToProject}
         >
           <div className="flex min-w-0 flex-1 items-center gap-1">
             {project.state === 'unregistered' ? (
               renderSpinnerWithTooltip()
+            ) : archived ? (
+              <FolderClosed className="mx-1 h-4 w-4 shrink-0 text-foreground/70" />
             ) : (
               <SidebarItemMiniButton
                 type="button"
@@ -194,52 +204,79 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
               )}
             </SidebarMenuAction>
           </div>
-          <Tooltip.Root>
-            <Tooltip.Trigger
-              className="h-6"
-              render={
-                <SidebarItemMiniButton
-                  type="button"
-                  aria-label={
-                    createDisabledReason
-                      ? `New task for ${projectLabel}. ${createDisabledReason}`
-                      : `New task for ${projectLabel}`
-                  }
-                  className={
-                    'opacity-0 transition-opacity duration-150 group-hover/row:opacity-100'
-                  }
-                  onPointerEnter={() => prefetchRepository()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void openCreateTaskModal({ projectId });
-                  }}
-                  disabled={project.state === 'unregistered' || !!createDisabledReason}
-                >
-                  <Plus className="h-4 w-4" />
-                </SidebarItemMiniButton>
-              }
-            />
-            <Tooltip.Content>
-              {createDisabledReason ?? (
-                <>
-                  New Task
-                  <BoundShortcut command="app.newTask" variant="keycaps" />
-                </>
-              )}
-            </Tooltip.Content>
-          </Tooltip.Root>
+          {!archived && (
+            <Tooltip.Root>
+              <Tooltip.Trigger
+                className="h-6"
+                render={
+                  <SidebarItemMiniButton
+                    type="button"
+                    aria-label={
+                      createDisabledReason
+                        ? `New task for ${projectLabel}. ${createDisabledReason}`
+                        : `New task for ${projectLabel}`
+                    }
+                    className={
+                      'opacity-0 transition-opacity duration-150 group-hover/row:opacity-100'
+                    }
+                    onPointerEnter={() => prefetchRepository()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void openCreateTaskModal({ projectId });
+                    }}
+                    disabled={project.state === 'unregistered' || !!createDisabledReason}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </SidebarItemMiniButton>
+                }
+              />
+              <Tooltip.Content>
+                {createDisabledReason ?? (
+                  <>
+                    New Task
+                    <BoundShortcut command="app.newTask" variant="keycaps" />
+                  </>
+                )}
+              </Tooltip.Content>
+            </Tooltip.Root>
+          )}
         </SidebarMenuRow>
       </ContextMenu.Trigger>
       <ContextMenu.Content>
-        <ContextMenu.Item
-          disabled={project.state === 'unregistered'}
-          onClick={() => {
-            void openRenameProject({ projectId, currentName: project.name ?? '' });
-          }}
-        >
-          <Pencil className="size-4" />
-          Rename Project
-        </ContextMenu.Item>
+        {archived ? (
+          <ContextMenu.Item
+            onClick={() => {
+              void getProjectManagerStore().restoreProject(projectId);
+            }}
+          >
+            <ArchiveRestore className="size-4" />
+            Restore
+          </ContextMenu.Item>
+        ) : (
+          <ProjectFolderMenu
+            projectId={projectId}
+            disabled={project.state === 'unregistered'}
+            folderId={project.data?.folderId ?? null}
+            onNewFolder={() => {
+              void openProjectFolder({ mode: 'create', projectId });
+            }}
+            onRename={() => {
+              void openRenameProject({ projectId, currentName: project.name ?? '' });
+            }}
+          />
+        )}
+        {archived ? null : <ContextMenu.Separator />}
+        {!archived && (
+          <ContextMenu.Item
+            disabled={project.state === 'unregistered'}
+            onClick={() => {
+              void getProjectManagerStore().archiveProject(projectId);
+            }}
+          >
+            <Archive className="size-4" />
+            Archive Project
+          </ContextMenu.Item>
+        )}
         <ContextMenu.Separator />
         <ContextMenu.Item
           variant="destructive"
@@ -255,6 +292,54 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
         </ContextMenu.Item>
       </ContextMenu.Content>
     </ContextMenu.Root>
+  );
+});
+
+const ProjectFolderMenu = observer(function ProjectFolderMenu({
+  projectId,
+  disabled,
+  folderId,
+  onNewFolder,
+  onRename,
+}: {
+  projectId: string;
+  disabled: boolean;
+  folderId: string | null;
+  onNewFolder: () => void;
+  onRename: () => void;
+}) {
+  const folders = getProjectManagerStore().folders;
+  return (
+    <>
+      <ContextMenu.Item disabled={disabled} onClick={onRename}>
+        <Pencil className="size-4" />
+        Rename Project
+      </ContextMenu.Item>
+      <ContextMenu.Separator />
+      <ContextMenu.Label>Move to Folder</ContextMenu.Label>
+      <ContextMenu.Item disabled={disabled} onClick={onNewFolder}>
+        New Folder…
+      </ContextMenu.Item>
+      {folders.map((folder) => (
+        <ContextMenu.Item
+          key={folder.id}
+          disabled={disabled || folder.id === folderId}
+          onClick={() => {
+            void getProjectManagerStore().moveProjectToFolder(projectId, folder.id);
+          }}
+        >
+          <span translate="no">{folder.name}</span>
+        </ContextMenu.Item>
+      ))}
+      <ContextMenu.Item
+        disabled={disabled || folderId == null}
+        onClick={() => {
+          void getProjectManagerStore().moveProjectToFolder(projectId, null);
+        }}
+      >
+        No Folder
+      </ContextMenu.Item>
+    </>
   );
 });
 

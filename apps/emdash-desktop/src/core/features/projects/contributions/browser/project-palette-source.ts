@@ -42,7 +42,7 @@ export function getIdleProjectPaletteEntities(
       projectId: null,
       taskId: null,
       title: projectStore.name ?? projectContext.project.id,
-      subtitle: '',
+      subtitle: projectContext.project.archivedAt ? 'Archived' : '',
       score: 0,
     });
     if (matches.length === IDLE_PROJECT_LIMIT) break;

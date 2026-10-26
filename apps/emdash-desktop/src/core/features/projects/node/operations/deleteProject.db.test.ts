@@ -135,7 +135,10 @@ describe('deleteProject', () => {
       deleteBySubject: vi.fn(async () => ({ success: true as const, data: undefined })),
       deleteOrphans: vi.fn(async () => ({ success: true as const, data: undefined })),
     };
-    const automations = { removeProjectDeployments: vi.fn(async () => {}) };
+    const automations = {
+      removeProjectDeployments: vi.fn(async () => {}),
+      resumeProjectDeployments: vi.fn(async () => {}),
+    };
     const projectsManager = { invalidate: vi.fn(async () => {}) };
     const pullRequests = { deleteProjectData: vi.fn(async () => {}) };
     const requirements = { removeProject: vi.fn(async () => {}) };

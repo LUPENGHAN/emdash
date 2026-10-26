@@ -43,8 +43,115 @@ function isVisibleRegularTask(task: TaskStore): boolean {
 }
 
 export type SidebarRow =
-  | { kind: 'project'; projectId: string }
-  | { kind: 'task'; projectId: string; taskId: string };
+  | { kind: 'project'; projectId: string; nested: boolean }
+  | { kind: 'task'; projectId: string; taskId: string; nested: boolean }
+  | { kind: 'folder'; folderId: string }
+  | { kind: 'archived-header'; count: number }
+  | { kind: 'archived-project'; projectId: string };
+
+export type SidebarProjectPlacement = {
+  id: string;
+  folderId: string | null;
+  archived: boolean;
+};
+
+export type ProjectDropTarget =
+  | { kind: 'project'; projectId: string; before: boolean }
+  | { kind: 'folder'; folderId: string };
+
+/** Reorders `projectOrder` and reports the folder the dropped project should join. */
+export function planProjectDrop(
+  order: readonly string[],
+  projects: readonly SidebarProjectPlacement[],
+  projectId: string,
+  target: ProjectDropTarget
+): { order: string[]; folderId: string | null } | null {
+  const byId = new Map(projects.map((project) => [project.id, project]));
+  const current = byId.get(projectId);
+  if (!current || current.archived) return null;
+
+  let folderId: string | null;
+  let anchorId: string | null;
+  let before: boolean;
+  if (target.kind === 'folder') {
+    folderId = target.folderId;
+    const members = bandIds(order, projects, folderId, projectId);
+    if (members.length === 0) {
+      if (current.folderId === folderId) return null;
+      anchorId = null;
+      before = false;
+    } else {
+      anchorId = members[0] ?? null;
+      before = true;
+    }
+  } else {
+    if (target.projectId === projectId) return null;
+    const anchor = byId.get(target.projectId);
+    if (!anchor || anchor.archived) return null;
+    folderId = anchor.folderId;
+    anchorId = target.projectId;
+    before = target.before;
+  }
+
+  const nextOrder = moveId(order, projectId, anchorId, before);
+  if (sameIds(nextOrder, order) && folderId === current.folderId) return null;
+  return { order: nextOrder, folderId };
+}
+
+export function moveId(
+  order: readonly string[],
+  id: string,
+  anchorId: string | null,
+  before: boolean
+): string[] {
+  const without = order.filter((entry) => entry !== id);
+  if (!anchorId) {
+    without.push(id);
+    return without;
+  }
+  const index = without.indexOf(anchorId);
+  if (index === -1) {
+    without.push(id);
+    return without;
+  }
+  without.splice(before ? index : index + 1, 0, id);
+  return without;
+}
+
+function bandIds(
+  order: readonly string[],
+  projects: readonly SidebarProjectPlacement[],
+  folderId: string | null,
+  exclude: string
+): string[] {
+  return projects
+    .filter(
+      (project) => project.id !== exclude && !project.archived && project.folderId === folderId
+    )
+    .sort((a, b) => compareOrder(order, a.id, b.id))
+    .map((project) => project.id);
+}
+
+function compareOrder(order: readonly string[], a: string, b: string): number {
+  const ai = order.indexOf(a);
+  const bi = order.indexOf(b);
+  if (ai === -1 && bi === -1) return a.localeCompare(b);
+  if (ai === -1) return -1;
+  if (bi === -1) return 1;
+  return ai - bi;
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function projectPlacement(project: ProjectStore): SidebarProjectPlacement {
+  return {
+    id: project.id,
+    folderId: project.data?.folderId ?? null,
+    archived: Boolean(project.data?.archivedAt),
+  };
+}
 
 export class SidebarStore {
   private _handle: MementoHandle<WorkbenchSidebarState> | undefined;
@@ -71,6 +178,14 @@ export class SidebarStore {
 
   get projectOrder(): string[] {
     return this.state.projectOrder;
+  }
+
+  get folderOrder(): string[] {
+    return this.state.folderOrder;
+  }
+
+  get archivedExpanded(): boolean {
+    return this.state.archivedExpanded;
   }
 
   get taskOrderByProject(): Record<string, string[]> {
@@ -105,21 +220,26 @@ export class SidebarStore {
 
   get sidebarRows(): SidebarRow[] {
     const rows: SidebarRow[] = [];
-    for (const project of this.orderedProjects) {
-      const projectId = project.id;
-      rows.push({ kind: 'project', projectId });
-      const context = asAvailableProject(project);
-      if (this.expandedProjectIds.has(projectId) && context) {
-        const tasks = Array.from(context.get(taskManagerStoreToken).tasks.values()).filter(
-          isVisibleRegularTask
-        );
-        const manualOrder = this.taskOrderByProject[projectId];
-        const ordered = manualOrder?.length
-          ? this.mergeTaskOrder(projectId, tasks)
-          : this.sortTasksForSidebar(tasks);
-        for (const task of ordered) {
-          if (task.data.isPinned) continue;
-          rows.push({ kind: 'task', projectId, taskId: task.data.id });
+    const active = this.orderedProjects.filter((project) => !project.data?.archivedAt);
+    const archived = this.orderedProjects.filter((project) => Boolean(project.data?.archivedAt));
+
+    for (const project of active) {
+      if (project.data?.folderId) continue;
+      this.appendProjectRows(rows, project, false);
+    }
+
+    for (const folder of this.orderedFolders()) {
+      const members = active.filter((project) => project.data?.folderId === folder.id);
+      if (members.length === 0) continue;
+      rows.push({ kind: 'folder', folderId: folder.id });
+      for (const project of members) this.appendProjectRows(rows, project, true);
+    }
+
+    if (archived.length > 0) {
+      rows.push({ kind: 'archived-header', count: archived.length });
+      if (this.archivedExpanded) {
+        for (const project of archived) {
+          rows.push({ kind: 'archived-project', projectId: project.id });
         }
       }
     }
@@ -137,6 +257,7 @@ export class SidebarStore {
   get pinnedSidebarEntries(): { projectId: string; taskId: string }[] {
     const pairs: { projectId: string; task: TaskStore }[] = [];
     for (const project of this.projectManager.projects.values()) {
+      if (project.data?.archivedAt) continue;
       const context = asAvailableProject(project);
       if (!context) continue;
       const projectId = project.id;
@@ -217,6 +338,40 @@ export class SidebarStore {
     this.updateState((current) => ({ ...current, projectOrder: ids }));
   }
 
+  setFolderOrder(ids: string[]): void {
+    this.updateState((current) => ({ ...current, folderOrder: ids }));
+  }
+
+  toggleArchivedExpanded(): void {
+    this.updateState((current) => ({ ...current, archivedExpanded: !current.archivedExpanded }));
+  }
+
+  /**
+   * Moves a project within `projectOrder` and, when the destination band differs,
+   * into that folder. The folder write is reverted when the server rejects it.
+   */
+  applyProjectDrop(projectId: string, target: ProjectDropTarget): void {
+    const projects = this.orderedProjects.map(projectPlacement);
+    const plan = planProjectDrop(this.projectOrder, projects, projectId, target);
+    if (!plan) return;
+    const previousOrder = [...this.projectOrder];
+    const currentFolder = projects.find((project) => project.id === projectId)?.folderId ?? null;
+    this.setProjectOrder(plan.order);
+    if (plan.folderId === currentFolder) return;
+    void this.projectManager.moveProjectToFolder(projectId, plan.folderId).catch(() => {
+      this.setProjectOrder(previousOrder);
+    });
+  }
+
+  applyFolderDrop(folderId: string, anchorId: string, before: boolean): void {
+    if (folderId === anchorId) return;
+    const base =
+      this.folderOrder.length > 0
+        ? this.folderOrder
+        : this.orderedFolders().map((folder) => folder.id);
+    this.setFolderOrder(moveId(base, folderId, anchorId, before));
+  }
+
   mergeTaskOrder(projectId: string, tasks: TaskStore[]): TaskStore[] {
     const stored = this.taskOrderByProject[projectId] ?? [];
     const byId = new Map(tasks.map((t) => [t.data.id, t] as const));
@@ -242,6 +397,37 @@ export class SidebarStore {
       ...current,
       taskOrderByProject: { ...current.taskOrderByProject, [projectId]: orderedIds },
     }));
+  }
+
+  private orderedFolders(): { id: string; name: string }[] {
+    const folders = this.projectManager.folders ? [...this.projectManager.folders] : [];
+    const order = this.folderOrder;
+    return folders.sort((a, b) => {
+      const ai = order.indexOf(a.id);
+      const bi = order.indexOf(b.id);
+      if (ai === -1 && bi === -1) return a.name.localeCompare(b.name);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  }
+
+  private appendProjectRows(rows: SidebarRow[], project: ProjectStore, nested: boolean): void {
+    const projectId = project.id;
+    rows.push({ kind: 'project', projectId, nested });
+    const context = asAvailableProject(project);
+    if (!this.expandedProjectIds.has(projectId) || !context) return;
+    const tasks = Array.from(context.get(taskManagerStoreToken).tasks.values()).filter(
+      isVisibleRegularTask
+    );
+    const manualOrder = this.taskOrderByProject[projectId];
+    const ordered = manualOrder?.length
+      ? this.mergeTaskOrder(projectId, tasks)
+      : this.sortTasksForSidebar(tasks);
+    for (const task of ordered) {
+      if (task.data.isPinned) continue;
+      rows.push({ kind: 'task', projectId, taskId: task.data.id, nested });
+    }
   }
 
   private get state(): WorkbenchSidebarState {

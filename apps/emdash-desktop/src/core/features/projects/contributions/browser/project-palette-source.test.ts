@@ -14,7 +14,7 @@ vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
   },
 }));
 
-function projectStore(id: string, contextAvailable = true): ProjectStore {
+function projectStore(id: string, contextAvailable = true, archivedAt?: string): ProjectStore {
   const data = {
     type: 'local' as const,
     id,
@@ -24,6 +24,7 @@ function projectStore(id: string, contextAvailable = true): ProjectStore {
     repositoryWorkspaceId: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
+    archivedAt: archivedAt ?? null,
   };
   return {
     name: data.name,
@@ -99,5 +100,16 @@ describe('project palette source', () => {
       { id: 'five', title: 'Project five', subtitle: '' },
     ]);
     expect(getIdleProjectPaletteEntities({ taskId: 'task-1' }, projects)).toEqual([]);
+  });
+
+  it('marks an archived project in the idle list', () => {
+    const archived = projectStore('old', true, '2026-02-01T00:00:00.000Z');
+
+    expect(
+      getIdleProjectPaletteEntities({ projectId: 'other' }, [archived]).map(({ id, subtitle }) => ({
+        id,
+        subtitle,
+      }))
+    ).toEqual([{ id: 'old', subtitle: 'Archived' }]);
   });
 });

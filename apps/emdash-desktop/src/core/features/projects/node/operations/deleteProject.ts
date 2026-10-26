@@ -42,7 +42,7 @@ export type ProjectDeletionResult = Result<void, MutationError>;
 export type ProjectDeletionDependencies = {
   db: AppDb;
   runtimes: WorkspaceRemovalBroker;
-  automations: Pick<AutomationsService, 'removeProjectDeployments'>;
+  automations: Pick<AutomationsService, 'removeProjectDeployments' | 'resumeProjectDeployments'>;
   getMementosRuntimeClient(): Promise<MementosRuntimeClient>;
   logger: Logger;
   projects: Pick<ProjectAttachmentManager, 'invalidate'>;

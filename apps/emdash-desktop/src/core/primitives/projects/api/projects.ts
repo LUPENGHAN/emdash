@@ -26,6 +26,10 @@ export const localProjectSchema = z.object({
    */
   baseRef: z.string().nullable(),
   repositoryWorkspaceId: z.string().nullable(),
+  /** Null when the project is ungrouped. Absent on objects built before folders existed. */
+  folderId: z.string().nullable().optional(),
+  /** Null when the project is in the working list. */
+  archivedAt: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -39,6 +43,8 @@ export const sshProjectSchema = z.object({
   baseRef: z.string().nullable(),
   connectionId: z.string(),
   repositoryWorkspaceId: z.string().nullable(),
+  folderId: z.string().nullable().optional(),
+  archivedAt: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

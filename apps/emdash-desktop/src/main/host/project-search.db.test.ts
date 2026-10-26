@@ -79,7 +79,10 @@ describe('project deletion search cleanup', () => {
       {
         db: fixture.db,
         runtimes: { client: vi.fn() },
-        automations: { removeProjectDeployments: vi.fn(async () => {}) },
+        automations: {
+          removeProjectDeployments: vi.fn(async () => {}),
+          resumeProjectDeployments: vi.fn(async () => {}),
+        },
         getMementosRuntimeClient: vi.fn().mockResolvedValue({
           deleteBySubject: async () => ok(undefined),
           deleteOrphans: async () => ok(undefined),

@@ -1,5 +1,6 @@
 import { Command } from 'cmdk';
 import { FolderOpen } from 'lucide-react';
+import { getProjectManagerStore } from '@core/features/projects/api/browser/stores/project-selectors';
 import { projectViewDef } from '@core/features/projects/contributions/views';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import {
@@ -30,9 +31,17 @@ function ProjectPaletteRow({
   onSelect,
 }: PaletteProviderRenderProps<PaletteProviderMatch>) {
   const { navigate } = useNavigate();
+  const project = getProjectManagerStore().projects.get(match.id);
+  const archived = Boolean(project?.data?.archivedAt);
+  const subtitle = archived ? 'Archived' : match.subtitle;
   const handleSelect = () => {
     onSelect();
-    navigate(projectViewDef({ projectId: match.id }));
+    const open = () => navigate(projectViewDef({ projectId: match.id }));
+    if (!archived) {
+      open();
+      return;
+    }
+    void getProjectManagerStore().restoreProject(match.id).then(open);
   };
 
   return (
@@ -40,9 +49,7 @@ function ProjectPaletteRow({
       <FolderOpen size={14} className="shrink-0 text-foreground/40" />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{match.title}</span>
-        {match.subtitle && (
-          <span className="truncate text-xs text-foreground/40">{match.subtitle}</span>
-        )}
+        {subtitle && <span className="truncate text-xs text-foreground/40">{subtitle}</span>}
       </span>
     </Command.Item>
   );
@@ -60,6 +67,7 @@ export function createProjectPaletteProvider({
       idle(context).map((item) => ({
         id: item.id,
         title: item.title,
+        subtitle: item.subtitle || undefined,
         section: 'Projects',
         relevance: { band: 'fuzzy', score: 0 },
       })),

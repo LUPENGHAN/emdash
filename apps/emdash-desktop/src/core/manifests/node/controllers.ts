@@ -459,6 +459,7 @@ export const desktopNodeControllers = {
           db,
           placement: workspacePlacement,
           projectDeletion,
+          projectAutomations: projectDeletion.automations,
           projects,
           projectSettings,
           runtimes,

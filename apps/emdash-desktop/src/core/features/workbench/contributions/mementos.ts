@@ -11,8 +11,23 @@ const workbenchSidebarV1Schema = z.object({
   taskSortBy: z.enum(['created-at', 'updated-at']),
 });
 
+const workbenchSidebarV2Schema = workbenchSidebarV1Schema.extend({
+  version: z.literal('2'),
+  folderOrder: z.array(z.string()),
+  archivedExpanded: z.boolean(),
+});
+
 export const workbenchSidebarSchema = defineVersionedSchema()
   .initial('1', workbenchSidebarV1Schema)
+  .version('2', workbenchSidebarV2Schema, (previous) => {
+    const { version: _version, ...rest } = previous;
+    return {
+      ...rest,
+      version: '2' as const,
+      folderOrder: [],
+      archivedExpanded: false,
+    };
+  })
   .build();
 
 export type WorkbenchSidebarState = typeof workbenchSidebarSchema.Type;
@@ -22,9 +37,11 @@ export const workbenchSidebarMemento = defineMemento({
   subject: appSubject,
   schema: workbenchSidebarSchema,
   default: {
-    version: '1' as const,
+    version: '2' as const,
     expandedProjectIds: [],
     projectOrder: [],
+    folderOrder: [],
+    archivedExpanded: false,
     taskOrderByProject: {},
     taskSortBy: 'created-at' as const,
   },

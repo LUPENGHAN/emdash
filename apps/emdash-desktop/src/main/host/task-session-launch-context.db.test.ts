@@ -142,7 +142,10 @@ it.each(['claude', 'codex'] as const)(
           db: fixture.db,
           runtimes,
           projects: { invalidate: async () => {} },
-          automations: { removeProjectDeployments: async () => {} },
+          automations: {
+            removeProjectDeployments: async () => {},
+            resumeProjectDeployments: async () => {},
+          },
           pullRequests: { deleteProjectData: async () => {} },
           requirements: { removeProject: async () => {} },
           getMementosRuntimeClient: async () =>
