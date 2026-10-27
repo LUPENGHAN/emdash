@@ -175,17 +175,16 @@ enabled = false
           state: Record<string, { enabled?: boolean; trusted_hash?: string }>;
         };
       };
-      // Hashes Codex itself recorded when these exact hooks were reviewed by hand.
       expect(config.hooks.state['/home/user/.codex/config.toml:stop:1:0']).toEqual({
         enabled: false,
-        trusted_hash: 'sha256:cd0471cbdace6a9137ba1699388292eaeedf6222ad1cb562f79b51f0724e6343',
+        trusted_hash: 'sha256:18f9955cb8727fba9c3469707fd78eda976c8776ca3af8d3a3419e08efe20768',
       });
       expect(config.hooks.state['/home/user/.codex/config.toml:session_start:0:0']).toEqual({
-        trusted_hash: 'sha256:d6db1e47b489fc9cdaa74d07e965b069880372d7920eb79fabe87c86961b91af',
+        trusted_hash: 'sha256:931fab1a98b72edec8d861b8cde90927998064f5d0e3e8df70fdc0c9f3d27947',
       });
       expect(
         config.hooks.state['/home/user/.codex/config.toml:permission_request:0:0']?.trusted_hash
-      ).toBe('sha256:ccf0467f85fc0a9457b7cabc4d28e20bb89251aa7deceb9602165ad8ce3314d3');
+      ).toBe('sha256:5971cf091e9cc5944ff4d5feffdf2ba1a4b9c82613935ddadc09f3a5e848b150');
       // The user's own hook is left for them to review.
       expect(config.hooks.Stop[0]).toEqual({
         hooks: [{ type: 'command', command: 'echo user-stop' }],

@@ -45,23 +45,45 @@ describe('SqliteNotificationStore', () => {
     expect(await store.loadRecent({ since: 0, maxRows: 10 })).toEqual([]);
   });
 
-  it('prunes notifications older than the cutoff and beyond the row limit', async () => {
+  it('prunes notifications past the retention window and beyond the newest maxRows', async () => {
     fixture = await openFixture('empty');
     const store = new SqliteNotificationStore(fixture.db);
     for (const [id, createdAt] of [
-      ['old', 500],
-      ['a', 1_000],
-      ['b', 2_000],
-      ['c', 3_000],
+      ['n-1', 1_000],
+      ['n-2', 2_000],
+      ['n-5', 5_000],
+      ['n-3', 3_000],
+      ['n-4', 4_000],
     ] as const) {
       await store.insert({ ...notification, id, createdAt });
     }
 
-    expect(await store.prune({ olderThan: 900, maxRows: 2 })).toEqual({
+    expect(await store.prune({ olderThan: 2_000, maxRows: 2 })).toEqual({
       success: true,
       data: undefined,
     });
-    const kept = await store.loadRecent({ since: 0, maxRows: 10 });
-    expect(kept.map((row) => row.id).sort()).toEqual(['b', 'c']);
+    expect(storedIds()).toEqual(['n-4', 'n-5']);
   });
+
+  it('breaks createdAt ties by insertion order when capping rows', async () => {
+    fixture = await openFixture('empty');
+    const store = new SqliteNotificationStore(fixture.db);
+    for (const id of ['n-c', 'n-a', 'n-b']) {
+      await store.insert({ ...notification, id, createdAt: 1_000 });
+    }
+
+    expect((await store.prune({ olderThan: 0, maxRows: 2 })).success).toBe(true);
+    expect(storedIds()).toEqual(['n-a', 'n-b']);
+    expect((await store.loadRecent({ since: 0, maxRows: 2 })).map((row) => row.id)).toEqual([
+      'n-a',
+      'n-b',
+    ]);
+  });
+
+  function storedIds(): string[] {
+    return fixture.sqlite
+      .prepare('SELECT id FROM notifications ORDER BY id')
+      .pluck()
+      .all() as string[];
+  }
 });
