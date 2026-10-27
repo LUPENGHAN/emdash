@@ -102,6 +102,9 @@ describe('Skill detail close button over the window drag region', () => {
     // backdrop have to opt out; a working React handler cannot prove that.
     expect(getComputedStyle(popup!).getPropertyValue('-webkit-app-region')).toBe('no-drag');
     expect(getComputedStyle(overlay!).getPropertyValue('-webkit-app-region')).toBe('no-drag');
+    // Portaled selects and menus share the overlay's z-index. A higher popup
+    // layer covers them, so the list only peeks out under the dialog.
+    expect(getComputedStyle(popup!).zIndex).toBe(getComputedStyle(overlay!).zIndex);
 
     await close.click();
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();

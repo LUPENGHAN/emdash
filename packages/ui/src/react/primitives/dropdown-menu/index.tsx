@@ -1,4 +1,5 @@
 import { Menu as MenuPrimitive } from '@base-ui/react/menu';
+import { popupCollisionPadding } from '@styles/recipes/popup-layer';
 import { cx } from '@styles/utilities/cx';
 import { CheckIcon, ChevronRightIcon } from 'lucide-react';
 import * as React from 'react';
@@ -22,10 +23,14 @@ function DropdownMenuContent({
   side = 'bottom',
   sideOffset = 4,
   width = 'trigger',
+  collisionPadding = popupCollisionPadding,
   className,
   ...props
 }: MenuPrimitive.Popup.Props &
-  Pick<MenuPrimitive.Positioner.Props, 'align' | 'alignOffset' | 'side' | 'sideOffset'> & {
+  Pick<
+    MenuPrimitive.Positioner.Props,
+    'align' | 'alignOffset' | 'side' | 'sideOffset' | 'collisionPadding'
+  > & {
     width?: 'trigger' | 'content' | 'content-at-least-trigger';
   }) {
   return (
@@ -36,6 +41,8 @@ function DropdownMenuContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        collisionPadding={collisionPadding}
+        positionMethod="fixed"
       >
         <MenuPrimitive.Popup
           data-slot="dropdown-menu-content"

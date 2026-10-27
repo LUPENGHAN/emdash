@@ -1,4 +1,5 @@
 import { ContextMenu as ContextMenuPrimitive } from '@base-ui/react/context-menu';
+import { popupCollisionPadding } from '@styles/recipes/popup-layer';
 import { cx } from '@styles/utilities/cx';
 import * as styles from './context-menu.css';
 
@@ -13,11 +14,18 @@ function ContextMenuTrigger({ ...props }: ContextMenuPrimitive.Trigger.Props) {
 function ContextMenuContent({
   className,
   sideOffset = 4,
+  collisionPadding = popupCollisionPadding,
   ...props
-}: ContextMenuPrimitive.Popup.Props & Pick<ContextMenuPrimitive.Positioner.Props, 'sideOffset'>) {
+}: ContextMenuPrimitive.Popup.Props &
+  Pick<ContextMenuPrimitive.Positioner.Props, 'sideOffset' | 'collisionPadding'>) {
   return (
     <ContextMenuPrimitive.Portal>
-      <ContextMenuPrimitive.Positioner className={styles.positioner} sideOffset={sideOffset}>
+      <ContextMenuPrimitive.Positioner
+        className={styles.positioner}
+        sideOffset={sideOffset}
+        collisionPadding={collisionPadding}
+        positionMethod="fixed"
+      >
         <ContextMenuPrimitive.Popup
           data-slot="context-menu-content"
           className={cx(

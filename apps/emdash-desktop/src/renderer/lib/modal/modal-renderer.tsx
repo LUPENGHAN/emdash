@@ -48,10 +48,13 @@ const POSITION_CLASSES: Record<ModalPosition, string> = {
 
 // The borderless titlebar is a native drag region and ignores z-index. A tall
 // dialog (skill details fill the viewport) puts its close button in that strip,
-// so the click drags the window unless the popup and backdrop opt out. The
-// popup also stays above the backdrop, which is z-index 50.
+// so the click drags the window unless the popup and backdrop opt out.
+// Selects, comboboxes, and menus portal into this dialog at z-index 50. The
+// popup stays on that same layer: it is painted after the backdrop, so it still
+// covers the scrim, and a menu opened later can paint over the dialog. A higher
+// popup z-index covers the menu, leaving only the sliver below the dialog.
 const noDragStyle = { WebkitAppRegion: 'no-drag' } as CSSProperties;
-const popupStyle = { ...noDragStyle, position: 'fixed', zIndex: 51 } as CSSProperties;
+const popupStyle = { ...noDragStyle, position: 'fixed', zIndex: 50 } as CSSProperties;
 
 export const ModalRenderer = observer(function ModalRenderer() {
   // Restore focus to the element captured when the first modal in a flow opens.

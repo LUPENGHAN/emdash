@@ -1,6 +1,7 @@
 'use client';
 
 import { Popover as PopoverPrimitive } from '@base-ui/react/popover';
+import { popupCollisionPadding } from '@styles/recipes/popup-layer';
 import { cx } from '@styles/utilities/cx';
 import * as React from 'react';
 import * as styles from './popover.css';
@@ -20,11 +21,12 @@ function PopoverContent({
   side = 'bottom',
   sideOffset = 4,
   anchor,
+  collisionPadding = popupCollisionPadding,
   ...props
 }: PopoverPrimitive.Popup.Props &
   Pick<
     PopoverPrimitive.Positioner.Props,
-    'align' | 'alignOffset' | 'side' | 'sideOffset' | 'anchor'
+    'align' | 'alignOffset' | 'side' | 'sideOffset' | 'anchor' | 'collisionPadding'
   >) {
   return (
     <PopoverPrimitive.Portal>
@@ -34,6 +36,8 @@ function PopoverContent({
         side={side}
         sideOffset={sideOffset}
         anchor={anchor}
+        collisionPadding={collisionPadding}
+        positionMethod="fixed"
         className={styles.positioner}
       >
         <PopoverPrimitive.Popup

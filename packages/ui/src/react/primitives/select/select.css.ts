@@ -1,3 +1,4 @@
+import { noDragRegion } from '@styles/recipes/popup-layer';
 import { globalStyle, style } from '@vanilla-extract/css';
 import {
   kfPopupIn,
@@ -11,6 +12,7 @@ import { vars } from '@theme/core/contract/contract.css';
 import { tokenVars } from '@theme/tokens.css';
 
 export const positioner = style({
+  ...noDragRegion,
   isolation: 'isolate',
   zIndex: 50,
 });
@@ -28,6 +30,7 @@ export const selectValue = style({
 });
 
 export const selectContent = style({
+  ...noDragRegion,
   position: 'relative',
   isolation: 'isolate',
   zIndex: 50,

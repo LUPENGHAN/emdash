@@ -1,4 +1,5 @@
 import { Select as SelectPrimitive } from '@base-ui/react/select';
+import { popupCollisionPadding } from '@styles/recipes/popup-layer';
 import { cx } from '@styles/utilities/cx';
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import * as React from 'react';
@@ -68,12 +69,13 @@ function SelectContent({
   align = 'center',
   alignOffset = 0,
   alignItemWithTrigger = false,
+  collisionPadding = popupCollisionPadding,
   width = 'content-at-least-trigger',
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<
     SelectPrimitive.Positioner.Props,
-    'align' | 'alignOffset' | 'side' | 'sideOffset' | 'alignItemWithTrigger'
+    'align' | 'alignOffset' | 'side' | 'sideOffset' | 'alignItemWithTrigger' | 'collisionPadding'
   > & {
     width?: 'trigger' | 'content' | 'content-at-least-trigger';
   }) {
@@ -85,6 +87,8 @@ function SelectContent({
         align={align}
         alignOffset={alignOffset}
         alignItemWithTrigger={alignItemWithTrigger}
+        collisionPadding={collisionPadding}
+        positionMethod="fixed"
         className={styles.positioner}
       >
         <SelectPrimitive.Popup

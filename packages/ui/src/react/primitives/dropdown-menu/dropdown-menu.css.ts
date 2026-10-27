@@ -1,3 +1,4 @@
+import { noDragRegion } from '@styles/recipes/popup-layer';
 import { globalStyle, style } from '@vanilla-extract/css';
 import {
   kfPopupIn,
@@ -11,12 +12,14 @@ import { vars } from '@theme/core/contract/contract.css';
 import { tokenVars } from '@theme/tokens.css';
 
 export const positioner = style({
+  ...noDragRegion,
   isolation: 'isolate',
   zIndex: 50,
   outline: 'none',
 });
 
 export const menuContent = style({
+  ...noDragRegion,
   zIndex: 50,
   maxHeight: 'var(--available-height)',
   maxWidth: 'var(--available-width)',

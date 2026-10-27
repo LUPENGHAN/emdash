@@ -14,6 +14,7 @@
  */
 
 import { style } from '@vanilla-extract/css';
+import { noDragRegion } from './popup-layer';
 import {
   kfPopupIn,
   kfPopupOut,
@@ -26,6 +27,7 @@ import { vars } from '@theme/core/contract/contract.css';
 import { tokenVars } from '@theme/tokens.css';
 
 const popupSurfaceBase = style({
+  ...noDragRegion,
   position: 'relative',
   zIndex: 50,
   transformOrigin: 'var(--transform-origin)',

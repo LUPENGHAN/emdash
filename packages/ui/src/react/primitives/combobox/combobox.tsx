@@ -2,6 +2,7 @@ import { Combobox as ComboboxPrimitive } from '@base-ui/react';
 import { Button } from '@react/primitives/button';
 import { InputGroup } from '@react/primitives/input-group';
 import { ScrollContainer } from '@react/primitives/scroll-container';
+import { popupCollisionPadding } from '@styles/recipes/popup-layer';
 import { cx } from '@styles/utilities/cx';
 import { CheckIcon, XIcon } from 'lucide-react';
 import * as React from 'react';
@@ -93,12 +94,19 @@ function ComboboxContent({
   width = 'trigger',
   anchor,
   collisionAvoidance,
+  collisionPadding = popupCollisionPadding,
   finalFocus = false,
   ...props
 }: ComboboxPrimitive.Popup.Props &
   Pick<
     ComboboxPrimitive.Positioner.Props,
-    'side' | 'align' | 'sideOffset' | 'alignOffset' | 'anchor' | 'collisionAvoidance'
+    | 'side'
+    | 'align'
+    | 'sideOffset'
+    | 'alignOffset'
+    | 'anchor'
+    | 'collisionAvoidance'
+    | 'collisionPadding'
   > & {
     width?: 'trigger' | 'content' | 'content-at-least-trigger';
   }) {
@@ -111,6 +119,8 @@ function ComboboxContent({
         alignOffset={alignOffset}
         anchor={anchor}
         collisionAvoidance={collisionAvoidance}
+        collisionPadding={collisionPadding}
+        positionMethod="fixed"
         className={styles.positioner}
       >
         <ComboboxPrimitive.Popup

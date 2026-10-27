@@ -1,3 +1,4 @@
+import { noDragRegion } from '@styles/recipes/popup-layer';
 import { globalStyle, style } from '@vanilla-extract/css';
 import { svgDefaultSize } from '@styles/effects/svg-helpers.css';
 import { menuItemBase } from '@styles/recipes/menu-item.css';
@@ -6,6 +7,7 @@ import { vars } from '@theme/core/contract/contract.css';
 import { tokenVars } from '@theme/tokens.css';
 
 export const positioner = style({
+  ...noDragRegion,
   isolation: 'isolate',
   zIndex: 50,
 });
