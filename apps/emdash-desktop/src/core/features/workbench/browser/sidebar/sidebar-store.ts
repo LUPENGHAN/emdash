@@ -188,6 +188,10 @@ export class SidebarStore {
     return this.state.archivedExpanded;
   }
 
+  isFolderCollapsed(folderId: string): boolean {
+    return this.state.collapsedFolderIds.includes(folderId);
+  }
+
   get taskOrderByProject(): Record<string, string[]> {
     return this.state.taskOrderByProject;
   }
@@ -232,6 +236,7 @@ export class SidebarStore {
       const members = active.filter((project) => project.data?.folderId === folder.id);
       if (members.length === 0) continue;
       rows.push({ kind: 'folder', folderId: folder.id });
+      if (this.isFolderCollapsed(folder.id)) continue;
       for (const project of members) this.appendProjectRows(rows, project, true);
     }
 
@@ -344,6 +349,15 @@ export class SidebarStore {
 
   toggleArchivedExpanded(): void {
     this.updateState((current) => ({ ...current, archivedExpanded: !current.archivedExpanded }));
+  }
+
+  toggleFolderCollapsed(folderId: string): void {
+    this.updateState((current) => ({
+      ...current,
+      collapsedFolderIds: current.collapsedFolderIds.includes(folderId)
+        ? current.collapsedFolderIds.filter((id) => id !== folderId)
+        : [...current.collapsedFolderIds, folderId],
+    }));
   }
 
   /**

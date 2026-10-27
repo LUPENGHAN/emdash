@@ -75,13 +75,17 @@ function projectManagerWithTasks(
 }
 
 function mementoHandle(
-  initial: Omit<WorkbenchSidebarState, 'version' | 'folderOrder' | 'archivedExpanded'> &
-    Partial<Pick<WorkbenchSidebarState, 'folderOrder' | 'archivedExpanded'>>
+  initial: Omit<
+    WorkbenchSidebarState,
+    'version' | 'folderOrder' | 'archivedExpanded' | 'collapsedFolderIds'
+  > &
+    Partial<Pick<WorkbenchSidebarState, 'folderOrder' | 'archivedExpanded' | 'collapsedFolderIds'>>
 ): MementoHandle<WorkbenchSidebarState> {
   let value: WorkbenchSidebarState = {
-    version: '2',
+    version: '3',
     folderOrder: [],
     archivedExpanded: false,
+    collapsedFolderIds: [],
     ...initial,
   };
   return {
@@ -116,13 +120,40 @@ describe('workbench sidebar memento', () => {
     ).toEqual({
       status: 'ok',
       data: {
-        version: '2',
+        version: '3',
         expandedProjectIds: ['project-1'],
         projectOrder: ['project-1'],
         folderOrder: [],
         archivedExpanded: false,
+        collapsedFolderIds: [],
         taskOrderByProject: {},
         taskSortBy: 'created-at',
+      },
+    });
+  });
+
+  it('keeps saved folders expanded when upgrading a v2 list', () => {
+    expect(
+      workbenchSidebarSchema.safeParse({
+        version: '2',
+        expandedProjectIds: [],
+        projectOrder: ['project-1'],
+        folderOrder: ['client'],
+        archivedExpanded: true,
+        taskOrderByProject: {},
+        taskSortBy: 'updated-at',
+      })
+    ).toEqual({
+      status: 'ok',
+      data: {
+        version: '3',
+        expandedProjectIds: [],
+        projectOrder: ['project-1'],
+        folderOrder: ['client'],
+        archivedExpanded: true,
+        collapsedFolderIds: [],
+        taskOrderByProject: {},
+        taskSortBy: 'updated-at',
       },
     });
   });
@@ -326,6 +357,21 @@ describe('sidebar project folders and archive', () => {
       { kind: 'project', projectId: 'alpha', nested: true },
       { kind: 'archived-header', count: 1 },
     ]);
+
+    store.toggleFolderCollapsed('client');
+    expect(store.sidebarRows).toEqual([
+      { kind: 'project', projectId: 'emdash', nested: false },
+      { kind: 'project', projectId: 'notes', nested: false },
+      { kind: 'folder', folderId: 'client' },
+      { kind: 'archived-header', count: 1 },
+    ]);
+
+    store.toggleFolderCollapsed('client');
+    expect(store.sidebarRows).toContainEqual({
+      kind: 'project',
+      projectId: 'alpha',
+      nested: true,
+    });
   });
 
   it('hides a folder whose only project is archived and shows that project when restored', () => {

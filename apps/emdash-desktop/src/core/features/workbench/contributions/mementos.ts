@@ -17,6 +17,11 @@ const workbenchSidebarV2Schema = workbenchSidebarV1Schema.extend({
   archivedExpanded: z.boolean(),
 });
 
+const workbenchSidebarV3Schema = workbenchSidebarV2Schema.extend({
+  version: z.literal('3'),
+  collapsedFolderIds: z.array(z.string()),
+});
+
 export const workbenchSidebarSchema = defineVersionedSchema()
   .initial('1', workbenchSidebarV1Schema)
   .version('2', workbenchSidebarV2Schema, (previous) => {
@@ -28,6 +33,14 @@ export const workbenchSidebarSchema = defineVersionedSchema()
       archivedExpanded: false,
     };
   })
+  .version('3', workbenchSidebarV3Schema, (previous) => {
+    const { version: _version, ...rest } = previous;
+    return {
+      ...rest,
+      version: '3' as const,
+      collapsedFolderIds: [],
+    };
+  })
   .build();
 
 export type WorkbenchSidebarState = typeof workbenchSidebarSchema.Type;
@@ -37,11 +50,12 @@ export const workbenchSidebarMemento = defineMemento({
   subject: appSubject,
   schema: workbenchSidebarSchema,
   default: {
-    version: '2' as const,
+    version: '3' as const,
     expandedProjectIds: [],
     projectOrder: [],
     folderOrder: [],
     archivedExpanded: false,
+    collapsedFolderIds: [],
     taskOrderByProject: {},
     taskSortBy: 'created-at' as const,
   },
