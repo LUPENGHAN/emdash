@@ -89,6 +89,8 @@ export type AgentControlAction =
   | { kind: 'archive_task'; taskId: string }
   | { kind: 'delete_task'; taskId: string }
   | { kind: 'delete_requirement'; id: string; title: string; childCount: number }
+  | { kind: 'delete_project_memory'; id: string; title: string }
+  | { kind: 'delete_global_memory'; id: string; title: string }
   | { kind: 'import_skill'; path: string; force: boolean }
   | { kind: 'open'; target: OpenTarget }
   | { kind: 'read_terminal'; name?: string; lines: number }

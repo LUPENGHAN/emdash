@@ -106,7 +106,38 @@ function memoryLists() {
     if (!item) throw new Error(`No decision ${id}`);
     return item;
   });
-  return { list, add, get };
+  const update = vi.fn(
+    async (
+      scope: MemoryScope,
+      id: string,
+      changes: { title?: string; detail?: string }
+    ): Promise<MemoryRecord> => {
+      const items = scope.kind === 'global' ? global : (project.get(scope.projectId) ?? []);
+      const current = items.find((entry) => entry.id === id);
+      if (!current) throw new Error(`No decision ${id}`);
+      if (changes.title !== undefined) current.title = changes.title;
+      if (changes.detail !== undefined) {
+        const detail = changes.detail.trim();
+        if (detail) current.detail = detail;
+        else delete current.detail;
+      }
+      return { ...current };
+    }
+  );
+  const remove = vi.fn(async (scope: MemoryScope, id: string) => {
+    if (scope.kind === 'global') {
+      const index = global.findIndex((entry) => entry.id === id);
+      if (index >= 0) global.splice(index, 1);
+      return;
+    }
+    const items = project.get(scope.projectId);
+    if (!items) return;
+    project.set(
+      scope.projectId,
+      items.filter((entry) => entry.id !== id)
+    );
+  });
+  return { list, add, get, update, remove };
 }
 
 /**
@@ -457,21 +488,24 @@ describe('import_skill', () => {
 });
 
 describe('memory tools', () => {
-  it('appends and reads this project, and does not offer edit or delete', async () => {
+  it('appends and reads this project without taking a project id', async () => {
     const { memory, tool } = registeredTools();
     for (const name of [
       'add_project_memory',
       'list_project_memory',
       'get_project_memory',
+      'update_project_memory',
+      'delete_project_memory',
       'add_global_memory',
       'list_global_memory',
       'get_global_memory',
+      'update_global_memory',
+      'delete_global_memory',
     ]) {
       expect(tool(name)).toBeTruthy();
     }
-    expect(tool('update_project_memory')).toBeUndefined();
-    expect(tool('delete_project_memory')).toBeUndefined();
     expect(tool('add_project_memory')?.config.inputSchema).not.toHaveProperty('projectId');
+    expect(tool('update_project_memory')?.config.inputSchema).not.toHaveProperty('projectId');
 
     await tool('add_project_memory')?.handler({
       title: 'Share the list',
@@ -489,6 +523,73 @@ describe('memory tools', () => {
     expect(JSON.stringify(full)).toContain('root and worktrees');
     const missing = await tool('get_project_memory')?.handler({ id: 'missing' });
     expect(JSON.stringify(missing)).toContain('No decision missing');
+  });
+
+  it('updates a project decision at once and leaves the global list alone', async () => {
+    const { dispatch, memory, tool } = registeredTools();
+    await tool('add_project_memory')?.handler({ title: 'Share the list', detail: 'why' });
+    await tool('add_global_memory')?.handler({ title: 'Imperative subjects' });
+
+    const updated = await tool('update_project_memory')?.handler({ id: 'm1', detail: '' });
+    expect(updated).toMatchObject({
+      content: [{ text: 'Updated project decision m1: Share the list' }],
+    });
+    expect(memory.update).toHaveBeenCalledWith({ kind: 'project', projectId: 'p1' }, 'm1', {
+      detail: '',
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+    const projectList = await tool('list_project_memory')?.handler({});
+    expect(JSON.stringify(projectList)).not.toContain('why');
+    const globalList = await tool('list_global_memory')?.handler({});
+    expect(JSON.stringify(globalList)).toContain('Imperative subjects');
+
+    const callsBeforeEmpty = memory.update.mock.calls.length;
+    const empty = await tool('update_project_memory')?.handler({ id: 'm1' });
+    expect(empty).toMatchObject({
+      isError: true,
+      content: [{ text: 'Pass a title, a detail, or both' }],
+    });
+    expect(memory.update).toHaveBeenCalledTimes(callsBeforeEmpty);
+
+    const absent = await tool('update_global_memory')?.handler({ id: 'm1', title: 'Nope' });
+    expect(JSON.stringify(absent)).toContain('No decision m1');
+  });
+
+  it('deletes a project decision only after the user confirms', async () => {
+    const { dispatch, tool } = registeredTools();
+    await tool('add_project_memory')?.handler({ title: 'Share the list' });
+    await tool('add_global_memory')?.handler({ title: 'Imperative subjects' });
+
+    const absent = await tool('delete_project_memory')?.handler({ id: 'missing' });
+    expect(absent).toMatchObject({
+      isError: true,
+      content: [{ text: 'No decision missing' }],
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+
+    dispatch.mockRejectedValueOnce(new Error('The user declined in Emdash.'));
+    const declined = await tool('delete_project_memory')?.handler({ id: 'm1' });
+    expect(declined).toMatchObject({
+      isError: true,
+      content: [{ text: 'The user declined in Emdash.' }],
+    });
+    const stillThere = await tool('list_project_memory')?.handler({});
+    expect(JSON.stringify(stillThere)).toContain('Share the list');
+
+    dispatch.mockResolvedValueOnce({ text: 'Confirmed.' });
+    const deleted = await tool('delete_project_memory')?.handler({ id: 'm1' });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'delete_project_memory',
+      id: 'm1',
+      title: 'Share the list',
+    });
+    expect(deleted).toMatchObject({
+      content: [{ text: 'Deleted project decision m1: Share the list' }],
+    });
+    const projectList = await tool('list_project_memory')?.handler({});
+    expect(JSON.stringify(projectList)).toContain('No decisions.');
+    const globalList = await tool('list_global_memory')?.handler({});
+    expect(JSON.stringify(globalList)).toContain('Imperative subjects');
   });
 
   it('keeps a global decision off the project list', async () => {

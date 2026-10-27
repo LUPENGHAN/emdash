@@ -42,6 +42,8 @@ describe('startAgentControlServer', () => {
     list: vi.fn(async () => []),
     add: vi.fn(),
     get: vi.fn(),
+    update: vi.fn(),
+    remove: vi.fn(),
   };
 
   beforeEach(async () => {

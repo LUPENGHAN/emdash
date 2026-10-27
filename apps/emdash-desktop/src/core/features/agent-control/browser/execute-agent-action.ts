@@ -36,6 +36,7 @@ import { getNavigation } from '@core/primitives/navigation/browser/navigation-se
 import { resolveTaskBranchName } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult, OpenTarget } from '../api';
 import { runBrowserOp, type AutomatableBrowser } from './browser-automation';
+import { deleteDecisionPrompt } from './delete-decision-prompt';
 import { deleteRequirementPrompt } from './delete-requirement-prompt';
 import { listNavigationCommands, runNavigationCommand } from './navigation-command';
 import { removalBlocker } from './task-removal';
@@ -146,6 +147,13 @@ export async function executeAgentAction(
 
     case 'delete_requirement': {
       const prompt = deleteRequirementPrompt(who, action.title, action.childCount);
+      await confirm(prompt.title, prompt.description, prompt.confirmLabel);
+      return { text: 'Confirmed.' };
+    }
+
+    case 'delete_project_memory':
+    case 'delete_global_memory': {
+      const prompt = deleteDecisionPrompt(who, action.title);
       await confirm(prompt.title, prompt.description, prompt.confirmLabel);
       return { text: 'Confirmed.' };
     }

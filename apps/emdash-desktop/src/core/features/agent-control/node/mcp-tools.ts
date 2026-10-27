@@ -1,7 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { formatMemoryList, formatMemoryRecord } from '@core/features/memory/api/format';
-import type { MemoryOperations, MemoryScope, MemorySource } from '@core/features/memory/api/types';
+import {
+  MEMORY_DETAIL_MAX,
+  MEMORY_TITLE_MAX,
+  type MemoryOperations,
+  type MemoryScope,
+  type MemorySource,
+} from '@core/features/memory/api/types';
 import type { UsageLimits } from '@core/features/model-providers/api';
 import {
   directChildren,
@@ -30,7 +36,7 @@ export type AgentControlToolContext = {
   dispatch: (action: AgentControlAction) => Promise<AgentControlResult>;
   usageLimits: () => Promise<UsageLimits>;
   requirements: Pick<RequirementsOperations, 'list' | 'add' | 'update' | 'remove'>;
-  memory: Pick<MemoryOperations, 'list' | 'add' | 'get'>;
+  memory: Pick<MemoryOperations, 'list' | 'add' | 'get' | 'update' | 'remove'>;
 };
 
 /** How much of a requirement's detail list_requirements shows. */
@@ -588,7 +594,7 @@ function registerMemoryTools(server: McpServer, ctx: AgentControlToolContext): v
       description:
         'Append one decision for this project. The title is the decision and must stand alone. Detail is optional and only for the reason or what was abandoned. ' +
         PROJECT_DECISION_RULES +
-        ' A changed decision is a new record. The repository root and every worktree share this list.',
+        ' Change one with update_project_memory. The repository root and every worktree share this list.',
       inputSchema: {
         title: z.string().min(1),
         detail: z.string().optional(),
@@ -624,10 +630,55 @@ function registerMemoryTools(server: McpServer, ctx: AgentControlToolContext): v
   );
 
   server.registerTool(
+    'update_project_memory',
+    {
+      description:
+        'Change the title or detail of one decision in this project. Pass at least one. An empty detail clears the text. It takes effect at once, without confirmation, and does not change who wrote it or when it was created.',
+      inputSchema: {
+        id: z.string().min(1),
+        title: z.string().min(1).max(MEMORY_TITLE_MAX).optional(),
+        detail: z.string().max(MEMORY_DETAIL_MAX).optional(),
+      },
+    },
+    ({ id, title, detail }) =>
+      run(async () => {
+        if (title === undefined && detail === undefined) {
+          throw new Error('Pass a title, a detail, or both');
+        }
+        const item = await ctx.memory.update(projectScope(), id, {
+          ...(title !== undefined && { title }),
+          ...(detail !== undefined && { detail }),
+        });
+        return { text: `Updated project decision ${item.id}: ${item.title}` };
+      })
+  );
+
+  server.registerTool(
+    'delete_project_memory',
+    {
+      description:
+        'Delete one decision in this project. The user confirms in Emdash first. Cannot be undone.',
+      inputSchema: { id: z.string().min(1) },
+      annotations: { destructiveHint: true },
+    },
+    ({ id }) =>
+      run(async () => {
+        const missing = () => new Error(`No decision ${id}`);
+        const item = (await ctx.memory.list(projectScope())).find((entry) => entry.id === id);
+        if (!item) throw missing();
+        await ctx.dispatch({ kind: 'delete_project_memory', id, title: item.title });
+        const stillThere = (await ctx.memory.list(projectScope())).some((entry) => entry.id === id);
+        if (!stillThere) throw missing();
+        await ctx.memory.remove(projectScope(), id);
+        return { text: `Deleted project decision ${item.id}: ${item.title}` };
+      })
+  );
+
+  server.registerTool(
     'add_global_memory',
     {
       description:
-        'Append one decision that holds for every project on this Emdash. The title is the decision and must stand alone. Detail is optional and only for the reason or what was abandoned. Record something that would be wrong in another project, such as how commit messages are written here. Do not put a fact that only belongs to the current project. If you are not sure it belongs everywhere, do not record it. Do not write a secret. A changed decision is a new record.',
+        'Append one decision that holds for every project on this Emdash. The title is the decision and must stand alone. Detail is optional and only for the reason or what was abandoned. Record something that would be wrong in another project, such as how commit messages are written here. Do not put a fact that only belongs to the current project. If you are not sure it belongs everywhere, do not record it. Do not write a secret. Change one with update_global_memory.',
       inputSchema: {
         title: z.string().min(1),
         detail: z.string().optional(),
@@ -662,5 +713,52 @@ function registerMemoryTools(server: McpServer, ctx: AgentControlToolContext): v
       run(async () => ({
         text: formatMemoryRecord(await ctx.memory.get({ kind: 'global' }, id)),
       }))
+  );
+
+  server.registerTool(
+    'update_global_memory',
+    {
+      description:
+        'Change the title or detail of one decision that holds for every project. Pass at least one. An empty detail clears the text. It takes effect at once, without confirmation, and does not change who wrote it or when it was created.',
+      inputSchema: {
+        id: z.string().min(1),
+        title: z.string().min(1).max(MEMORY_TITLE_MAX).optional(),
+        detail: z.string().max(MEMORY_DETAIL_MAX).optional(),
+      },
+    },
+    ({ id, title, detail }) =>
+      run(async () => {
+        if (title === undefined && detail === undefined) {
+          throw new Error('Pass a title, a detail, or both');
+        }
+        const item = await ctx.memory.update({ kind: 'global' }, id, {
+          ...(title !== undefined && { title }),
+          ...(detail !== undefined && { detail }),
+        });
+        return { text: `Updated global decision ${item.id}: ${item.title}` };
+      })
+  );
+
+  server.registerTool(
+    'delete_global_memory',
+    {
+      description:
+        'Delete one decision that holds for every project. The user confirms in Emdash first. Cannot be undone.',
+      inputSchema: { id: z.string().min(1) },
+      annotations: { destructiveHint: true },
+    },
+    ({ id }) =>
+      run(async () => {
+        const missing = () => new Error(`No decision ${id}`);
+        const item = (await ctx.memory.list({ kind: 'global' })).find((entry) => entry.id === id);
+        if (!item) throw missing();
+        await ctx.dispatch({ kind: 'delete_global_memory', id, title: item.title });
+        const stillThere = (await ctx.memory.list({ kind: 'global' })).some(
+          (entry) => entry.id === id
+        );
+        if (!stillThere) throw missing();
+        await ctx.memory.remove({ kind: 'global' }, id);
+        return { text: `Deleted global decision ${item.id}: ${item.title}` };
+      })
   );
 }
