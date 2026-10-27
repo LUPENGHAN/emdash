@@ -316,29 +316,31 @@ const ProjectFolderMenu = observer(function ProjectFolderMenu({
         Rename Project
       </ContextMenu.Item>
       <ContextMenu.Separator />
-      <ContextMenu.Label>Move to Folder</ContextMenu.Label>
-      <ContextMenu.Item disabled={disabled} onClick={onNewFolder}>
-        New Folder…
-      </ContextMenu.Item>
-      {folders.map((folder) => (
+      <ContextMenu.Group>
+        <ContextMenu.Label>Move to Folder</ContextMenu.Label>
+        <ContextMenu.Item disabled={disabled} onClick={onNewFolder}>
+          New Folder…
+        </ContextMenu.Item>
+        {folders.map((folder) => (
+          <ContextMenu.Item
+            key={folder.id}
+            disabled={disabled || folder.id === folderId}
+            onClick={() => {
+              void getProjectManagerStore().moveProjectToFolder(projectId, folder.id);
+            }}
+          >
+            <span translate="no">{folder.name}</span>
+          </ContextMenu.Item>
+        ))}
         <ContextMenu.Item
-          key={folder.id}
-          disabled={disabled || folder.id === folderId}
+          disabled={disabled || folderId == null}
           onClick={() => {
-            void getProjectManagerStore().moveProjectToFolder(projectId, folder.id);
+            void getProjectManagerStore().moveProjectToFolder(projectId, null);
           }}
         >
-          <span translate="no">{folder.name}</span>
+          No Folder
         </ContextMenu.Item>
-      ))}
-      <ContextMenu.Item
-        disabled={disabled || folderId == null}
-        onClick={() => {
-          void getProjectManagerStore().moveProjectToFolder(projectId, null);
-        }}
-      >
-        No Folder
-      </ContextMenu.Item>
+      </ContextMenu.Group>
     </>
   );
 });
