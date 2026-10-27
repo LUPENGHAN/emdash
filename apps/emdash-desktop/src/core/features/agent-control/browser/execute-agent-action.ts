@@ -36,6 +36,7 @@ import { getNavigation } from '@core/primitives/navigation/browser/navigation-se
 import { resolveTaskBranchName } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult, OpenTarget } from '../api';
 import { runBrowserOp, type AutomatableBrowser } from './browser-automation';
+import { deleteRequirementPrompt } from './delete-requirement-prompt';
 import { listNavigationCommands, runNavigationCommand } from './navigation-command';
 import { removalBlocker } from './task-removal';
 import { readableTerminals, renderTerminalTail } from './terminal-reader';
@@ -142,6 +143,12 @@ export async function executeAgentAction(
 
     case 'delete_task':
       return deleteTask(caller, who, action.taskId);
+
+    case 'delete_requirement': {
+      const prompt = deleteRequirementPrompt(who, action.title, action.childCount);
+      await confirm(prompt.title, prompt.description, prompt.confirmLabel);
+      return { text: 'Confirmed.' };
+    }
 
     case 'import_skill':
       return importSkill(caller, who, action.path, action.force);

@@ -1,6 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { formatMemoryList, formatMemoryRecord } from '@core/features/memory/api/format';
+import type { MemoryOperations, MemoryScope, MemorySource } from '@core/features/memory/api/types';
 import type { UsageLimits } from '@core/features/model-providers/api';
+import {
+  directChildren,
+  indexRequirements,
+  topLevelParent,
+} from '@core/features/requirements/api/requirement-tree';
 import {
   REQUIREMENT_DETAIL_MAX,
   REQUIREMENT_TITLE_MAX,
@@ -22,20 +29,41 @@ export type AgentControlToolContext = {
   caller: AgentCaller;
   dispatch: (action: AgentControlAction) => Promise<AgentControlResult>;
   usageLimits: () => Promise<UsageLimits>;
-  requirements: Pick<RequirementsOperations, 'list' | 'add' | 'update'>;
+  requirements: Pick<RequirementsOperations, 'list' | 'add' | 'update' | 'remove'>;
+  memory: Pick<MemoryOperations, 'list' | 'add' | 'get'>;
 };
 
 /** How much of a requirement's detail list_requirements shows. */
 const LISTED_DETAIL_MAX = 300;
 
-function formatRequirement(item: Requirement): string {
-  const line = `${item.id} [${item.status}] ${item.title}`;
+function formatRequirement(item: Requirement, depth: number): string {
+  const pad = '  '.repeat(depth);
+  const parent = item.parentId ? ` parent:${item.parentId}` : '';
+  const line = `${pad}${item.id} [${item.status}] ${item.title}${parent}`;
   if (!item.detail) return line;
   const detail =
     item.detail.length > LISTED_DETAIL_MAX
       ? `${item.detail.slice(0, LISTED_DETAIL_MAX)}…`
       : item.detail;
-  return `${line}\n${detail.replace(/^/gm, '  ')}`;
+  return `${line}\n${detail.replace(/^/gm, `${pad}  `)}`;
+}
+
+/** Sub-requirements sit under a parent that is also in this list, oldest first. */
+function formatRequirements(items: Requirement[]): string {
+  const byId = indexRequirements(items);
+  const nested = new Set(
+    items.filter((item) => topLevelParent(item, byId) !== null).map((item) => item.id)
+  );
+  const lines: string[] = [];
+  for (const item of items) {
+    if (nested.has(item.id)) continue;
+    lines.push(formatRequirement(item, 0));
+    if (item.parentId) continue;
+    for (const child of directChildren(item.id, items)) {
+      lines.push(formatRequirement(child, 1));
+    }
+  }
+  return lines.join('\n');
 }
 
 type ToolContent =
@@ -268,17 +296,22 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'add_requirement',
     {
       description:
-        "Add an item to this project's requirements list in Emdash: something the user wants done later, or follow-up work you noticed. The user sees it at once and can start it as a task.",
+        "Add an item to this project's requirements list in Emdash: something the user wants done later, or follow-up work you noticed. The user sees it at once and can start it as a task. Pass parentId to add one sub-requirement under a top-level item.",
       inputSchema: {
         title: z.string().min(1).max(REQUIREMENT_TITLE_MAX),
         detail: z.string().max(REQUIREMENT_DETAIL_MAX).optional(),
+        parentId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Id of a top-level requirement. Omit it to add a top-level item.'),
       },
     },
-    ({ title, detail }) =>
+    ({ title, detail, parentId }) =>
       run(async () => {
         const item = await ctx.requirements.add(
           caller.projectId,
-          { title, detail },
+          { title, detail, ...(parentId ? { parentId } : {}) },
           {
             kind: 'agent',
             providerId: caller.providerId,
@@ -293,7 +326,8 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
   server.registerTool(
     'list_requirements',
     {
-      description: "This project's requirements list in Emdash, with ids for complete_requirement.",
+      description:
+        "This project's requirements list in Emdash, with ids for complete_requirement. Sub-requirements are indented under their parent and include that parent id.",
       inputSchema: { status: z.enum(['open', 'done', 'all']).default('open') },
       annotations: { readOnlyHint: true },
     },
@@ -303,7 +337,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
           (item) => status === 'all' || item.status === status
         );
         return {
-          text: items.length ? items.map(formatRequirement).join('\n') : 'No requirements.',
+          text: items.length ? formatRequirements(items) : 'No requirements.',
         };
       })
   );
@@ -321,6 +355,61 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         return { text: `Marked requirement ${item.id} done: ${item.title}` };
       })
   );
+
+  server.registerTool(
+    'update_requirement',
+    {
+      description:
+        'Change the title or detail of one requirement in this project. Pass at least one. An empty detail clears the text. It takes effect at once, without confirmation, and does not change status or which requirement it sits under.',
+      inputSchema: {
+        id: z.string().min(1),
+        title: z.string().min(1).max(REQUIREMENT_TITLE_MAX).optional(),
+        detail: z.string().max(REQUIREMENT_DETAIL_MAX).optional(),
+      },
+    },
+    ({ id, title, detail }) =>
+      run(async () => {
+        if (title === undefined && detail === undefined) {
+          throw new Error('Pass a title, a detail, or both');
+        }
+        const item = await ctx.requirements.update(caller.projectId, id, {
+          ...(title !== undefined && { title }),
+          ...(detail !== undefined && { detail }),
+        });
+        return { text: `Updated requirement ${item.id}: ${item.title}` };
+      })
+  );
+
+  server.registerTool(
+    'delete_requirement',
+    {
+      description:
+        'Delete one requirement in this project. The user confirms in Emdash first. Deleting one also deletes its sub-requirements. Cannot be undone.',
+      inputSchema: { id: z.string().min(1) },
+      annotations: { destructiveHint: true },
+    },
+    ({ id }) =>
+      run(async () => {
+        const missing = () => new Error(`No requirement ${id} in this project`);
+        const items = await ctx.requirements.list(caller.projectId);
+        const item = items.find((entry) => entry.id === id);
+        if (!item) throw missing();
+        await ctx.dispatch({
+          kind: 'delete_requirement',
+          id,
+          title: item.title,
+          childCount: directChildren(id, items).length,
+        });
+        const stillThere = (await ctx.requirements.list(caller.projectId)).some(
+          (entry) => entry.id === id
+        );
+        if (!stillThere) throw missing();
+        await ctx.requirements.remove(caller.projectId, id);
+        return { text: `Deleted requirement ${item.id}: ${item.title}` };
+      })
+  );
+
+  registerMemoryTools(server, ctx);
 
   // ── The user's screen ──────────────────────────────────────────────────────────
   server.registerTool(
@@ -473,5 +562,105 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       annotations: { readOnlyHint: true },
     },
     () => dispatch({ kind: 'browser', browser: { op: 'network' } })
+  );
+}
+
+const PROJECT_DECISION_RULES =
+  "Record a choice that would be wrong in another task or worktree, an abandoned approach, or a fact that is not in the repo and that a later agent must follow. Do not record this task's steps, a file-by-file narration, work that is not done yet (that is the requirements list), an unsettled guess, or a secret.";
+
+function agentMemorySource(caller: AgentCaller): MemorySource {
+  return {
+    kind: 'agent',
+    providerId: caller.providerId,
+    conversationId: caller.conversationId,
+    taskId: caller.taskId,
+  };
+}
+
+function registerMemoryTools(server: McpServer, ctx: AgentControlToolContext): void {
+  const { caller } = ctx;
+  const source = () => agentMemorySource(caller);
+  const projectScope = (): MemoryScope => ({ kind: 'project', projectId: caller.projectId });
+
+  server.registerTool(
+    'add_project_memory',
+    {
+      description:
+        'Append one decision for this project. The title is the decision and must stand alone. Detail is optional and only for the reason or what was abandoned. ' +
+        PROJECT_DECISION_RULES +
+        ' A changed decision is a new record. The repository root and every worktree share this list.',
+      inputSchema: {
+        title: z.string().min(1),
+        detail: z.string().optional(),
+      },
+    },
+    ({ title, detail }) =>
+      run(async () => {
+        const item = await ctx.memory.add(projectScope(), { title, detail }, source());
+        return { text: `Recorded project decision ${item.id}: ${item.title}` };
+      })
+  );
+
+  server.registerTool(
+    'list_project_memory',
+    {
+      description:
+        "Read this project's decisions before you work. Newest first. Every title is included. The newest 40 also include the body; older rows are title, id, and date. Use get_project_memory for an older body. If a global decision and a project decision cover the same thing, follow the project record.",
+      annotations: { readOnlyHint: true },
+    },
+    () => run(async () => ({ text: formatMemoryList(await ctx.memory.list(projectScope())) }))
+  );
+
+  server.registerTool(
+    'get_project_memory',
+    {
+      description:
+        'Read one project decision in full, including the body. Pass the id from list_project_memory.',
+      inputSchema: { id: z.string().min(1) },
+      annotations: { readOnlyHint: true },
+    },
+    ({ id }) =>
+      run(async () => ({ text: formatMemoryRecord(await ctx.memory.get(projectScope(), id)) }))
+  );
+
+  server.registerTool(
+    'add_global_memory',
+    {
+      description:
+        'Append one decision that holds for every project on this Emdash. The title is the decision and must stand alone. Detail is optional and only for the reason or what was abandoned. Record something that would be wrong in another project, such as how commit messages are written here. Do not put a fact that only belongs to the current project. If you are not sure it belongs everywhere, do not record it. Do not write a secret. A changed decision is a new record.',
+      inputSchema: {
+        title: z.string().min(1),
+        detail: z.string().optional(),
+      },
+    },
+    ({ title, detail }) =>
+      run(async () => {
+        const item = await ctx.memory.add({ kind: 'global' }, { title, detail }, source());
+        return { text: `Recorded global decision ${item.id}: ${item.title}` };
+      })
+  );
+
+  server.registerTool(
+    'list_global_memory',
+    {
+      description:
+        'Read decisions that hold for every project on this Emdash. Call this before list_project_memory. Newest first. Every title is included. The newest 40 also include the body; older rows are title, id, and date. Use get_global_memory for an older body.',
+      annotations: { readOnlyHint: true },
+    },
+    () => run(async () => ({ text: formatMemoryList(await ctx.memory.list({ kind: 'global' })) }))
+  );
+
+  server.registerTool(
+    'get_global_memory',
+    {
+      description:
+        'Read one global decision in full, including the body. Pass the id from list_global_memory.',
+      inputSchema: { id: z.string().min(1) },
+      annotations: { readOnlyHint: true },
+    },
+    ({ id }) =>
+      run(async () => ({
+        text: formatMemoryRecord(await ctx.memory.get({ kind: 'global' }, id)),
+      }))
   );
 }

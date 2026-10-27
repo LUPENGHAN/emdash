@@ -11,6 +11,7 @@ type RequirementUpdate = {
   title?: string;
   detail?: string;
   status?: Requirement['status'];
+  parentId?: string;
 };
 
 function showError(error: Error) {
@@ -49,7 +50,11 @@ export function useRequirements(projectId: string) {
   }, [projectId, queryClient]);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey });
-  const add = useMutation<Requirement, Error, { title: string; detail?: string }>({
+  const add = useMutation<
+    Requirement,
+    Error,
+    { title: string; detail?: string; parentId?: string }
+  >({
     mutationFn: async (input) => (await getRequirementsClient()).add({ projectId, ...input }),
     onSuccess: refresh,
     onError: showError,

@@ -11,6 +11,7 @@ const projectViewV1Schema = z.object({
   activeView: z.enum([
     'tasks',
     'requirements',
+    'decisions',
     'history',
     'pull-request',
     'workspaces',

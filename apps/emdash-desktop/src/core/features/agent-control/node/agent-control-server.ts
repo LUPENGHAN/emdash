@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { MemoryOperations } from '@core/features/memory/api/types';
 import type { UsageLimits } from '@core/features/model-providers/api';
 import type { RequirementsOperations } from '@core/features/requirements/api/types';
 import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
@@ -17,7 +18,8 @@ export type AgentControlServerDeps = {
   resolveCaller: (conversationId: string) => Promise<AgentCaller | null>;
   dispatch: (caller: AgentCaller, action: AgentControlAction) => Promise<AgentControlResult>;
   usageLimits: () => Promise<UsageLimits>;
-  requirements: Pick<RequirementsOperations, 'list' | 'add' | 'update'>;
+  requirements: Pick<RequirementsOperations, 'list' | 'add' | 'update' | 'remove'>;
+  memory: Pick<MemoryOperations, 'list' | 'add' | 'get'>;
   preferredPort?: number;
 };
 
@@ -66,7 +68,7 @@ export async function startAgentControlServer(
       { name: 'emdash', version: deps.version },
       {
         instructions:
-          'You run inside Emdash, which manages git worktrees as tasks the user can see and review. When you need a separate git worktree (parallel work, an alternative approach, isolating a change), create it with the create_task tool instead of `git worktree add` or a worktree feature of your own. When the user asks you to note a requirement or idea for later, use add_requirement instead of writing it to a file.',
+          'You run inside Emdash, which manages git worktrees as tasks the user can see and review. When you need a separate git worktree (parallel work, an alternative approach, isolating a change), create it with the create_task tool instead of `git worktree add` or a worktree feature of your own. When the user asks you to note a requirement or idea for later, use add_requirement instead of writing it to a file. Before you work, call list_global_memory and then list_project_memory. Append a decision when a later agent would otherwise choose wrong. If a global decision and a project decision cover the same thing, follow the project record.',
       }
     );
     registerAgentControlTools(server, {
@@ -74,6 +76,7 @@ export async function startAgentControlServer(
       dispatch: (action) => deps.dispatch(caller, action),
       usageLimits: deps.usageLimits,
       requirements: deps.requirements,
+      memory: deps.memory,
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

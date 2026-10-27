@@ -99,6 +99,9 @@ import {
   type PromptLibraryKV,
 } from '@core/features/library/node/prompt-library-service';
 import { LocalSettingsSync } from '@core/features/machines/node/local-settings-sync';
+import type { ProjectMemory } from '@core/features/memory/api/types';
+import { memoryEvents } from '@core/features/memory/node/event-host';
+import { MemoryService } from '@core/features/memory/node/memory-service';
 import {
   isOfficialAccount,
   type ModelProviderKeys,
@@ -261,6 +264,7 @@ export type ServicesBundle = {
   readonly previewServerAccess: PreviewServerAccessService;
   readonly promptLibrary: ReturnType<typeof createPromptLibraryService>;
   readonly requirements: RequirementsService;
+  readonly memory: MemoryService;
   readonly projectDeletion: ProjectDeletionDependencies;
   readonly projects: ProjectAttachmentManager;
   readonly projectSettings: ProjectSettingsService;
@@ -530,6 +534,11 @@ export async function bootServices(
     store: new AppDbKeyValueStore<Record<string, ProjectRequirements>>(db, 'requirements', log),
     emit: (event) => requirementsEvents.emit(undefined, event),
   });
+  const memoryService = new MemoryService({
+    projects: new AppDbKeyValueStore<Record<string, ProjectMemory>>(db, 'project-memory', log),
+    global: new AppDbKeyValueStore<Record<string, ProjectMemory>>(db, 'global-memory', log),
+    emit: (event) => memoryEvents.emit(undefined, event),
+  });
   // Agent control: Emdash's own MCP tools for every local agent (see agent-control).
   const agentControl = createAgentControlDispatcher({
     emit: (request) => agentControlEvents.emit(undefined, request),
@@ -557,6 +566,7 @@ export async function bootServices(
       dispatch: (caller, action) => agentControl.dispatch(caller, action),
       usageLimits: () => usageLimits.get(),
       requirements: requirementsService,
+      memory: memoryService,
     });
     appScope.add(() => server.close());
     return server;
@@ -1111,6 +1121,7 @@ export async function bootServices(
     projects: projectManager,
     pullRequests: pullRequestsRegistration,
     requirements: requirementsService,
+    memory: memoryService,
     sessionCleanup: lifecycleSessions,
     telemetry: telemetryService,
   };
@@ -1260,6 +1271,7 @@ export async function bootServices(
     previewServerAccess,
     promptLibrary: promptLibraryService,
     requirements: requirementsService,
+    memory: memoryService,
     projectDeletion,
     projects: projectManager,
     projectSettings: projectSettingsService,

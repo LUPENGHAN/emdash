@@ -1,5 +1,6 @@
 import { getPillTabId, PillTabs, type PillTab } from '@emdash/ui/react/patterns';
 import {
+  BookOpen,
   GitPullRequest,
   History,
   ListPlus,
@@ -8,6 +9,7 @@ import {
   Settings as SettingsIcon,
 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
+import { DecisionsView } from '@core/features/memory/contributions/browser/decisions-view';
 import {
   asAvailableProject,
   getProjectStore,
@@ -30,6 +32,7 @@ const PROJECT_SECTION_PANEL_ID = 'project-section-panel';
 const projectViewItems: readonly PillTab<ProjectView>[] = [
   { value: 'tasks', label: 'Tasks', icon: <ListTodo className="size-3.5" /> },
   { value: 'requirements', label: 'Requirements', icon: <ListPlus className="size-3.5" /> },
+  { value: 'decisions', label: 'Decisions', icon: <BookOpen className="size-3.5" /> },
   { value: 'history', label: 'History', icon: <History className="size-3.5" /> },
   {
     value: 'pull-request',
@@ -79,6 +82,7 @@ export const ActiveProject = observer(function ActiveProject() {
           activeView === 'workspaces' && 'min-h-[calc(100vh-16rem)]',
           (activeView === 'tasks' ||
             activeView === 'requirements' ||
+            activeView === 'decisions' ||
             activeView === 'history' ||
             activeView === 'pull-request') &&
             'h-[calc(100vh-16rem)] min-h-96',
@@ -91,6 +95,7 @@ export const ActiveProject = observer(function ActiveProject() {
       >
         {activeView === 'tasks' && <TaskList />}
         {activeView === 'requirements' && <RequirementsView projectId={projectId} />}
+        {activeView === 'decisions' && <DecisionsView projectId={projectId} />}
         {activeView === 'history' && <ProjectHistoryView projectId={projectId} />}
         {activeView === 'pull-request' && <PullRequestView />}
         {activeView === 'workspaces' && <ProjectWorkspacesView projectId={projectId} />}

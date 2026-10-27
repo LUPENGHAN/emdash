@@ -148,6 +148,7 @@ it.each(['claude', 'codex'] as const)(
           },
           pullRequests: { deleteProjectData: async () => {} },
           requirements: { removeProject: async () => {} },
+          memory: { removeProject: async () => {} },
           getMementosRuntimeClient: async () =>
             ({
               deleteBySubject: async () => ok(undefined),

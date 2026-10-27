@@ -50,6 +50,8 @@ import type { PromptLibraryService } from '@core/features/library/node/prompt-li
 import { createPromptLibraryWireController } from '@core/features/library/node/wire-controller';
 import { createMachinesWireController } from '@core/features/machines/node/wire-controller';
 import { createMcpWireController } from '@core/features/mcp/node/wire-controller';
+import type { MemoryService } from '@core/features/memory/node/memory-service';
+import { createMemoryWireController } from '@core/features/memory/node/wire-controller';
 import type { ModelProviderKeys, UsageLimitsService } from '@core/features/model-providers/api';
 import { isOfficialAccount, type OfficialAccount } from '@core/features/model-providers/api';
 import type { EffectiveAgentConfig } from '@core/features/model-providers/node/effective-agent-config';
@@ -168,6 +170,7 @@ export type DesktopControllerContext = {
   readonly projectDeletion: ProjectDeletionDependencies;
   readonly promptLibrary: PromptLibraryService;
   readonly requirements: RequirementsService;
+  readonly memory: MemoryService;
   readonly projects: ProjectAttachmentManager;
   readonly projectSettings: ProjectSettingsService;
   readonly providerSettings: ProviderOverrideSettings;
@@ -341,6 +344,9 @@ export const desktopNodeControllers = {
   },
   requirements: {
     create: ({ requirements }) => createRequirementsWireController(requirements),
+  },
+  memory: {
+    create: ({ memory }) => createMemoryWireController(memory),
   },
   repository: {
     create: ({ db, projects, gitlabRepositories }) =>

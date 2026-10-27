@@ -27,6 +27,13 @@ const trayIconLabel =
     : 'Show Emdash in the system tray';
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+  {
+    id: 'decisions',
+    label: 'Decisions',
+    tab: 'decisions',
+    description: 'Decisions that hold for every project on this Emdash.',
+    keywords: ['memory', 'global memory'],
+  },
   // General
   {
     id: 'version',

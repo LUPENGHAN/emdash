@@ -36,6 +36,12 @@ describe('startAgentControlServer', () => {
       title: input.title,
     })),
     update: vi.fn(async () => ({ ...requirement, status: 'done' as const })),
+    remove: vi.fn(async () => undefined),
+  };
+  const memory = {
+    list: vi.fn(async () => []),
+    add: vi.fn(),
+    get: vi.fn(),
   };
 
   beforeEach(async () => {
@@ -58,6 +64,7 @@ describe('startAgentControlServer', () => {
         ],
       }),
       requirements,
+      memory,
     });
   });
 
@@ -136,6 +143,35 @@ describe('startAgentControlServer', () => {
 
     await client.callTool({ name: 'complete_requirement', arguments: { id: 'r1' } });
     expect(requirements.update).toHaveBeenCalledWith('project-1', 'r1', { status: 'done' });
+
+    requirements.list.mockResolvedValueOnce([
+      {
+        ...requirement,
+        id: 'child',
+        title: 'Child',
+        parentId: 'r1',
+        createdAt: 2,
+        detail: 'under',
+      },
+      requirement,
+    ]);
+    const nested = await client.callTool({
+      name: 'list_requirements',
+      arguments: { status: 'all' },
+    });
+    expect(JSON.stringify(nested.content)).toContain(
+      'r1 [open] Retry on timeout\\n  in the fetch layer\\n  child [open] Child parent:r1\\n    under'
+    );
+
+    await client.callTool({
+      name: 'add_requirement',
+      arguments: { title: 'Child', parentId: 'r1' },
+    });
+    expect(requirements.add).toHaveBeenCalledWith(
+      'project-1',
+      { title: 'Child', detail: undefined, parentId: 'r1' },
+      { kind: 'agent', providerId: 'claude', conversationId: 'conv-1', taskId: 'task-1' }
+    );
 
     requirements.add.mockRejectedValueOnce(new Error('This project already has 500 requirements'));
     const failed = await client.callTool({ name: 'add_requirement', arguments: { title: 'x' } });

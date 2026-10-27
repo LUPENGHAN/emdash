@@ -88,6 +88,7 @@ export type AgentControlAction =
   | { kind: 'list_tasks'; includeArchived: boolean }
   | { kind: 'archive_task'; taskId: string }
   | { kind: 'delete_task'; taskId: string }
+  | { kind: 'delete_requirement'; id: string; title: string; childCount: number }
   | { kind: 'import_skill'; path: string; force: boolean }
   | { kind: 'open'; target: OpenTarget }
   | { kind: 'read_terminal'; name?: string; lines: number }

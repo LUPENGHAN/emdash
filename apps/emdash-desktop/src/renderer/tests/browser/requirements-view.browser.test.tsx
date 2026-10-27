@@ -12,16 +12,28 @@ import { ThemeProvider } from '@core/primitives/theme/browser';
 const harness = vi.hoisted(() => ({
   items: [] as Requirement[],
   update: vi.fn(async () => undefined),
+  add: vi.fn(async () => undefined),
+  remove: vi.fn(async () => undefined),
+}));
+
+const modals = vi.hoisted(() => ({
+  openModal: vi.fn(
+    async (..._args: unknown[]): Promise<{ success: boolean }> => ({ success: false })
+  ),
 }));
 
 vi.mock('@core/features/requirements/api/browser/use-requirements', () => ({
   useRequirements: () => ({
     items: harness.items,
     isLoading: false,
-    add: vi.fn(async () => undefined),
+    add: harness.add,
     update: harness.update,
-    remove: vi.fn(async () => undefined),
+    remove: harness.remove,
   }),
+}));
+
+vi.mock('@core/manifests/browser/modal-api', () => ({
+  openModal: modals.openModal,
 }));
 
 function requirement(input: Pick<Requirement, 'id' | 'title'> & Partial<Requirement>): Requirement {
@@ -83,6 +95,10 @@ let root: Root;
 beforeEach(() => {
   harness.items = [reading, hostile, blank];
   harness.update.mockClear();
+  harness.add.mockClear();
+  harness.remove.mockClear();
+  modals.openModal.mockReset();
+  modals.openModal.mockResolvedValue({ success: false });
   host = document.createElement('div');
   host.style.cssText = 'width:1080px;height:640px;display:flex;flex-direction:column';
   document.body.append(host);
@@ -181,4 +197,137 @@ describe('RequirementsView', () => {
     await expect.element(page.getByText('No details.')).toBeVisible();
     await saveShot('no-details.png');
   });
+
+  it('indents open sub-requirements and keeps a done parent that still has open ones', async () => {
+    harness.items = [
+      requirement({ id: 'parent', title: 'Parent', createdAt: 10, updatedAt: 10 }),
+      requirement({
+        id: 'older',
+        title: 'Older child',
+        parentId: 'parent',
+        createdAt: 20,
+        updatedAt: 20,
+      }),
+      requirement({
+        id: 'newer',
+        title: 'Newer child',
+        parentId: 'parent',
+        status: 'done',
+        createdAt: 30,
+        updatedAt: 30,
+      }),
+      requirement({
+        id: 'finished',
+        title: 'Finished parent',
+        status: 'done',
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+      requirement({
+        id: 'left',
+        title: 'Left open',
+        parentId: 'finished',
+        createdAt: 40,
+        updatedAt: 40,
+      }),
+    ];
+    renderView();
+
+    expect(rowIds()).toEqual(['parent', 'older', 'finished', 'left']);
+    expect(host.querySelector('[data-depth="1"]')?.getAttribute('data-requirement-id')).toBe(
+      'older'
+    );
+    expect(host.querySelector('[aria-label="Requirements"]')?.textContent).toContain('1/2');
+    expect(host.textContent).toContain('Open (3)');
+    expect(host.textContent).toContain('Done (2)');
+
+    await page.getByRole('button', { name: 'Done (2)' }).click();
+    await expect.element(page.getByRole('button', { name: 'Newer child' })).toBeVisible();
+
+    expect(rowIds()).toEqual(['finished', 'parent', 'newer']);
+    expect(host.textContent).toContain('Done (2)');
+    expect(host.querySelector('[aria-label="Requirements"]')?.textContent).not.toContain(
+      'Older child'
+    );
+  });
+
+  it('confirms deleting sub-requirements and starts a task from the open ones', async () => {
+    harness.items = [
+      requirement({
+        id: 'parent',
+        title: 'Parent',
+        detail: 'the body',
+        createdAt: 10,
+        updatedAt: 10,
+      }),
+      requirement({
+        id: 'open-child',
+        title: 'Open child',
+        parentId: 'parent',
+        createdAt: 20,
+        updatedAt: 20,
+      }),
+      requirement({
+        id: 'done-child',
+        title: 'Done child',
+        parentId: 'parent',
+        status: 'done',
+        createdAt: 30,
+        updatedAt: 30,
+      }),
+    ];
+    renderView();
+
+    await page.getByRole('button', { name: 'Start task' }).click();
+    expect(modals.openModal).toHaveBeenCalledWith(
+      'taskModal',
+      expect.objectContaining({
+        projectId: 'project-1',
+        initialName: 'Parent',
+        initialPrompt: 'Parent\n\nthe body\n\n- Open child',
+      })
+    );
+    expect(JSON.stringify(modals.openModal.mock.calls[0]?.[1])).not.toContain('Done child');
+
+    modals.openModal.mockResolvedValueOnce({ success: true });
+    await page.getByRole('button', { name: 'Delete' }).click();
+    expect(modals.openModal).toHaveBeenCalledWith(
+      'confirmActionModal',
+      expect.objectContaining({
+        description:
+          '“Parent” and its 2 sub-requirements are removed from the list. This cannot be undone.',
+      })
+    );
+    expect(harness.remove).toHaveBeenCalledWith('parent');
+  });
+
+  it('adds a sub-requirement on a top-level item only', async () => {
+    harness.items = [
+      requirement({ id: 'parent', title: 'Parent', createdAt: 10, updatedAt: 10 }),
+      requirement({
+        id: 'child',
+        title: 'Child item',
+        parentId: 'parent',
+        createdAt: 20,
+        updatedAt: 20,
+      }),
+    ];
+    renderView();
+
+    await page.getByRole('button', { name: 'Add sub-requirement' }).click();
+    const title = page.getByRole('textbox', { name: 'Sub-requirement title' });
+    await expect.element(title).toBeVisible();
+    await title.fill('Nested');
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+    expect(harness.add).toHaveBeenCalledWith({ title: 'Nested', parentId: 'parent' });
+
+    await page.getByRole('button', { name: 'Child item' }).click();
+    expect(host.querySelector('[aria-label="Add sub-requirement"]')).toBeNull();
+  });
 });
+
+function rowIds(): string[] {
+  return [...host.querySelectorAll('[data-requirement-id]')].map(
+    (row) => row.getAttribute('data-requirement-id') ?? ''
+  );
+}

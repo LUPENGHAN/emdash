@@ -11,6 +11,7 @@ import type { MementoHandle } from '@core/primitives/mementos/browser';
 export type ProjectView =
   | 'tasks'
   | 'requirements'
+  | 'decisions'
   | 'history'
   | 'pull-request'
   | 'workspaces'

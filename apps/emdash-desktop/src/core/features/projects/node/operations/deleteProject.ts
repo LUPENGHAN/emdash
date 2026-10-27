@@ -2,6 +2,7 @@ import { err, ok, type Result } from '@emdash/shared';
 import type { Logger } from '@emdash/shared/logger';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { AutomationsService } from '@core/features/automations/api/node/automations-service';
+import type { MemoryOperations } from '@core/features/memory/api/types';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
 import { projectEvents } from '@core/features/projects/api/node/project-events';
 import { projectSubject } from '@core/features/projects/contributions/subject';
@@ -48,6 +49,7 @@ export type ProjectDeletionDependencies = {
   projects: Pick<ProjectAttachmentManager, 'invalidate'>;
   pullRequests: { deleteProjectData(projectId: string): Promise<void> };
   requirements: Pick<RequirementsOperations, 'removeProject'>;
+  memory: Pick<MemoryOperations, 'removeProject'>;
   sessionCleanup: TaskSessionCleanup;
   telemetry: Pick<TelemetryService, 'capture'>;
 };
@@ -161,6 +163,7 @@ async function purgeProjectLocalState(
   const { db } = dependencies;
   await dependencies.pullRequests.deleteProjectData(projectId);
   await dependencies.requirements.removeProject(projectId);
+  await dependencies.memory.removeProject(projectId);
   await dependencies.automations.removeProjectDeployments(projectId);
   await db.delete(projects).where(eq(projects.id, projectId));
   const client = await dependencies.getMementosRuntimeClient();

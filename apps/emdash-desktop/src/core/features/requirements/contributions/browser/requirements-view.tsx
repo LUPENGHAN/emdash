@@ -4,17 +4,27 @@ import {
   Checkbox,
   Input,
   RelativeTime,
+  Select,
   Textarea,
   ToggleGroup,
   Tooltip,
 } from '@emdash/ui/react/primitives';
-import { Pencil, Play, Trash2 } from 'lucide-react';
+import { Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { agentDisplayName } from '@core/features/conversations/contributions/browser/agent-actions';
 import { openModal } from '@core/manifests/browser/modal-api';
 import { useMarkdownLinkOpener } from '@core/primitives/external-links/browser';
 import { cn } from '@core/primitives/styling/browser/cn';
 import { useRequirements } from '../../api/browser/use-requirements';
+import {
+  REQUIREMENT_TOP_LEVEL,
+  canChangeParent,
+  childProgress,
+  directChildren,
+  parentChoices,
+  requirementTaskPrompt,
+  visibleRequirementRows,
+} from '../../api/requirement-tree';
 import type { Requirement } from '../../api/types';
 import { QuickRequirementInput } from '../../browser/quick-requirement-input';
 
@@ -27,8 +37,8 @@ export function RequirementsView({ projectId }: { projectId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const openCount = items.filter((item) => item.status === 'open').length;
-  const shown = items.filter((item) => item.status === filter);
-  const shownKey = shown.map((item) => item.id).join('\0');
+  const rows = visibleRequirementRows(items, filter);
+  const shownKey = rows.map((row) => row.item.id).join('\0');
 
   // Keep the open requirement when the list refreshes. If it leaves the filter, follow the
   // first one still shown. Editing holds its place until Save or Cancel.
@@ -40,9 +50,14 @@ export function RequirementsView({ projectId }: { projectId: string }) {
   }, [editingId, selectedId, shownKey]);
 
   const confirmRemove = async (item: Requirement) => {
+    const childCount = directChildren(item.id, items).length;
+    const removed =
+      childCount === 0
+        ? `“${item.title}” is removed from the list.`
+        : `“${item.title}” and its ${childCount} sub-requirement${childCount === 1 ? '' : 's'} are removed from the list.`;
     const confirmed = await openModal('confirmActionModal', {
       title: 'Delete this requirement?',
-      description: `“${item.title}” is removed from the list. This cannot be undone.`,
+      description: `${removed} This cannot be undone.`,
       confirmLabel: 'Delete',
     });
     if (confirmed.success) await remove(item.id).catch(() => {});
@@ -52,7 +67,7 @@ export function RequirementsView({ projectId }: { projectId: string }) {
     void openModal('taskModal', {
       projectId,
       initialName: item.title,
-      initialPrompt: item.detail ? `${item.title}\n\n${item.detail}` : item.title,
+      initialPrompt: requirementTaskPrompt(item, items),
     });
 
   const select = (id: string) => {
@@ -60,12 +75,12 @@ export function RequirementsView({ projectId }: { projectId: string }) {
     setSelectedId(id);
   };
 
-  const selectedIsShown = selectedId !== null && shown.some((item) => item.id === selectedId);
+  const selectedIsShown = selectedId !== null && rows.some((row) => row.item.id === selectedId);
   // Show the first visible requirement before the effect commits selectedId, so the empty
   // filter message does not flash on the way in.
-  const displayedId = editingId ?? (selectedIsShown ? selectedId : (shown[0]?.id ?? null));
+  const displayedId = editingId ?? (selectedIsShown ? selectedId : (rows[0]?.item.id ?? null));
   const active = items.find((item) => item.id === displayedId) ?? null;
-  const showReader = shown.length > 0 || (editingId !== null && active !== null);
+  const showReader = rows.length > 0 || (editingId !== null && active !== null);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -95,13 +110,15 @@ export function RequirementsView({ projectId }: { projectId: string }) {
             aria-label="Requirements"
             className="flex w-72 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border p-1"
           >
-            {shown.map((item) => (
+            {rows.map((row) => (
               <RequirementListItem
-                key={item.id}
-                item={item}
-                selected={item.id === displayedId}
-                onSelect={() => select(item.id)}
-                onUpdate={(changes) => update({ id: item.id, ...changes })}
+                key={row.item.id}
+                item={row.item}
+                depth={row.depth}
+                progress={childProgress(row.item, items)}
+                selected={row.item.id === displayedId}
+                onSelect={() => select(row.item.id)}
+                onUpdate={(changes) => update({ id: row.item.id, ...changes })}
               />
             ))}
           </ul>
@@ -109,6 +126,7 @@ export function RequirementsView({ projectId }: { projectId: string }) {
             <RequirementDocument
               key={active.id}
               item={active}
+              items={items}
               editing={editingId === active.id}
               onEdit={() => setEditingId(active.id)}
               onCancelEdit={() => setEditingId(null)}
@@ -116,6 +134,8 @@ export function RequirementsView({ projectId }: { projectId: string }) {
               onSaved={() => setEditingId(null)}
               onRemove={() => void confirmRemove(active)}
               onStartTask={() => startTask(active)}
+              onAddChild={(title) => add({ title, parentId: active.id })}
+              onChangeParent={(parentId) => update({ id: active.id, parentId })}
             />
           ) : null}
         </div>
@@ -128,11 +148,15 @@ export function RequirementsView({ projectId }: { projectId: string }) {
 
 function RequirementListItem({
   item,
+  depth,
+  progress,
   selected,
   onSelect,
   onUpdate,
 }: {
   item: Requirement;
+  depth: 0 | 1;
+  progress: { open: number; total: number } | null;
   selected: boolean;
   onSelect: () => void;
   onUpdate: (changes: Partial<Pick<Requirement, 'status'>>) => Promise<unknown>;
@@ -140,8 +164,11 @@ function RequirementListItem({
   return (
     <li>
       <div
+        data-requirement-id={item.id}
+        data-depth={depth}
         className={cn(
-          'flex items-center gap-2 rounded-md px-2 py-1.5',
+          'flex items-center gap-2 rounded-md py-1.5 pr-2',
+          depth === 1 ? 'pl-8' : 'pl-2',
           selected && 'bg-background-2'
         )}
       >
@@ -163,6 +190,14 @@ function RequirementListItem({
         >
           {item.title}
         </button>
+        {progress ? (
+          <span
+            className="shrink-0 text-xs text-foreground-muted tabular-nums"
+            aria-label={`${progress.open} of ${progress.total} sub-requirements open`}
+          >
+            {progress.open}/{progress.total}
+          </span>
+        ) : null}
       </div>
     </li>
   );
@@ -170,6 +205,7 @@ function RequirementListItem({
 
 function RequirementDocument({
   item,
+  items,
   editing,
   onEdit,
   onCancelEdit,
@@ -177,8 +213,11 @@ function RequirementDocument({
   onSaved,
   onRemove,
   onStartTask,
+  onAddChild,
+  onChangeParent,
 }: {
   item: Requirement;
+  items: Requirement[];
   editing: boolean;
   onEdit: () => void;
   onCancelEdit: () => void;
@@ -186,11 +225,33 @@ function RequirementDocument({
   onSaved: () => void;
   onRemove: () => void;
   onStartTask: () => void;
+  onAddChild: (title: string) => Promise<unknown>;
+  onChangeParent: (parentId: string) => Promise<unknown>;
 }) {
   const [title, setTitle] = useState(item.title);
   const [detail, setDetail] = useState(item.detail ?? '');
+  const [addingChild, setAddingChild] = useState(false);
+  const [childTitle, setChildTitle] = useState('');
   const openLink = useMarkdownLinkOpener();
   const body = item.detail?.trim() ?? '';
+  const canAddChild = !item.parentId;
+  const choices = parentChoices(item, items);
+  const showParent = canChangeParent(item, items);
+  const parentValue = choices.some((choice) => choice.id === item.parentId)
+    ? (item.parentId ?? REQUIREMENT_TOP_LEVEL)
+    : REQUIREMENT_TOP_LEVEL;
+
+  const submitChild = async () => {
+    const next = childTitle.trim();
+    if (!next) return;
+    try {
+      await onAddChild(next);
+      setChildTitle('');
+      setAddingChild(false);
+    } catch {
+      // The hook already told the user; keep the title so nothing is lost.
+    }
+  };
 
   const beginEdit = () => {
     setTitle(item.title);
@@ -246,8 +307,40 @@ function RequirementDocument({
                 ) : null}
                 <RelativeTime value={item.createdAt} compact />
               </p>
+              {showParent ? (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="text-xs text-foreground-passive">Parent</span>
+                  <Select.Root
+                    value={parentValue}
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      const next = value === REQUIREMENT_TOP_LEVEL ? '' : value;
+                      const stored = item.parentId ?? '';
+                      if (next === stored) return;
+                      void onChangeParent(next).catch(() => {});
+                    }}
+                  >
+                    <Select.Trigger size="sm" appearance="input" className="max-w-56">
+                      <Select.Value />
+                    </Select.Trigger>
+                    <Select.Content align="start">
+                      <Select.Item value={REQUIREMENT_TOP_LEVEL}>Top level</Select.Item>
+                      {choices.map((choice) => (
+                        <Select.Item key={choice.id} value={choice.id}>
+                          {choice.title}
+                        </Select.Item>
+                      ))}
+                    </Select.Content>
+                  </Select.Root>
+                </div>
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center">
+              {canAddChild ? (
+                <RowAction label="Add sub-requirement" onClick={() => setAddingChild(true)}>
+                  <Plus className="size-3.5" />
+                </RowAction>
+              ) : null}
               <RowAction label="Start task" onClick={onStartTask}>
                 <Play className="size-3.5" />
               </RowAction>
@@ -259,6 +352,37 @@ function RequirementDocument({
               </RowAction>
             </div>
           </div>
+          {addingChild && canAddChild ? (
+            <form
+              className="flex items-center gap-2 border-b border-border px-5 py-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitChild();
+              }}
+            >
+              <Input
+                value={childTitle}
+                autoFocus
+                aria-label="Sub-requirement title"
+                placeholder="Sub-requirement title"
+                onChange={(event) => setChildTitle(event.target.value)}
+              />
+              <Button size="sm" variant="primary" type="submit" disabled={!childTitle.trim()}>
+                Add
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                type="button"
+                onClick={() => {
+                  setAddingChild(false);
+                  setChildTitle('');
+                }}
+              >
+                Cancel
+              </Button>
+            </form>
+          ) : null}
           <div className="min-h-0 flex-1 overflow-y-auto">
             {body ? (
               <Markdown

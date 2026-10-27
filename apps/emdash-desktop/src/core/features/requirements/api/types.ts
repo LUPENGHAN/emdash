@@ -19,12 +19,15 @@ export const requirementSchema = z.object({
   id: z.string(),
   title: z.string().min(1).max(REQUIREMENT_TITLE_MAX),
   detail: z.string().max(REQUIREMENT_DETAIL_MAX).optional(),
+  /** Set only when this item sits under a top-level requirement. One level. */
+  parentId: z.string().min(1).optional(),
   status: z.enum(['open', 'done']),
   source: requirementSourceSchema,
   createdAt: z.number(),
   updatedAt: z.number(),
 });
 
+/** Version stays 1 so rows written before parentId still parse. */
 export const projectRequirementsSchema = z.object({
   version: z.literal(1),
   items: z.array(requirementSchema),
@@ -45,6 +48,8 @@ export type RequirementChanges = {
   /** An empty string clears the detail. */
   detail?: string;
   status?: Requirement['status'];
+  /** An empty string clears the parent. */
+  parentId?: string;
 };
 
 /** What other features (agent control, project deletion) do with the lists. */
@@ -52,9 +57,10 @@ export type RequirementsOperations = {
   list(projectId: string): Promise<Requirement[]>;
   add(
     projectId: string,
-    input: { title: string; detail?: string },
+    input: { title: string; detail?: string; parentId?: string },
     source: RequirementSource
   ): Promise<Requirement>;
   update(projectId: string, id: string, changes: RequirementChanges): Promise<Requirement>;
+  remove(projectId: string, id: string): Promise<void>;
   removeProject(projectId: string): Promise<void>;
 };

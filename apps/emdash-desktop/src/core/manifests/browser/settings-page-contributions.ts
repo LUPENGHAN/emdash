@@ -7,6 +7,7 @@ import {
   systemSettingsPage,
 } from '@core/features/machines/contributions/settings-page';
 import { mcpSettingsPage } from '@core/features/mcp/contributions/settings-page';
+import { decisionsSettingsPage } from '@core/features/memory/contributions/settings-page';
 import { providersSettingsPage } from '@core/features/model-providers/contributions/settings-page';
 import { remoteAccessSettingsPage } from '@core/features/remote-access/contributions/settings-page';
 import {
@@ -24,6 +25,7 @@ import type { SettingsPageContribution } from '@core/primitives/settings/api/pag
 
 export const settingsPageContributions = [
   generalSettingsPage,
+  decisionsSettingsPage,
   integrationsSettingsPage,
   interfaceSettingsPage,
   browserSettingsPage,

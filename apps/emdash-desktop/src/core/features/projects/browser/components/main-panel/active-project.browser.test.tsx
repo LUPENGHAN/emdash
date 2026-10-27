@@ -33,6 +33,10 @@ vi.mock('@core/features/requirements/contributions/browser/requirements-view', (
   RequirementsView: () => null,
 }));
 
+vi.mock('@core/features/memory/contributions/browser/decisions-view', () => ({
+  DecisionsView: () => null,
+}));
+
 vi.mock('@core/features/projects/browser/components/pr-view/pr-view', () => ({
   PullRequestView: () => <div>Pull requests panel</div>,
 }));

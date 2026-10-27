@@ -51,7 +51,7 @@ export class RequirementsService implements RequirementsOperations {
 
   add(
     projectId: string,
-    input: { title: string; detail?: string },
+    input: { title: string; detail?: string; parentId?: string },
     source: RequirementSource
   ): Promise<Requirement> {
     return this.write(projectId, (list) => {
@@ -62,10 +62,13 @@ export class RequirementsService implements RequirementsOperations {
       }
       const now = this.now();
       const detail = input.detail?.trim();
+      const parentId = input.parentId?.trim() || undefined;
+      assertAttachable(list, null, parentId);
       const item = validated({
         id: this.newId(),
         title: input.title.trim(),
         ...(detail && { detail }),
+        ...(parentId && { parentId }),
         status: 'open',
         source,
         createdAt: now,
@@ -83,12 +86,16 @@ export class RequirementsService implements RequirementsOperations {
     return this.write(projectId, (list) => {
       const current = list.items.find((item) => item.id === id);
       if (!current) throw new Error(`No requirement ${id} in this project`);
-      const { detail: _previous, ...rest } = current;
+      const { detail: _previous, parentId: _previousParent, ...rest } = current;
       const detail = changes.detail === undefined ? current.detail : changes.detail.trim();
+      const parentId =
+        changes.parentId === undefined ? current.parentId : changes.parentId.trim() || undefined;
+      if (changes.parentId !== undefined) assertAttachable(list, current.id, parentId);
       const item = validated({
         ...rest,
         ...(changes.title !== undefined && { title: changes.title.trim() }),
         ...(detail && { detail }),
+        ...(parentId && { parentId }),
         ...(changes.status && { status: changes.status }),
         updatedAt: this.now(),
       });
@@ -102,7 +109,10 @@ export class RequirementsService implements RequirementsOperations {
 
   async remove(projectId: string, id: string): Promise<void> {
     await this.write(projectId, (list) => ({
-      next: { ...list, items: list.items.filter((item) => item.id !== id) },
+      next: {
+        ...list,
+        items: list.items.filter((item) => item.id !== id && item.parentId !== id),
+      },
       result: undefined,
       event: { projectId },
     }));
@@ -156,4 +166,22 @@ function validated(item: Requirement): Requirement {
   const parsed = requirementSchema.safeParse(item);
   if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid requirement');
   return parsed.data;
+}
+
+/** parentId is checked only when it is being set. A missing parent does not block other edits. */
+function assertAttachable(
+  list: ProjectRequirements,
+  itemId: string | null,
+  parentId: string | undefined
+) {
+  if (!parentId) return;
+  if (itemId !== null && parentId === itemId) {
+    throw new Error('A requirement cannot be its own parent');
+  }
+  const parent = list.items.find((item) => item.id === parentId);
+  if (!parent) throw new Error(`No requirement ${parentId} in this project`);
+  if (parent.parentId) throw new Error('A sub-requirement cannot contain another');
+  if (itemId !== null && list.items.some((item) => item.parentId === itemId)) {
+    throw new Error('A requirement with sub-requirements stays at the top level');
+  }
 }
