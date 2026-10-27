@@ -1,3 +1,4 @@
+import { Markdown } from '@emdash/ui/react/components';
 import {
   Button,
   Checkbox,
@@ -7,10 +8,11 @@ import {
   ToggleGroup,
   Tooltip,
 } from '@emdash/ui/react/primitives';
-import { ChevronDown, ChevronRight, Pencil, Play, Trash2 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { Pencil, Play, Trash2 } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { agentDisplayName } from '@core/features/conversations/contributions/browser/agent-actions';
 import { openModal } from '@core/manifests/browser/modal-api';
+import { useMarkdownLinkOpener } from '@core/primitives/external-links/browser';
 import { cn } from '@core/primitives/styling/browser/cn';
 import { useRequirements } from '../../api/browser/use-requirements';
 import type { Requirement } from '../../api/types';
@@ -18,12 +20,24 @@ import { QuickRequirementInput } from '../../browser/quick-requirement-input';
 
 type Filter = Requirement['status'];
 
-/** The project's "Requirements" tab: every item, to edit, finish, delete or start as a task. */
+/** The project's "Requirements" tab: pick one from the side, read its Markdown on the right. */
 export function RequirementsView({ projectId }: { projectId: string }) {
   const { items, isLoading, add, update, remove } = useRequirements(projectId);
   const [filter, setFilter] = useState<Filter>('open');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const openCount = items.filter((item) => item.status === 'open').length;
   const shown = items.filter((item) => item.status === filter);
+  const shownKey = shown.map((item) => item.id).join('\0');
+
+  // Keep the open requirement when the list refreshes. If it leaves the filter, follow the
+  // first one still shown. Editing holds its place until Save or Cancel.
+  useEffect(() => {
+    if (editingId) return;
+    const ids = shownKey === '' ? [] : shownKey.split('\0');
+    if (selectedId && ids.includes(selectedId)) return;
+    setSelectedId(ids[0] ?? null);
+  }, [editingId, selectedId, shownKey]);
 
   const confirmRemove = async (item: Requirement) => {
     const confirmed = await openModal('confirmActionModal', {
@@ -40,6 +54,18 @@ export function RequirementsView({ projectId }: { projectId: string }) {
       initialName: item.title,
       initialPrompt: item.detail ? `${item.title}\n\n${item.detail}` : item.title,
     });
+
+  const select = (id: string) => {
+    if (editingId) return;
+    setSelectedId(id);
+  };
+
+  const selectedIsShown = selectedId !== null && shown.some((item) => item.id === selectedId);
+  // Show the first visible requirement before the effect commits selectedId, so the empty
+  // filter message does not flash on the way in.
+  const displayedId = editingId ?? (selectedIsShown ? selectedId : (shown[0]?.id ?? null));
+  const active = items.find((item) => item.id === displayedId) ?? null;
+  const showReader = shown.length > 0 || (editingId !== null && active !== null);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -63,84 +89,62 @@ export function RequirementsView({ projectId }: { projectId: string }) {
         <p className="py-8 text-center text-sm text-foreground-muted">
           No requirements yet. Add one above, or ask an agent to note one.
         </p>
-      ) : (
-        <ul className="-mx-1 min-h-0 flex-1 divide-y divide-border/40 overflow-y-auto px-1">
-          {shown.map((item) => (
-            <RequirementRow
-              key={item.id}
-              item={item}
-              onUpdate={(changes) => update({ id: item.id, ...changes })}
-              onRemove={() => void confirmRemove(item)}
-              onStartTask={() => startTask(item)}
+      ) : showReader ? (
+        <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border border-border">
+          <ul
+            aria-label="Requirements"
+            className="flex w-72 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border p-1"
+          >
+            {shown.map((item) => (
+              <RequirementListItem
+                key={item.id}
+                item={item}
+                selected={item.id === displayedId}
+                onSelect={() => select(item.id)}
+                onUpdate={(changes) => update({ id: item.id, ...changes })}
+              />
+            ))}
+          </ul>
+          {active ? (
+            <RequirementDocument
+              key={active.id}
+              item={active}
+              editing={editingId === active.id}
+              onEdit={() => setEditingId(active.id)}
+              onCancelEdit={() => setEditingId(null)}
+              onSave={(changes) => update({ id: active.id, ...changes })}
+              onSaved={() => setEditingId(null)}
+              onRemove={() => void confirmRemove(active)}
+              onStartTask={() => startTask(active)}
             />
-          ))}
-        </ul>
-      )}
+          ) : null}
+        </div>
+      ) : !isLoading ? (
+        <p className="py-8 text-center text-sm text-foreground-muted">No {filter} requirements.</p>
+      ) : null}
     </div>
   );
 }
 
-function RequirementRow({
+function RequirementListItem({
   item,
+  selected,
+  onSelect,
   onUpdate,
-  onRemove,
-  onStartTask,
 }: {
   item: Requirement;
-  onUpdate: (
-    changes: Partial<Pick<Requirement, 'title' | 'detail' | 'status'>>
-  ) => Promise<unknown>;
-  onRemove: () => void;
-  onStartTask: () => void;
+  selected: boolean;
+  onSelect: () => void;
+  onUpdate: (changes: Partial<Pick<Requirement, 'status'>>) => Promise<unknown>;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(item.title);
-  const [detail, setDetail] = useState(item.detail ?? '');
-
-  const startEditing = () => {
-    setTitle(item.title);
-    setDetail(item.detail ?? '');
-    setEditing(true);
-  };
-  const save = async () => {
-    if (!title.trim()) return;
-    await onUpdate({ title, detail })
-      .then(() => setEditing(false))
-      .catch(() => {});
-  };
-
-  if (editing) {
-    return (
-      <li className="flex flex-col gap-2 py-2">
-        <Input
-          value={title}
-          autoFocus
-          aria-label="Requirement title"
-          onChange={(event) => setTitle(event.target.value)}
-        />
-        <Textarea
-          value={detail}
-          rows={4}
-          placeholder="Details"
-          aria-label="Requirement details"
-          onChange={(event) => setDetail(event.target.value)}
-        />
-        <div className="flex justify-end gap-2">
-          <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-            Cancel
-          </Button>
-          <Button size="sm" variant="primary" disabled={!title.trim()} onClick={() => void save()}>
-            Save
-          </Button>
-        </div>
-      </li>
-    );
-  }
-
   return (
-    <li className="py-1.5">
-      <div className="flex items-center gap-2">
+    <li>
+      <div
+        className={cn(
+          'flex items-center gap-2 rounded-md px-2 py-1.5',
+          selected && 'bg-background-2'
+        )}
+      >
         <Checkbox
           checked={item.status === 'done'}
           aria-label={item.status === 'done' ? 'Mark as not done' : 'Mark as done'}
@@ -150,54 +154,128 @@ function RequirementRow({
         />
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm"
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {item.detail ? (
-            expanded ? (
-              <ChevronDown className="size-3.5 shrink-0 text-foreground-passive" />
-            ) : (
-              <ChevronRight className="size-3.5 shrink-0 text-foreground-passive" />
-            )
-          ) : (
-            <span className="size-3.5 shrink-0" />
+          aria-current={selected ? 'true' : undefined}
+          className={cn(
+            'min-w-0 flex-1 truncate text-left text-sm',
+            item.status === 'done' && 'text-foreground-muted line-through'
           )}
-          <span
-            className={cn(
-              'truncate',
-              item.status === 'done' && 'text-foreground-muted line-through'
-            )}
-          >
-            {item.title}
-          </span>
+          onClick={onSelect}
+        >
+          {item.title}
         </button>
-        {item.source.kind === 'agent' ? (
-          <span className="shrink-0 text-xs text-foreground-passive">
-            from {agentDisplayName(item.source.providerId)}
-          </span>
-        ) : null}
-        <RelativeTime
-          value={item.createdAt}
-          compact
-          className="shrink-0 text-xs text-foreground-passive"
-        />
-        <RowAction label="Start task" onClick={onStartTask}>
-          <Play className="size-3.5" />
-        </RowAction>
-        <RowAction label="Edit" onClick={startEditing}>
-          <Pencil className="size-3.5" />
-        </RowAction>
-        <RowAction label="Delete" onClick={onRemove}>
-          <Trash2 className="size-3.5" />
-        </RowAction>
       </div>
-      {expanded && item.detail ? (
-        // Agents write these: shown as plain text, never as HTML or Markdown.
-        <p className="mt-1 ml-[3.25rem] text-xs whitespace-pre-wrap text-foreground-muted">
-          {item.detail}
-        </p>
-      ) : null}
     </li>
+  );
+}
+
+function RequirementDocument({
+  item,
+  editing,
+  onEdit,
+  onCancelEdit,
+  onSave,
+  onSaved,
+  onRemove,
+  onStartTask,
+}: {
+  item: Requirement;
+  editing: boolean;
+  onEdit: () => void;
+  onCancelEdit: () => void;
+  onSave: (changes: { title: string; detail: string }) => Promise<unknown>;
+  onSaved: () => void;
+  onRemove: () => void;
+  onStartTask: () => void;
+}) {
+  const [title, setTitle] = useState(item.title);
+  const [detail, setDetail] = useState(item.detail ?? '');
+  const openLink = useMarkdownLinkOpener();
+  const body = item.detail?.trim() ?? '';
+
+  const beginEdit = () => {
+    setTitle(item.title);
+    setDetail(item.detail ?? '');
+    onEdit();
+  };
+  const save = async () => {
+    if (!title.trim()) return;
+    await onSave({ title, detail })
+      .then(() => onSaved())
+      .catch(() => {});
+  };
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {editing ? (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4">
+          <Input
+            value={title}
+            autoFocus
+            aria-label="Requirement title"
+            onChange={(event) => setTitle(event.target.value)}
+          />
+          <Textarea
+            value={detail}
+            rows={12}
+            placeholder="Details"
+            aria-label="Requirement details"
+            onChange={(event) => setDetail(event.target.value)}
+          />
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={onCancelEdit}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={!title.trim()}
+              onClick={() => void save()}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-start gap-3 border-b border-border px-5 py-3">
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-base text-foreground">{item.title}</h1>
+              <p className="mt-1 flex items-center gap-2 text-xs text-foreground-passive">
+                {item.source.kind === 'agent' ? (
+                  <span>from {agentDisplayName(item.source.providerId)}</span>
+                ) : null}
+                <RelativeTime value={item.createdAt} compact />
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center">
+              <RowAction label="Start task" onClick={onStartTask}>
+                <Play className="size-3.5" />
+              </RowAction>
+              <RowAction label="Edit" onClick={beginEdit}>
+                <Pencil className="size-3.5" />
+              </RowAction>
+              <RowAction label="Delete" onClick={onRemove}>
+                <Trash2 className="size-3.5" />
+              </RowAction>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {body ? (
+              <Markdown
+                content={body}
+                variant="full"
+                allowHtml={false}
+                className="w-full max-w-3xl px-6 py-5"
+                headingIdPrefix={`requirement-${item.id}-`}
+                onOpenLink={openLink}
+              />
+            ) : (
+              <p className="px-6 py-5 text-sm text-foreground-muted">No details.</p>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

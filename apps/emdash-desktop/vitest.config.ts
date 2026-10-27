@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import tailwindcss from '@tailwindcss/vite';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
 import { startLspFixture, stopLspFixture } from './tooling/vitest/lsp-browser-commands';
@@ -126,6 +127,10 @@ export default defineConfig({
               // slice-isolation tests colocated with core slices as
               // *.browser.test.{ts,tsx}.
               extends: true as const,
+              // The renderer stylesheet is Tailwind v4. Browser tests that import it
+              // need the same plugin the Electron renderer build uses, or utilities
+              // such as flex and w-72 never reach the page.
+              plugins: [tailwindcss()],
               // Prebundle before mounting query-backed React forms. A late JSX
               // optimization reload can otherwise split their provider contexts.
               optimizeDeps: {
