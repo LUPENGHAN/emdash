@@ -150,7 +150,9 @@ export function BranchSelector({
         </Combobox.Trigger>
       )}
       <Combobox.Content
-        className={cn('min-w-(--anchor-width) border', showRemoteFooter ? 'pb-0' : 'pb-1')}
+        width="content-at-least-trigger"
+        style={{ minWidth: 'max(16rem, var(--anchor-width))' }}
+        className={cn('border', showRemoteFooter ? 'pb-0' : 'pb-1')}
       >
         {observationKind === 'stale' ? (
           <p
@@ -219,7 +221,7 @@ export function BranchSelector({
         />
         <Combobox.List>
           {(item) => (
-            <Combobox.Item value={item} disabled={item.disabled}>
+            <Combobox.Item value={item} disabled={item.disabled} className="whitespace-nowrap">
               {item.label}
             </Combobox.Item>
           )}

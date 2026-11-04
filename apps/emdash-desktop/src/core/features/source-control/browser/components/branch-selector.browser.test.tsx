@@ -1,3 +1,4 @@
+import { Combobox } from '@emdash/ui/react/primitives';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -108,6 +109,42 @@ describe('BranchSelector degraded actions', () => {
       );
     });
     expect(onValueChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps a short trigger from collapsing the branch list', async () => {
+    await act(async () => {
+      root.render(
+        <BranchSelector
+          branches={[
+            { type: 'local', branch: 'master' },
+            { type: 'local', branch: 'emdash-opportunity-picker' },
+          ]}
+          value={{ type: 'local', branch: 'master' }}
+          onValueChange={vi.fn()}
+          trigger={
+            <Combobox.Trigger style={{ width: 48 }}>
+              <span>master</span>
+            </Combobox.Trigger>
+          }
+        />
+      );
+    });
+
+    const trigger = host.querySelector('button');
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const popup = document.querySelector<HTMLElement>('[data-slot="combobox-content"]');
+    expect(popup?.getAttribute('data-width')).toBe('content-at-least-trigger');
+    expect(popup?.style.minWidth).toBe('max(16rem, var(--anchor-width))');
+    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((node) =>
+      node.textContent?.includes('emdash-opportunity-picker')
+    );
+    expect(option?.textContent).toContain('emdash-opportunity-picker');
+    expect(option?.className).toContain('whitespace-nowrap');
+    expect(popup?.getBoundingClientRect().width ?? 0).toBeGreaterThan(200);
+    expect(option?.getBoundingClientRect().height ?? 0).toBeLessThan(48);
   });
 
   it('selects the local or remote branch that was clicked', async () => {

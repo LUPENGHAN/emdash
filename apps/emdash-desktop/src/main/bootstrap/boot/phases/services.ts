@@ -9,7 +9,7 @@ import {
 } from '@emdash/core/primitives/host/api';
 import { integrationPluginRegistry } from '@emdash/plugins/integrations';
 import { pullRequestsPluginRegistry } from '@emdash/plugins/pull-requests';
-import { err, ok, secret } from '@emdash/shared';
+import { secret } from '@emdash/shared';
 import { runWithTimeout } from '@emdash/shared/scheduling';
 import { peek } from '@emdash/wire/state';
 import { app, Notification, powerMonitor } from 'electron';
@@ -411,7 +411,7 @@ export async function bootServices(
       ),
     server: createRemoteAccessServer({
       rendererRoot: join(app.getAppPath(), 'out', 'renderer'),
-      openSession: openRemoteWireSession,
+      openSession: (transport) => openRemoteWireSession(transport),
       info: () => ({ name: hostname(), version: app.getVersion() }),
       auth: remoteAccessAuth,
       usageStats: (from, to) => usageStats.localUsage(from, to),
