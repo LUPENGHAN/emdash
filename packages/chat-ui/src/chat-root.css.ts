@@ -76,7 +76,11 @@ export const unitRowWrapper = style({
   left: 0,
   width: '100%',
   willChange: 'transform',
-  contain: 'layout paint style',
+  // Layout/style containment only. Paint containment would clip at this box, and
+  // the box is exactly the text width, so a line that lands a fraction past it
+  // lost the right slice of its last glyph. Overflow spills into the scroll
+  // container's gutter instead, which `overflow-x: hidden` already clips.
+  contain: 'layout style',
 });
 
 /** Pinned overlay container — absolute, full-width, z above canvas. */
