@@ -106,3 +106,9 @@ packages/plugins/src/agents/impl/*/fixtures/acp-transcript.json
 # Nx local cache and workspace data
 .nx/cache
 .nx/workspace-data
+
+# Local planning docs (todo, plans, proposals) stay on this machine; docs/adr is shared
+/docs/plans/
+/docs/proposals/
+/docs/todo.md
+/docs/remote-access-cloudflare.md
