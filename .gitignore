@@ -1,6 +1,7 @@
 dist/
 out/
 /release/
+/outputs/
 
 # App-specific outputs
 apps/*/out/

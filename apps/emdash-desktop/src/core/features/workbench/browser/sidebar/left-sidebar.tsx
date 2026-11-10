@@ -5,7 +5,6 @@ import { automationsViewDef } from '@core/features/automations/contributions/vie
 import { UsageLimitsPanel } from '@core/features/model-providers/contributions/browser/usage-limits-panel';
 import { ConnectionSwitcher } from '@core/features/remote-access/contributions/browser/connection-switcher';
 import { settingsViewDef } from '@core/features/settings/contributions/views';
-import { WaitlistCard } from '@core/features/waitlist/contributions/browser/waitlist-card';
 import { useOpenModal } from '@core/manifests/browser/modal-api';
 import { BoundShortcut } from '@core/primitives/keybindings/browser/shortcut';
 import { WORKBENCH_BOTTOM_BAR_HEIGHT_PX } from '@core/primitives/layouts/api/workbench-layout';
@@ -71,7 +70,6 @@ export const LeftSidebar: React.FC = observer(function LeftSidebar() {
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
-        <WaitlistCard />
         <SidebarFooter>
           <ConnectionSwitcher />
           <UsageLimitsPanel />
