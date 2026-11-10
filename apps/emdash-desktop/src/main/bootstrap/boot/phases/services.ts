@@ -39,6 +39,7 @@ import {
   launchableMcpServers,
   terminalLaunchForMcp,
 } from '@core/features/agent-library/node/mcp-launch';
+import { writeOmpMcpConfig } from '@core/features/agent-library/node/omp-mcp-config';
 import { SKILL_LIBRARY_DIRNAME } from '@core/features/agent-library/node/skill-library';
 import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registry';
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
@@ -681,6 +682,22 @@ export async function bootServices(
           args: ['--plugin-dir', dir, ...(params.autoApprove ? ['--approve-mcps'] : [])],
           env: {},
         };
+      }
+      if (params.providerId === 'oh-my-pi') {
+        if (servers.length === 0) return null;
+        try {
+          const result = await writeOmpMcpConfig(params.workspacePath, servers);
+          if (result.status === 'skipped') {
+            log.warn('Could not give Oh My Pi the Emdash MCP servers', {
+              reason: result.reason,
+            });
+          }
+        } catch (error) {
+          log.warn('Could not write the Oh My Pi MCP config', { error });
+          return null;
+        }
+        const emdash = servers.find((server) => server.name === 'emdash' && server.url);
+        return { args: [], env: emdash?.url ? { EMDASH_MCP_URL: emdash.url } : {} };
       }
       return terminalLaunchForMcp(params.providerId, servers, params.env);
     },

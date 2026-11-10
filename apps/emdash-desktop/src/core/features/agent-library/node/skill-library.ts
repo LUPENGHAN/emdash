@@ -17,6 +17,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { parseFrontmatter } from '@emdash/core/primitives/skills/api';
 import type { AgentSkillFound } from '../api';
+import { OMP_MCP_CONFIG_RELATIVE_PATH } from './omp-mcp-config';
 import { folderHash } from './skill-sources';
 
 const execFileAsync = promisify(execFile);
@@ -113,7 +114,12 @@ export async function syncWorkspaceSkills(input: {
   const copies = await syncCursorSkillCopies(input);
   for (const name of copies.copied) linked.add(name);
   for (const name of copies.shadowed) shadowed.add(name);
-  await writeExcludeBlock(input.workspacePath, [...excluded, ...copies.excluded]);
+  await writeExcludeBlock(input.workspacePath, [
+    ...excluded,
+    ...copies.excluded,
+    `/${OMP_MCP_CONFIG_RELATIVE_PATH}`,
+    `/${path.posix.dirname(OMP_MCP_CONFIG_RELATIVE_PATH)}/.mcp.json.*.tmp`,
+  ]);
   return { linked: [...linked], shadowed: [...shadowed] };
 }
 
@@ -265,8 +271,11 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
-/** Lists our links in the repository's local exclude file (shared by its worktrees). */
-async function writeExcludeBlock(workspacePath: string, entries: readonly string[]): Promise<void> {
+/** Lists Emdash-managed workspace files in the repo's shared local exclude file. */
+export async function writeExcludeBlock(
+  workspacePath: string,
+  entries: readonly string[]
+): Promise<void> {
   let excludeFile: string;
   try {
     const { stdout } = await execFileAsync('git', ['rev-parse', '--git-path', 'info/exclude'], {

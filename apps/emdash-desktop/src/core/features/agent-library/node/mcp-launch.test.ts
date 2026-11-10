@@ -60,6 +60,7 @@ describe('terminalLaunchForMcp', () => {
 
   it('leaves agents without MCP, and empty lists, alone', () => {
     expect(terminalLaunchForMcp('pi', servers, {})).toBeNull();
+    expect(terminalLaunchForMcp('oh-my-pi', servers, {})).toBeNull();
     expect(terminalLaunchForMcp('claude', [], {})).toBeNull();
   });
 

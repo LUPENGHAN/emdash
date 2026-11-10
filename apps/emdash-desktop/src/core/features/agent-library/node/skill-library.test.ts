@@ -111,7 +111,9 @@ describe('skill library', () => {
     }
     expect((await lstat(path.join(agentsDir, 'archify'))).isDirectory()).toBe(true);
     const exclude = await readFile(path.join(workspace, '.git', 'info', 'exclude'), 'utf8');
-    expect(exclude).not.toContain('emdash skills');
+    expect(exclude).not.toContain('/.claude/skills/grill-me');
+    expect(exclude.match(/\/\.omp\/mcp\.json/g)).toHaveLength(1);
+    expect(exclude).toContain('/.omp/.mcp.json.*.tmp');
   });
 
   it('copies wanted skills into .cursor/skills for Cursor, refreshing only changed ones', async () => {
