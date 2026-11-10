@@ -165,10 +165,10 @@ describe('PtyPane remount', () => {
     const grid: Array<[number, number]> = [];
     pty.terminal.onResize(({ cols, rows }) => grid.push([cols, rows]));
     const sink = createPaneDimensionSink();
-    let getCurrentDimensions: (() => { cols: number; rows: number } | null) | null = null;
+    const probe: { getCurrentDimensions?: () => { cols: number; rows: number } | null } = {};
     function DimsProbe() {
       const sizing = usePaneSizingContext();
-      getCurrentDimensions = sizing ? () => sizing.getCurrentDimensions() : null;
+      probe.getCurrentDimensions = sizing ? () => sizing.getCurrentDimensions() : undefined;
       return null;
     }
 
@@ -236,7 +236,7 @@ describe('PtyPane remount', () => {
     expect(backend).toEqual([[base + 10, rows]]);
     expect(grid).toEqual([[base + 10, rows]]);
     expect([pty.terminal.cols, pty.terminal.rows]).toEqual([base + 10, rows]);
-    expect(getCurrentDimensions?.()).toEqual({ cols: base + 10, rows });
+    expect(probe.getCurrentDimensions?.()).toEqual({ cols: base + 10, rows });
     expect(backend).not.toContainEqual([base + 20, rows]);
     expect(grid).not.toContainEqual([base + 20, rows]);
     expect(backend).not.toContainEqual([base + 30, rows]);
@@ -255,7 +255,7 @@ describe('PtyPane remount', () => {
       [base + 30, rows],
     ]);
     expect([pty.terminal.cols, pty.terminal.rows]).toEqual([base + 30, rows]);
-    expect(getCurrentDimensions?.()).toEqual({ cols: base + 30, rows });
+    expect(probe.getCurrentDimensions?.()).toEqual({ cols: base + 30, rows });
     expect(backend).not.toContainEqual([base + 20, rows]);
     expect(grid).not.toContainEqual([base + 20, rows]);
   });

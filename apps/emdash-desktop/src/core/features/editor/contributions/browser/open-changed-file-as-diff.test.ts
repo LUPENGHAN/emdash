@@ -1,3 +1,4 @@
+import { portableRelativePathSchema } from '@emdash/core/primitives/path/api';
 import type { GitChange, GitChangeStatus } from '@emdash/core/runtimes/git/api';
 import { describe, expect, it } from 'vitest';
 import { commitRef } from '@core/primitives/git/api';
@@ -8,7 +9,7 @@ import {
 } from './open-changed-file-as-diff';
 
 const change = (path: string, status: GitChangeStatus = 'modified'): GitChange => ({
-  path,
+  path: portableRelativePathSchema.parse(path),
   status,
   additions: 1,
   deletions: 0,

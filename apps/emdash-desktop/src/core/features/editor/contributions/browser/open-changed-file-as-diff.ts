@@ -3,7 +3,7 @@ import { commitRef } from '@core/primitives/git/api';
 
 export type ChangedFileDiffPayload = {
   activeFile: {
-    path: string;
+    path: GitChange['path'];
     type: 'disk' | 'git';
     group: 'disk' | 'staged';
     originalRef: ReturnType<typeof commitRef>;
@@ -21,7 +21,7 @@ export function diffOpenForChangedFile(
   if (unstagedChange) {
     return {
       activeFile: {
-        path: relativePath,
+        path: unstagedChange.path,
         type: 'disk',
         group: 'disk',
         originalRef: commitRef('HEAD'),
@@ -33,7 +33,7 @@ export function diffOpenForChangedFile(
   if (!stagedChange) return null;
   return {
     activeFile: {
-      path: relativePath,
+      path: stagedChange.path,
       type: 'git',
       group: 'staged',
       originalRef: commitRef('HEAD'),

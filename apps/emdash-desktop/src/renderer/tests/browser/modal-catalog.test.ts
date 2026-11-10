@@ -30,6 +30,7 @@ const expectedModalIds = [
   'linkConversationModal',
   'openComputerModal',
   'projectConfigImportModal',
+  'projectFolderModal',
   'promptModal',
   'quitUnsavedChangesModal',
   'recoveredBufferDiff',
@@ -43,6 +44,7 @@ const expectedModalIds = [
   'taskModal',
   'unsavedChangesModal',
   'usageStatsModal',
+  'waitlistModal',
 ] as const;
 
 function openUnsavedChangesForTypeTest() {

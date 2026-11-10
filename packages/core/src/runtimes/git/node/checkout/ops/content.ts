@@ -9,20 +9,19 @@ const MAX_CONTENT_BYTES = 10 * 1024 * 1024;
 export async function readGitFileContent(
   exec: BoundExec,
   path: PortableRelativePath,
-  source: GitFileSource
+  source: GitFileSource,
+  signal?: AbortSignal
 ): Promise<GitFileContentState> {
   const spec = sourceSpec(source, path);
   let oid: string;
   try {
-    const { stdout: oidOutput } = await exec.exec([
-      'rev-parse',
-      '--verify',
-      '--end-of-options',
-      spec,
-    ]);
+    const { stdout: oidOutput } = await exec.exec(
+      ['rev-parse', '--verify', '--end-of-options', spec],
+      { signal }
+    );
     oid = oidOutput.trim();
   } catch (error) {
-    if (await isMissingGitContent(exec, error, source, path)) {
+    if (await isMissingGitContent(exec, error, source, path, signal)) {
       return { kind: 'missing', path, source };
     }
     return { kind: 'unavailable', path, source, error: commandFailed(error).error };
@@ -30,6 +29,7 @@ export async function readGitFileContent(
   try {
     const { stdout } = await exec.execBuffer(['cat-file', 'blob', oid], {
       maxBuffer: MAX_CONTENT_BYTES,
+      signal,
     });
     const base = { path, source, oid, byteSize: stdout.length } as const;
     if (stdout.includes(0)) return { kind: 'binary', ...base };
@@ -52,7 +52,8 @@ export async function isMissingGitContent(
   exec: BoundExec,
   error: unknown,
   source: GitFileSource,
-  path: PortableRelativePath
+  path: PortableRelativePath,
+  signal?: AbortSignal
 ): Promise<boolean> {
   const failure = gitFailure(error);
   const missing =
@@ -70,14 +71,10 @@ export async function isMissingGitContent(
     return missing;
   const ref = toRefString(source.revision);
   try {
-    const { stdout } = await exec.exec([
-      'ls-tree',
-      '-z',
-      '--full-tree',
-      ref,
-      '--',
-      `:(literal)${path}`,
-    ]);
+    const { stdout } = await exec.exec(
+      ['ls-tree', '-z', '--full-tree', ref, '--', `:(literal)${path}`],
+      { signal }
+    );
     return stdout.length === 0;
   } catch (verifyError) {
     gitFailure(verifyError);

@@ -29,6 +29,7 @@ import {
 } from '@main/host/popout-windows';
 import { setTrayVisible } from '@main/host/tray';
 import { updateOperations } from '@main/host/updates/controller-operations';
+import { waitlistOperations } from '@main/host/waitlist/controller-operations';
 import { applyNativeTheme } from '@main/host/window';
 import { log } from '@main/lib/logger';
 import { telemetryService } from '@main/lib/telemetry';
@@ -169,6 +170,7 @@ export function createDesktopWireOptions(
     updateOperations,
     usage: services.usage,
     usageStats: services.usageStats,
+    waitlistOperations,
     workspaceIdentity: database.workspaceIdentity,
     workspacePlacement: services.workspacePlacement,
     workspaces: {

@@ -212,7 +212,7 @@ describe('applyAgentRelease', () => {
 
 const offlineProvider = {
   capabilities: { hostDependency: {} },
-} as CLIAgentPluginProvider;
+} as unknown as CLIAgentPluginProvider;
 
 const githubProvider = {
   capabilities: {
@@ -220,7 +220,7 @@ const githubProvider = {
       updates: { releaseSource: { kind: 'github', repo: 'acme/claude' } },
     },
   },
-} as CLIAgentPluginProvider;
+} as unknown as CLIAgentPluginProvider;
 
 describe('local agent version cache', () => {
   let now = 0;
@@ -371,7 +371,9 @@ describe('local agent version cache', () => {
   });
 
   it('does not mark the latest version as checked when only --version ran', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ version: '9.9.9' })));
+    const fetchMock = vi.fn(
+      async (_url: string) => new Response(JSON.stringify({ version: '9.9.9' }))
+    );
     vi.stubGlobal('fetch', fetchMock);
     execState.setImpl(async () => ({ stdout: 'codex-cli 0.163.0\n', stderr: '' }));
     const npmProvider = {
@@ -384,7 +386,7 @@ describe('local agent version cache', () => {
           },
         },
       },
-    } as CLIAgentPluginProvider;
+    } as unknown as CLIAgentPluginProvider;
 
     const shown = await agentReleaseForDisplay('codex', '/bin/codex', npmProvider);
 
@@ -447,7 +449,7 @@ describe('local agent version cache', () => {
           },
         },
       },
-    } as CLIAgentPluginProvider;
+    } as unknown as CLIAgentPluginProvider;
 
     await loadAgentRelease('muse', '/bin/muse', noneProvider);
 
@@ -471,7 +473,7 @@ describe('local agent version cache', () => {
           installCommands: { macos: [{ command: 'npm i -g @continuedev/cli' }] },
         },
       },
-    } as CLIAgentPluginProvider;
+    } as unknown as CLIAgentPluginProvider;
     const grokProvider = {
       capabilities: {
         hostDependency: {
@@ -481,7 +483,7 @@ describe('local agent version cache', () => {
           },
         },
       },
-    } as CLIAgentPluginProvider;
+    } as unknown as CLIAgentPluginProvider;
 
     await loadAgentRelease('continue', null, continueProvider);
     await loadAgentRelease('grok', null, grokProvider);

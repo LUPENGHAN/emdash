@@ -35,6 +35,7 @@ import { terminalsContract, terminalsDomain } from '@core/features/terminals/api
 import { updatesContract, updatesDomain } from '@core/features/updates/api';
 import { usageStatsContract, usageStatsDomain } from '@core/features/usage-stats/api';
 import { usageContract, usageDomain } from '@core/features/usage/api/contract';
+import { waitlistContract, waitlistDomain } from '@core/features/waitlist/api/contract';
 import {
   lifecycleScriptsDomain,
   lifecycleScriptsWireContract,
@@ -107,5 +108,6 @@ export const desktopDomainContracts = {
   [hostsDomain]: hostsContract,
   [tasksDomain]: tasksWireContract,
   [updatesDomain]: updatesContract,
+  [waitlistDomain]: waitlistContract,
   [desktopHostDomain]: desktopHostContract,
 } as const;

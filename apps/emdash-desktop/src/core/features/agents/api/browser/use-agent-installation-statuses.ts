@@ -91,7 +91,7 @@ export function useAgentInstallationStatuses(host: HostRef, versionRefetchInterv
 
   const invalidateStatusAndMetadata = useCallback(() => {
     for (const filter of agentStatusInvalidationFilters(host)) {
-      void queryClient.invalidateQueries(filter);
+      void queryClient.invalidateQueries({ queryKey: filter.queryKey as readonly unknown[] });
     }
   }, [host, queryClient]);
 

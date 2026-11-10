@@ -98,6 +98,10 @@ import { createUsageStatsWireController } from '@core/features/usage-stats/node/
 import type { UsageOverviewSource } from '@core/features/usage/node/usage-overview';
 import { createUsageWireController } from '@core/features/usage/node/wire-controller';
 import {
+  createWaitlistWireController,
+  type WaitlistOperations,
+} from '@core/features/waitlist/node/wire-controller';
+import {
   createDesktopHostWireController,
   type DesktopHostControllerOperations,
 } from '@core/features/workbench/node/wire-controller';
@@ -209,6 +213,7 @@ export type DesktopControllerContext = {
   readonly updateOperations: UpdateOperations;
   readonly usage: UsageOverviewSource;
   readonly usageStats: UsageStatsService;
+  readonly waitlistOperations: WaitlistOperations;
   readonly workspaceIdentity: WorkspaceIdentityService;
   readonly workspacePlacement: WorkspacePlacementResolver;
   readonly workspaces: Omit<CreateWorkspacesWireControllerOptions, 'db' | 'mutations'>;
@@ -575,6 +580,10 @@ export const desktopNodeControllers = {
   },
   updates: {
     create: ({ updateOperations }) => createUpdatesWireController(updateOperations),
+  },
+  waitlist: {
+    create: ({ logger, waitlistOperations }) =>
+      createWaitlistWireController(waitlistOperations, logger),
   },
   host: {
     create: ({ hostOperations }) => createDesktopHostWireController(hostOperations),

@@ -63,7 +63,7 @@ function agentView(path: string | null): HostDependencyView {
       ? { id: 'claude', command: 'claude', path, realpath: path, source: { kind: 'auto' } }
       : null,
     installOptions: [],
-  } as HostDependencyView;
+  } as unknown as HostDependencyView;
 }
 
 function managerFor(view: HostDependencyView) {
