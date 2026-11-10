@@ -15,6 +15,8 @@ import { OPENCODE_PLUGIN_CONTENT } from './plugin-file';
 
 const OPENCODE_PLUGIN_PATH = 'plugins/emdash-notifications.js';
 const validateSessionId = (id: string) => id.startsWith('ses');
+// V2 flag; probed so an OpenCode release without it still launches.
+const STANDALONE_FLAG = '--standalone';
 import { icon } from './icon';
 
 export const plugin = definePlugin(
@@ -105,17 +107,29 @@ export const provider = registerPluginBehavior(plugin, {
     },
   },
   prompt: {
+    // OpenCode 2 runs terminal sessions against one shared background service. Emdash
+    // gives each session its own signed Emdash MCP URL through OPENCODE_CONFIG_CONTENT,
+    // but the shared service keeps whichever session's config it loaded first, so a
+    // terminal opened for another project could create tasks in the wrong repository.
+    // A private server per terminal reads that terminal's own environment instead.
+    probeFlags: [STANDALONE_FLAG],
     buildCommand: (ctx) =>
-      buildStandardCommand(ctx, {
-        extraEnv: ctx.autoApprove ? { OPENCODE_PERMISSION: '{"*":"allow"}' } : {},
-        initialPromptFlag: '--prompt',
-        modelFlag: '--model',
-        resumeFlag: '--session',
-        sessionIdFlag: '--session',
-        sessionIdOnResumeOnly: true,
-        resumeWithoutSessionFlag: '--continue',
-        validateSessionId,
-      }),
+      buildStandardCommand(
+        ctx.supportedFlags?.includes(STANDALONE_FLAG)
+          ? { ...ctx, extraArgs: [...(ctx.extraArgs ?? []), STANDALONE_FLAG] }
+          : ctx,
+        {
+          extraEnv: ctx.autoApprove ? { OPENCODE_PERMISSION: '{"*":"allow"}' } : {},
+          initialPromptFlag: '--prompt',
+          modelFlag: '--model',
+          resumeFlag: '--session',
+          sessionIdFlag: '--session',
+          sessionIdOnResumeOnly: true,
+          resumeWithoutSessionFlag: '--continue',
+          deduplicateFlags: [STANDALONE_FLAG],
+          validateSessionId,
+        }
+      ),
   },
   sessions: { validateSessionId },
   mcp: opencodeMcpAdapter(),
