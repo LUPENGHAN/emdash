@@ -47,8 +47,8 @@ describe('NUL-delimited diff output', () => {
       ])
     );
     expect(parseNameStatus(nameStatus)).toEqual([
-      [renamedPath, 'renamed'],
-      [copiedPath, 'modified'],
+      [renamedPath, 'renamed', 'old\tname\n.txt'],
+      [copiedPath, 'modified', 'source.txt'],
       ['deleted.txt', 'deleted'],
       ['added.txt', 'added'],
     ]);

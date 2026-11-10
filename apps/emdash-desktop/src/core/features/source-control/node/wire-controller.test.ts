@@ -89,6 +89,33 @@ describe('createSourceControlWireController', () => {
     );
   });
 
+  it('forwards merge-base requests to the workspace host', async () => {
+    const oid = 'a'.repeat(40);
+    const headOid = 'b'.repeat(40);
+    const getMergeBase = vi.fn(async () => ok({ oid }));
+    const client = vi.fn(async () => ok({ git: { checkout: { getMergeBase } } }));
+    const controller = createSourceControlWireController({
+      runtimes: { client } as never,
+      workspaceIdentity: {
+        resolve: vi.fn(async () => checkoutIdentity),
+        resolveProject: vi.fn(async () => projectIdentity),
+      },
+      projects: attachedProjects({}),
+      mintOperationCredentials: vi.fn(async () => undefined),
+    });
+    await expect(
+      controller.call('checkout.getMergeBase', {
+        workspaceId: checkoutIdentity.workspaceId,
+        baseOid: oid,
+        headOid,
+      })
+    ).resolves.toEqual(ok({ oid }));
+    expect(getMergeBase).toHaveBeenCalledWith(
+      { checkout: hostPathFromNative(checkoutIdentity.path), baseOid: oid, headOid },
+      {}
+    );
+  });
+
   it('translates mutation selectors and cursors back to project identities', async () => {
     const mutate = vi.fn(async (_name, envelope) =>
       ok({

@@ -133,7 +133,7 @@ async function loadFromDisk(
 
 function loadOriginal(workspaceId: string, activeFile: ActiveFile): Promise<SideState> {
   const ref: GitRef = activeFile.group === 'staged' ? HEAD_REF : activeFile.originalRef;
-  return loadFromRef(workspaceId, activeFile.path, ref);
+  return loadFromRef(workspaceId, activeFile.originalPath ?? activeFile.path, ref);
 }
 
 function loadModified(
@@ -252,7 +252,13 @@ export const ImageDiffView = observer(function ImageDiffView({
   const workspace = useWorkspace();
   const git = workspace.get(gitCheckoutStoreToken);
 
-  const fileKey = `${activeFile.path}|${activeFile.group}|${gitRefToString(activeFile.originalRef)}|${activeFile.modifiedRef ? gitRefToString(activeFile.modifiedRef) : ''}`;
+  const fileKey = JSON.stringify([
+    activeFile.path,
+    activeFile.originalPath,
+    activeFile.group,
+    gitRefToString(activeFile.originalRef),
+    activeFile.modifiedRef ? gitRefToString(activeFile.modifiedRef) : '',
+  ]);
 
   // For disk/staged groups the bytes can change without fileKey changing
   // (in-place overwrite, re-stage). Pinning to statusRevision reruns the

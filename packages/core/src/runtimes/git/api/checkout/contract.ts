@@ -97,6 +97,14 @@ export const gitCheckoutContract = defineContract({
     data: z.object({ files: z.array(gitChangeSchema) }),
     error: gitCommandErrorSchema,
   }),
+  getMergeBase: fallible({
+    input: checkoutSelectorSchema.extend({
+      baseOid: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/),
+      headOid: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/),
+    }),
+    data: z.object({ oid: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/) }),
+    error: gitCommandErrorSchema,
+  }),
   getFile: fallible({
     input: gitFileContentKeySchema,
     data: z.object({ content: z.string().nullable() }),

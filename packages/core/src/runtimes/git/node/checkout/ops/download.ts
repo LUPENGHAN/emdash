@@ -34,6 +34,7 @@ export async function readGitBlobDownload(
   source: GitFileSource
 ): Promise<Result<{ meta: DownloadMeta; bytes: Buffer }, DownloadError>> {
   let bytes: Buffer;
+  let oid: string;
   try {
     const spec = sourceSpec(source, filePath);
     const { stdout: oidOutput } = await exec.exec([
@@ -42,7 +43,12 @@ export async function readGitBlobDownload(
       '--end-of-options',
       spec,
     ]);
-    const oid = oidOutput.trim();
+    oid = oidOutput.trim();
+  } catch (error) {
+    if (await isMissingGitContent(exec, error, source, filePath)) return err({ type: 'missing' });
+    return commandFailed(error);
+  }
+  try {
     const { stdout } = await exec.execBuffer(['cat-file', '--filters', `--path=${filePath}`, oid], {
       maxBuffer: MAX_DOWNLOAD_BYTES,
     });
@@ -52,7 +58,6 @@ export async function readGitBlobDownload(
     if (failure.stderr.includes('maxBuffer')) {
       return err({ type: 'too-large', maxBytes: MAX_DOWNLOAD_BYTES });
     }
-    if (isMissingGitContent(error, source)) return err({ type: 'missing' });
     return commandFailed(error);
   }
   if (looksLikeLfsPointer(bytes)) return err({ type: 'lfs-pointer' });

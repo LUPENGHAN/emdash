@@ -7,6 +7,7 @@ import {
   rename,
   rm,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -495,7 +496,13 @@ describe('GitCheckout', () => {
 
         const changes = await checkout.getChangedFiles({ kind: 'staged' });
         expect(changes).toEqual([
-          { path: gitPath(newPath), status: 'renamed', additions: 1, deletions: 1 },
+          {
+            path: gitPath(newPath),
+            originalPath: gitPath(oldPath),
+            status: 'renamed',
+            additions: 1,
+            deletions: 1,
+          },
         ]);
         await expect(
           checkout.getFile({ path: changes[0].path, source: { kind: 'index' } })
@@ -617,6 +624,127 @@ describe('GitCheckout', () => {
       ).resolves.toMatchObject({ kind: 'binary', byteSize: 3 });
     } finally {
       await cleanup();
+    }
+  });
+
+  it('distinguishes a missing revision from a missing path for text and downloads', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      const head = await git(repo, ['rev-parse', 'HEAD']);
+      const valid = { kind: 'revision', revision: { kind: 'commit', sha: head } } as const;
+      const missing = {
+        kind: 'revision',
+        revision: { kind: 'commit', sha: '0'.repeat(40) },
+      } as const;
+      await expect(
+        checkout.getFileContent({ path: gitPath('missing.txt'), source: valid })
+      ).resolves.toMatchObject({ kind: 'missing' });
+      await expect(
+        checkout.getFileContent({ path: gitPath('tracked.txt'), source: missing })
+      ).resolves.toMatchObject({ kind: 'unavailable' });
+      await expect(
+        checkout.download({ path: gitPath('missing.png'), source: valid })
+      ).resolves.toMatchObject({ success: false, error: { type: 'missing' } });
+      await expect(
+        checkout.download({ path: gitPath('tracked.txt'), source: missing })
+      ).resolves.toMatchObject({ success: false, error: { type: 'git_error' } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('reports a missing blob or tree as unavailable for a pinned revision', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      const head = await git(repo, ['rev-parse', 'HEAD']);
+      const source = { kind: 'revision', revision: { kind: 'commit', sha: head } } as const;
+      const blob = await git(repo, ['rev-parse', 'HEAD:tracked.txt']);
+      await unlink(path.join(repo, '.git', 'objects', blob.slice(0, 2), blob.slice(2)));
+      await expect(
+        checkout.getFileContent({ path: gitPath('tracked.txt'), source })
+      ).resolves.toMatchObject({ kind: 'unavailable' });
+      await expect(
+        checkout.download({ path: gitPath('tracked.txt'), source })
+      ).resolves.toMatchObject({ success: false, error: { type: 'git_error' } });
+      const tree = await git(repo, ['rev-parse', 'HEAD^{tree}']);
+      await unlink(path.join(repo, '.git', 'objects', tree.slice(0, 2), tree.slice(2)));
+      await expect(
+        checkout.getFileContent({ path: gitPath('missing.txt'), source })
+      ).resolves.toMatchObject({ kind: 'unavailable' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('compares diverged commits from their merge base and rejects ambiguous ancestry', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    try {
+      const root = await git(repo, ['rev-parse', 'HEAD']);
+      const blob = await git(repo, ['rev-parse', 'HEAD:tracked.txt']);
+      expect((await checkout.getMergeBase(blob, root)).success).toBe(false);
+      await git(repo, ['tag', '-a', 'annotated', root, '-m', 'tag']);
+      const tag = await git(repo, ['rev-parse', 'refs/tags/annotated']);
+      expect((await checkout.getMergeBase(tag, root)).success).toBe(false);
+      await git(repo, ['switch', '-c', 'task']);
+      await writeFile(path.join(repo, 'task.txt'), 'task\n');
+      await git(repo, ['add', 'task.txt']);
+      await git(repo, ['commit', '-m', 'task']);
+      const head = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['switch', 'main']);
+      await writeFile(path.join(repo, 'base.txt'), 'base\n');
+      await git(repo, ['add', 'base.txt']);
+      await git(repo, ['commit', '-m', 'base']);
+      const base = await git(repo, ['rev-parse', 'HEAD']);
+      expect(await checkout.getMergeBase(base, head)).toEqual({
+        success: true,
+        data: { oid: root },
+      });
+      const changes = await checkout.getChangedFiles({
+        base: { kind: 'commit', sha: base },
+        head: { kind: 'commit', sha: head },
+      });
+      expect(changes.map((change) => change.path)).toEqual([gitPath('task.txt')]);
+      expect((await checkout.getMergeBase('0'.repeat(40), head)).success).toBe(false);
+      const tree = await git(repo, ['rev-parse', `${root}^{tree}`]);
+      const unrelated = await git(repo, ['commit-tree', tree, '-m', 'unrelated']);
+      expect((await checkout.getMergeBase(unrelated, head)).success).toBe(false);
+      const first = await git(repo, ['commit-tree', tree, '-p', root, '-m', 'first']);
+      const second = await git(repo, ['commit-tree', tree, '-p', root, '-m', 'second']);
+      const left = await git(repo, ['commit-tree', tree, '-p', first, '-p', second, '-m', 'left']);
+      const right = await git(repo, [
+        'commit-tree',
+        tree,
+        '-p',
+        second,
+        '-p',
+        first,
+        '-m',
+        'right',
+      ]);
+      expect((await checkout.getMergeBase(left, right)).success).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('finds a merge base in a SHA-256 repository', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'emdash-git-sha256-'));
+    try {
+      await execFileAsync('git', ['init', '--object-format=sha256', '-b', 'main'], { cwd: repo });
+      await git(repo, ['config', 'user.email', 'test@example.com']);
+      await git(repo, ['config', 'user.name', 'Test User']);
+      await writeFile(path.join(repo, 'file.txt'), 'content\n');
+      await git(repo, ['add', 'file.txt']);
+      await git(repo, ['commit', '-m', 'initial']);
+      const head = await git(repo, ['rev-parse', 'HEAD']);
+      const { checkout } = await makeCheckout(repo);
+      expect(head).toHaveLength(64);
+      expect(await checkout.getMergeBase(head, head)).toEqual({
+        success: true,
+        data: { oid: head },
+      });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
     }
   });
 

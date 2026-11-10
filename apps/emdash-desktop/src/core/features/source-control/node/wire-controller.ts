@@ -95,6 +95,10 @@ export function createSourceControlWireController(
         withCheckoutRuntime(options, input, (git, mapped) =>
           git.checkout.getChangedFiles(mapped, callOptions(meta))
         ),
+      getMergeBase: (input, meta) =>
+        withCheckoutRuntime(options, input, (git, mapped) =>
+          git.checkout.getMergeBase(mapped, callOptions(meta))
+        ),
       getFile: (input, meta) =>
         withCheckoutRuntime(options, input, (git, mapped) =>
           git.checkout.getFile(mapped, callOptions(meta))

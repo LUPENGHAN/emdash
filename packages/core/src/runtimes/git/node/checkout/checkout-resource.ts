@@ -113,6 +113,11 @@ export class CheckoutResource {
     return this.commands.getChangedFiles(target);
   }
 
+  getMergeBase(baseOid: string, headOid: string) {
+    this.assertActive();
+    return this.commands.getMergeBase(baseOid, headOid);
+  }
+
   getFile(
     key: BoundGitFileContentKey
   ): Promise<Result<{ content: string | null }, GitCommandError>> {

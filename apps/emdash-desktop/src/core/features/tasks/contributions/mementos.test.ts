@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { taskDiffSelectionSchema, taskPaneLayoutMemento, taskPaneLayoutSchema } from './mementos';
+import {
+  tabDescriptorSchema,
+  taskActiveFileSchema,
+  taskDiffSelectionSchema,
+  taskPaneLayoutMemento,
+  taskPaneLayoutSchema,
+} from './mementos';
 
 describe('task pane layout memento', () => {
   it('uses a safe one-pane default', () => {
@@ -63,6 +69,30 @@ describe('task pane layout memento', () => {
 });
 
 describe('task diff selection memento', () => {
+  it('preserves and validates both paths for renamed snapshots', () => {
+    const file = {
+      path: 'new.txt',
+      originalPath: 'old.txt',
+      type: 'git',
+      group: 'git',
+      originalRef: { kind: 'commit', sha: 'a'.repeat(40) },
+    };
+    expect(taskActiveFileSchema.parse(file).originalPath).toBe('old.txt');
+    expect(taskActiveFileSchema.safeParse({ ...file, originalPath: '../outside' }).success).toBe(
+      false
+    );
+    expect(
+      tabDescriptorSchema.parse({
+        kind: 'diff',
+        tabId: 'diff',
+        path: file.path,
+        originalPath: file.originalPath,
+        diffGroup: 'git',
+        originalRef: file.originalRef,
+        isPreview: false,
+      })
+    ).toMatchObject({ originalPath: 'old.txt' });
+  });
   it('rejects absolute active diff paths', () => {
     const result = taskDiffSelectionSchema.safeParse({
       version: '1',

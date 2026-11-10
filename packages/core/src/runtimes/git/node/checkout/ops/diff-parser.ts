@@ -26,16 +26,24 @@ export function parseNumstat(stdout: string): Numstat {
 }
 
 /** Parse `--name-status -z`, associating renames and copies with their destination. */
-export function parseNameStatus(stdout: string): [string, GitChangeStatus][] {
-  const statuses: [string, GitChangeStatus][] = [];
+export function parseNameStatus(stdout: string): [string, GitChangeStatus, string?][] {
+  const statuses: [string, GitChangeStatus, string?][] = [];
   const records = stdout.split('\0')[Symbol.iterator]();
   for (const code of records) {
     if (!code) continue;
     let filePath = records.next().value;
+    let originalPath: string | undefined;
     if (code.startsWith('R') || code.startsWith('C')) {
+      originalPath = filePath;
       filePath = records.next().value;
     }
-    if (filePath) statuses.push([filePath, mapGitChangeStatus(code)]);
+    if (filePath) {
+      statuses.push(
+        originalPath
+          ? [filePath, mapGitChangeStatus(code), originalPath]
+          : [filePath, mapGitChangeStatus(code)]
+      );
+    }
   }
   return statuses;
 }

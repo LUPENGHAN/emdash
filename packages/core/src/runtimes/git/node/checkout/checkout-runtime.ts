@@ -90,6 +90,10 @@ export class GitCheckoutRuntime {
     }));
   }
 
+  getMergeBase(input: CheckoutSelector & { baseOid: string; headOid: string }) {
+    return this.run(input, (checkout) => checkout.getMergeBase(input.baseOid, input.headOid));
+  }
+
   getFile(input: GitFileContentKey) {
     return this.run(input, (checkout) =>
       checkout.getFile({ path: input.path, source: input.source })

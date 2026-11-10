@@ -152,6 +152,12 @@ export class GitRepositoryStore {
     await Promise.all([model.states.refs.refresh(), model.states.remotes.refresh()]);
   }
 
+  async resyncRequired(): Promise<void> {
+    const model = await this.requireModel();
+    await Promise.all([model.states.refs.refresh(), model.states.remotes.refresh()]);
+    if (this.model !== model || !this.refsState) throw new Error('Git repository is unavailable');
+  }
+
   async retry(): Promise<void> {
     const scope = this.remoteScope;
     const remote = this.remote;

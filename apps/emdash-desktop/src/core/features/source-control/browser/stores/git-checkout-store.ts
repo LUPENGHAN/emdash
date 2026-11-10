@@ -134,6 +134,12 @@ export class GitCheckoutStore {
     await this.refreshDiffMetadata();
   }
 
+  async resyncRequired(): Promise<void> {
+    const model = await this.requireModel();
+    await Promise.all([model.states.status.refresh(), model.states.head.refresh()]);
+    if (this.model !== model || !this.headData) throw new Error('Git checkout is unavailable');
+  }
+
   async retry(): Promise<void> {
     this.changesRequest += 1;
     const scope = this.remoteScope;

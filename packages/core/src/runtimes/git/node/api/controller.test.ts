@@ -107,6 +107,10 @@ describe('createGitController', () => {
       ]);
 
       const checkout = checkoutSelector(repo);
+      const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
+      expect(
+        await git.checkout.getMergeBase({ ...checkout, baseOid: head, headOid: head })
+      ).toEqual(ok({ oid: head }));
       await writeFile(path.join(repo, 'tracked.txt'), 'after\n', 'utf8');
       const staged = await git.checkout.model.mutate('stage', {
         key: checkout,

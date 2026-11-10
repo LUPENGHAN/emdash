@@ -40,4 +40,13 @@ describe('sourceControlContract', () => {
       sourceControlContract.checkout.model.keySchema.parse({ checkout: '/repo/worktree' })
     ).toThrow();
   });
+
+  it('accepts only full object IDs for merge-base inputs', () => {
+    const schema = sourceControlContract.checkout.getMergeBase.input;
+    const input = { workspaceId: 'workspace-1', baseOid: 'a'.repeat(40), headOid: 'b'.repeat(64) };
+    expect(schema.safeParse(input).success).toBe(true);
+    for (const baseOid of ['HEAD', '-h', 'abc123', `${'a'.repeat(40)}^`, 'g'.repeat(40)]) {
+      expect(schema.safeParse({ ...input, baseOid }).success).toBe(false);
+    }
+  });
 });

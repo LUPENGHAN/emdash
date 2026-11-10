@@ -78,6 +78,7 @@ export const taskEditorTreeMemento = defineMemento({
 const changesExpandedSectionsSchema = z.object({
   unstaged: z.boolean(),
   staged: z.boolean(),
+  compare: z.boolean().optional(),
   pullRequests: z.boolean(),
 });
 
@@ -168,6 +169,7 @@ const gitObjectRefSchema = z.discriminatedUnion('kind', [
 
 export const taskActiveFileSchema = z.object({
   path: gitFilePathSchema,
+  originalPath: gitFilePathSchema.optional(),
   type: z.enum(['disk', 'git']),
   group: z.enum(['disk', 'staged', 'git', 'pr']),
   originalRef: gitObjectRefSchema,
@@ -262,6 +264,7 @@ export const tabDescriptorSchema = z.discriminatedUnion('kind', [
     kind: z.literal('diff'),
     tabId: z.string(),
     path: gitFilePathSchema,
+    originalPath: gitFilePathSchema.optional(),
     diffGroup: z.enum(['disk', 'staged', 'git', 'pr']),
     originalRef: gitObjectRefSchema,
     modifiedRef: gitObjectRefSchema.optional(),

@@ -401,6 +401,13 @@ describe('runtime domain forwarding', () => {
       await expect(
         workspace.client.git.repository.model.state({ repository: root.data }, 'refs').snapshot()
       ).resolves.toMatchObject({ data: { branches: [] } });
+      await expect(
+        workspace.client.git.checkout.getMergeBase({
+          checkout: root.data,
+          baseOid: 'a'.repeat(40),
+          headOid: 'b'.repeat(40),
+        })
+      ).resolves.toMatchObject({ success: false, error: { type: 'git_error' } });
     } finally {
       await workspace.dispose();
       await git.dispose();

@@ -37,7 +37,7 @@ function diffResourceKey(s: DiffPayload): string {
   if (s.diffGroup === 'disk' || s.diffGroup === 'staged') return base;
   const origKey = refKey(s.originalRef);
   const modKey = s.modifiedRef ? refKey(s.modifiedRef) : '';
-  return `${base}|${origKey}|${modKey}`;
+  return JSON.stringify([s.path, s.originalPath ?? s.path, s.diffGroup, origKey, modKey]);
 }
 
 function activeFileToDiffPayload(
@@ -46,6 +46,7 @@ function activeFileToDiffPayload(
 ): DiffPayload {
   return {
     path: activeFile.path,
+    originalPath: activeFile.originalPath,
     diffGroup: activeFile.group,
     originalRef: activeFile.originalRef,
     modifiedRef: activeFile.modifiedRef,

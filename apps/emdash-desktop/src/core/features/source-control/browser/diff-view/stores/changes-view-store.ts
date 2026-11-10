@@ -1,4 +1,5 @@
-import { computed, makeObservable, observable, reaction, runInAction, when } from 'mobx';
+import type { GitBranchRef } from '@emdash/core/runtimes/git/api';
+import { action, computed, makeObservable, observable, reaction, runInAction, when } from 'mobx';
 import { type PrStore } from '@core/features/source-control/api/browser/stores/pr-store';
 import { type GitCheckoutStore } from '../../stores/git-checkout-store';
 
@@ -7,6 +8,7 @@ export type SelectionState = 'all' | 'none' | 'partial';
 export interface ExpandedSections {
   unstaged: boolean;
   staged: boolean;
+  compare?: boolean;
   pullRequests: boolean;
 }
 
@@ -21,11 +23,20 @@ export interface ExpandedSectionsPersistence {
   set(next: ExpandedSections): void;
 }
 
-const ALL_EXPANDED: ExpandedSections = { unstaged: true, staged: true, pullRequests: true };
+const ALL_EXPANDED: ExpandedSections = {
+  unstaged: true,
+  staged: true,
+  compare: true,
+  pullRequests: true,
+};
 
 export class ChangesViewStore {
   unstagedSelection = observable.set<string>();
   stagedSelection = observable.set<string>();
+  compareMode: 'branch' | 'commit' = 'branch';
+  compareBranch: GitBranchRef | undefined;
+  compareCommitInput = '';
+  compareSubmittedCommit = '';
 
   private _disposeReactions: Array<() => void> = [];
   private _suppressAutoExpand = new Set<keyof ExpandedSections>();
@@ -39,6 +50,14 @@ export class ChangesViewStore {
       expandedSections: computed,
       unstagedSelectionState: computed,
       stagedSelectionState: computed,
+      compareMode: observable,
+      compareBranch: observable.ref,
+      compareCommitInput: observable,
+      compareSubmittedCommit: observable,
+      setCompareMode: action,
+      setCompareBranch: action,
+      setCompareCommitInput: action,
+      setCompareSubmittedCommit: action,
     });
 
     // Prune stale paths from selections whenever the file lists change.
@@ -79,6 +98,7 @@ export class ChangesViewStore {
             this.setSections({
               unstaged: hasUnstaged || (!hasStaged && !hasUnstaged && !hasPullRequests),
               staged: hasStaged,
+              compare: true,
               pullRequests: hasPullRequests,
             });
           }
@@ -88,8 +108,24 @@ export class ChangesViewStore {
     );
   }
 
+  setCompareMode(mode: 'branch' | 'commit'): void {
+    this.compareMode = mode;
+  }
+
+  setCompareBranch(branch: GitBranchRef): void {
+    this.compareBranch = branch;
+  }
+
+  setCompareCommitInput(input: string): void {
+    this.compareCommitInput = input;
+  }
+
+  setCompareSubmittedCommit(input: string): void {
+    this.compareSubmittedCommit = input;
+  }
+
   get expandedSections(): ExpandedSections {
-    return this.sections.value ?? ALL_EXPANDED;
+    return { ...ALL_EXPANDED, ...this.sections.value };
   }
 
   /** Auto-collapse when a section empties; auto-expand when it gains entries from zero. */

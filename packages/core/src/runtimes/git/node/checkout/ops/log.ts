@@ -74,7 +74,9 @@ export async function getCommitFiles(
     exec.exec(['diff-tree', '--root', '--no-commit-id', '--name-status', '-z', '-r', ...revisions]),
   ]);
   const numstat = parseNumstat(numstatRes.stdout);
-  const statusByPath = new Map(parseNameStatus(nameStatusRes.stdout));
+  const statusByPath = new Map(
+    parseNameStatus(nameStatusRes.stdout).map(([path, status]) => [path, status])
+  );
   return [...numstat.entries()].map(([filePath, stat]) => ({
     path: toPortablePath(filePath),
     status: statusByPath.get(filePath) ?? 'modified',

@@ -87,6 +87,7 @@ describe('ChangesViewStore expanded sections', () => {
     expect(store.expandedSections).toEqual({
       unstaged: true,
       staged: false,
+      compare: true,
       pullRequests: false,
     });
   });
@@ -102,6 +103,7 @@ describe('ChangesViewStore expanded sections', () => {
     expect(store.expandedSections).toEqual({
       unstaged: false,
       staged: false,
+      compare: true,
       pullRequests: true,
     });
   });
@@ -115,6 +117,7 @@ describe('ChangesViewStore expanded sections', () => {
     expect(store.expandedSections).toEqual({
       unstaged: false,
       staged: true,
+      compare: true,
       pullRequests: false,
     });
   });
@@ -132,6 +135,7 @@ describe('ChangesViewStore expanded sections', () => {
     expect(store.expandedSections).toEqual({
       unstaged: true,
       staged: true,
+      compare: true,
       pullRequests: false,
     });
   });
@@ -184,6 +188,7 @@ describe('ChangesViewStore expansion persistence', () => {
     expect(store.expandedSections).toEqual({
       unstaged: true,
       staged: true,
+      compare: true,
       pullRequests: true,
     });
   });
@@ -196,11 +201,13 @@ describe('ChangesViewStore expansion persistence', () => {
     expect(store.expandedSections).toEqual({
       unstaged: true,
       staged: false,
+      compare: true,
       pullRequests: false,
     });
     expect(persistence.value).toEqual({
       unstaged: true,
       staged: false,
+      compare: true,
       pullRequests: false,
     });
   });
@@ -213,7 +220,7 @@ describe('ChangesViewStore expansion persistence', () => {
     // the persisted state.
     runInAction(() => git.setStatus({ unstaged: [change('src/a.ts')], staged: [] }));
 
-    expect(store.expandedSections).toEqual(persisted);
+    expect(store.expandedSections).toEqual({ ...persisted, compare: true });
   });
 
   it('writes toggleExpanded through to persistence', () => {

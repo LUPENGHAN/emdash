@@ -34,17 +34,30 @@ export function usePrefetchDiffModels(
       }
       leases.clear();
     };
-  }, [workspace.workspaceId]);
+  }, [
+    workspace.workspaceId,
+    workspace.path,
+    workspace.sshConnectionId,
+    group,
+    originalRef,
+    modifiedRef,
+  ]);
 
   return useCallback(
-    (filePath: string) => {
-      if (leasesRef.current.has(filePath)) return;
+    (filePath: string, originalPath?: string) => {
+      const key = JSON.stringify([filePath, originalPath ?? filePath]);
+      if (leasesRef.current.has(key)) return;
       if (isBinaryForDiff(filePath)) return;
       const fileRef = workspaceDiffFileRef(workspace.path, workspace.sshConnectionId, filePath);
-      if (!fileRef) return;
+      const originalFileRef = workspaceDiffFileRef(
+        workspace.path,
+        workspace.sshConnectionId,
+        originalPath ?? filePath
+      );
+      if (!fileRef || !originalFileRef) return;
       const specs = diffSideSpecs({ group, originalRef, modifiedRef });
-      leasesRef.current.set(filePath, [
-        openFileStore.acquire(fileRef, specToFacet(specs.original)),
+      leasesRef.current.set(key, [
+        openFileStore.acquire(originalFileRef, specToFacet(specs.original)),
         openFileStore.acquire(fileRef, specToFacet(specs.modified)),
       ]);
     },

@@ -17,6 +17,7 @@ export type DiffRendererData =
 
 export interface DiffPayload {
   readonly path: GitFilePath;
+  readonly originalPath?: GitFilePath;
   diffGroup: 'disk' | 'staged' | 'git' | 'pr';
   originalRef: GitObjectRef;
   modifiedRef?: GitObjectRef;
@@ -41,6 +42,7 @@ export class DiffTabResource implements TabResource {
   readonly tabId: string;
 
   readonly path: GitFilePath;
+  readonly originalPath: GitFilePath | undefined;
   viewMode: DiffViewMode = 'diff';
   renderer: DiffRendererData;
   diffGroup: 'disk' | 'staged' | 'git' | 'pr';
@@ -59,6 +61,7 @@ export class DiffTabResource implements TabResource {
   constructor(tabId: string, payload: DiffPayload, manager?: DiffTabManager, handle?: TabHandle) {
     this.tabId = tabId;
     this.path = payload.path;
+    this.originalPath = payload.originalPath;
     this._manager = manager ?? null;
     this._handle = handle ?? null;
     this.renderer = resolveDiffRenderer(payload.path);
@@ -139,6 +142,7 @@ export class DiffTabResource implements TabResource {
   toActiveFile(): ActiveFile {
     return {
       path: this.path,
+      originalPath: this.originalPath,
       type: this.diffGroup === 'disk' ? 'disk' : 'git',
       group: this.diffGroup,
       originalRef: this.originalRef,

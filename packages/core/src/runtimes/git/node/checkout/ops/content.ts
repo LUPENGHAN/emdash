@@ -12,6 +12,7 @@ export async function readGitFileContent(
   source: GitFileSource
 ): Promise<GitFileContentState> {
   const spec = sourceSpec(source, path);
+  let oid: string;
   try {
     const { stdout: oidOutput } = await exec.exec([
       'rev-parse',
@@ -19,7 +20,14 @@ export async function readGitFileContent(
       '--end-of-options',
       spec,
     ]);
-    const oid = oidOutput.trim();
+    oid = oidOutput.trim();
+  } catch (error) {
+    if (await isMissingGitContent(exec, error, source, path)) {
+      return { kind: 'missing', path, source };
+    }
+    return { kind: 'unavailable', path, source, error: commandFailed(error).error };
+  }
+  try {
     const { stdout } = await exec.execBuffer(['cat-file', 'blob', oid], {
       maxBuffer: MAX_CONTENT_BYTES,
     });
@@ -35,23 +43,46 @@ export async function readGitFileContent(
       return { kind: 'binary', ...base };
     }
   } catch (error) {
-    if (isMissingGitContent(error, source)) {
-      return { kind: 'missing', path, source };
-    }
     return { kind: 'unavailable', path, source, error: commandFailed(error).error };
   }
 }
 
 /** True when a failed object read means "no blob at this path/source" rather than a git error. */
-export function isMissingGitContent(error: unknown, source: GitFileSource): boolean {
+export async function isMissingGitContent(
+  exec: BoundExec,
+  error: unknown,
+  source: GitFileSource,
+  path: PortableRelativePath
+): Promise<boolean> {
   const failure = gitFailure(error);
-  return (
+  const missing =
     isMissingObject(failure) ||
     (failure.exitCode === 128 &&
       failure.message.toLowerCase().includes('needed a single revision')) ||
     checkoutFailures.isUnknownRevision(error) ||
-    (source.kind === 'index' && checkoutFailures.isMissingIndexEntry(error))
-  );
+    (source.kind === 'index' && checkoutFailures.isMissingIndexEntry(error));
+  if (
+    !missing ||
+    source.kind !== 'revision' ||
+    source.revision.kind !== 'commit' ||
+    !/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(source.revision.sha)
+  )
+    return missing;
+  const ref = toRefString(source.revision);
+  try {
+    const { stdout } = await exec.exec([
+      'ls-tree',
+      '-z',
+      '--full-tree',
+      ref,
+      '--',
+      `:(literal)${path}`,
+    ]);
+    return stdout.length === 0;
+  } catch (verifyError) {
+    gitFailure(verifyError);
+    return false;
+  }
 }
 
 export function sourceSpec(source: GitFileSource, path: PortableRelativePath): string {

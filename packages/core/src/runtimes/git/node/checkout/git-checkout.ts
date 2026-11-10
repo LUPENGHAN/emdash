@@ -39,7 +39,7 @@ import {
   getLog as readLog,
 } from '#runtimes/git/node/checkout/ops/log';
 import { computeStatusState } from '#runtimes/git/node/checkout/ops/status';
-import { pushFailed } from '#runtimes/git/node/exec/errors';
+import { commandFailed, pushFailed } from '#runtimes/git/node/exec/errors';
 import type { GitOperationContext } from '#runtimes/git/node/exec/operation-context';
 import { execGitWithProgress } from '#runtimes/git/node/exec/transfer-progress';
 import type { BoundExec } from '#services/exec/api';
@@ -254,6 +254,29 @@ export class GitCheckout {
 
   async getChangedFiles(base: DiffTarget): Promise<GitChange[]> {
     return readChangedFiles(this.exec, base, (filePath) => this.toRelativePath(filePath));
+  }
+
+  async getMergeBase(
+    baseOid: string,
+    headOid: string
+  ): Promise<Result<{ oid: string }, GitCommandError>> {
+    try {
+      const [baseType, headType] = await Promise.all([
+        this.exec.exec(['cat-file', '-t', baseOid]),
+        this.exec.exec(['cat-file', '-t', headOid]),
+      ]);
+      if (baseType.stdout.trim() !== 'commit' || headType.stdout.trim() !== 'commit') {
+        return gitErr.commandFailed('Merge-base inputs must be commits');
+      }
+      const { stdout } = await this.exec.exec(['merge-base', '--all', baseOid, headOid]);
+      const bases = stdout.trim().split(/\s+/).filter(Boolean);
+      if (bases.length !== 1 || !/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(bases[0]!)) {
+        return gitErr.commandFailed('Unable to determine a unique merge base');
+      }
+      return ok({ oid: bases[0]! });
+    } catch (error) {
+      return commandFailed(error);
+    }
   }
 
   // -- Content / history reads ----------------------------------------------------

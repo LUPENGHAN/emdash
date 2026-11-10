@@ -108,6 +108,7 @@ const TextDiffRenderer = observer(function TextDiffRenderer({ tab }: DiffFileRen
     workspacePath: workspace.path,
     sshConnectionId: workspace.sshConnectionId,
     filePath: tab.path,
+    originalPath: tab.originalPath,
     group: tab.diffGroup,
     originalRef: tab.originalRef,
     modifiedRef: tab.modifiedRef,
@@ -283,6 +284,7 @@ function diffTabToCommentTarget(tab: DiffTabResource): DraftCommentTarget {
 function tabToActiveFile(tab: DiffTabResource): ActiveFile {
   return {
     path: tab.path,
+    originalPath: tab.originalPath,
     type: tab.diffGroup === 'disk' ? 'disk' : 'git',
     group: tab.diffGroup,
     originalRef: tab.originalRef,

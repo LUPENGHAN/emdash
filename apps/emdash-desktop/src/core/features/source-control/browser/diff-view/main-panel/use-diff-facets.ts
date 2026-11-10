@@ -24,6 +24,7 @@ export interface DiffFacetsArgs {
   sshConnectionId: string | undefined;
   /** Checkout-relative path of the diffed file. */
   filePath: string;
+  originalPath?: string;
   group: 'disk' | 'staged' | 'git' | 'pr';
   originalRef: GitRef;
   modifiedRef?: GitRef;
@@ -45,14 +46,12 @@ const EMPTY_SIDES: DiffFacetSides = { original: null, modified: null };
  * lifetime. Releasing on side identity change or unmount is safe across
  * quick flips — the store's linger keeps the content warm.
  *
- * Both sides key on the same path: the diff data carries a single path per
- * change (renames do not surface the old path), matching the legacy
- * registry-based renderers.
  */
 export function useDiffFacets({
   workspacePath,
   sshConnectionId,
   filePath,
+  originalPath,
   group,
   originalRef,
   modifiedRef,
@@ -64,6 +63,10 @@ export function useDiffFacets({
     () => workspaceDiffFileRef(workspacePath, sshConnectionId, filePath),
     [workspacePath, sshConnectionId, filePath]
   );
+  const originalFileRef = useMemo(
+    () => workspaceDiffFileRef(workspacePath, sshConnectionId, originalPath ?? filePath),
+    [workspacePath, sshConnectionId, originalPath, filePath]
+  );
   const specs = useMemo(
     () => diffSideSpecs({ group, originalRef, modifiedRef }),
     [group, originalRef, modifiedRef]
@@ -73,20 +76,21 @@ export function useDiffFacets({
   // actually changes, not when the (observable) ref objects are replaced by
   // equal values.
   const refKey = fileRef ? encodeResourceUri(fileRef) : null;
+  const originalRefKey = originalFileRef ? encodeResourceUri(originalFileRef) : null;
   const originalKey = diffFacetSpecKey(specs.original);
   const modifiedKey = diffFacetSpecKey(specs.modified);
 
   useEffect(() => {
-    if (!enabled || !fileRef) {
+    if (!enabled || !fileRef || !originalFileRef) {
       setSides(EMPTY_SIDES);
       return;
     }
     const originalFacet = specToFacet(specs.original);
     const modifiedFacet = specToFacet(specs.modified);
-    const originalLease = openFileStore.acquire(fileRef, originalFacet);
+    const originalLease = openFileStore.acquire(originalFileRef, originalFacet);
     const modifiedLease = openFileStore.acquire(fileRef, modifiedFacet);
     setSides({
-      original: sideModel(originalLease.entry, originalFacet, fileRef),
+      original: sideModel(originalLease.entry, originalFacet, originalFileRef),
       modified: sideModel(modifiedLease.entry, modifiedFacet, fileRef),
     });
     return () => {
@@ -95,7 +99,7 @@ export function useDiffFacets({
     };
     // Keyed by stable identity strings; fileRef/specs are memoized from them.
     // oxlint-disable-next-line react/exhaustive-deps
-  }, [enabled, refKey, originalKey, modifiedKey]);
+  }, [enabled, refKey, originalRefKey, originalKey, modifiedKey]);
 
   return sides;
 }

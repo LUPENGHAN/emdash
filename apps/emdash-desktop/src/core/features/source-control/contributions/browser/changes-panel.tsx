@@ -18,6 +18,11 @@ import {
   inspectProjectPath,
 } from '@core/features/source-control/api/browser/client';
 import { getGitRepositoryStore } from '@core/features/source-control/api/browser/stores/source-control-selectors';
+import {
+  CompareSectionBody,
+  CompareSectionHeader,
+  useCompareSection,
+} from '@core/features/source-control/browser/diff-view/changes-panel/compare-section';
 import { GitStatusSection } from '@core/features/source-control/browser/diff-view/changes-panel/git-status-section';
 import {
   PullRequestsSectionBody,
@@ -42,7 +47,7 @@ import {
 import { createLayoutStorage } from '@core/primitives/mementos/browser';
 import type { InitializeRepositoryError } from '@core/primitives/projects/api';
 
-const SECTION_IDS = ['unstaged', 'staged', 'pullRequests'] as const;
+const SECTION_IDS = ['unstaged', 'staged', 'compare', 'pullRequests'] as const;
 type SectionId = (typeof SECTION_IDS)[number];
 
 /** Persistence id for the sections group's per-combination layouts. */
@@ -197,6 +202,7 @@ const ChangesPanelSections = observer(function ChangesPanelSections({
   changesView: ChangesViewStore;
 }) {
   const taskView = useTaskComposition();
+  const compare = useCompareSection(changesView);
   // One storage facade per composition. The panel renders below the task
   // view's space.isHydrated gate, so synchronous reads are safe by contract.
   const layoutStorage = useMemo(
@@ -246,6 +252,11 @@ const ChangesPanelSections = observer(function ChangesPanelSections({
   }> = [
     { id: 'unstaged', header: <UnstagedSectionHeader />, body: <UnstagedSectionBody /> },
     { id: 'staged', header: <StagedSectionHeader />, body: <StagedSectionBody /> },
+    {
+      id: 'compare',
+      header: <CompareSectionHeader compare={compare} />,
+      body: <CompareSectionBody compare={compare} />,
+    },
     {
       id: 'pullRequests',
       header: <PullRequestsSectionHeader onSyncError={setPrSyncError} />,

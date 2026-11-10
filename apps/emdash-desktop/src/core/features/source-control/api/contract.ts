@@ -118,6 +118,10 @@ const sourceControlCheckoutContract = defineContract({
     checkout.getChangedFiles.input.omit({ checkout: true }).extend(workspaceKeySchema.shape),
     checkout.getChangedFiles.output
   ),
+  getMergeBase: runtimeFallibleProcedure(
+    checkout.getMergeBase.input.omit({ checkout: true }).extend(workspaceKeySchema.shape),
+    checkout.getMergeBase.output
+  ),
   getFile: runtimeFallibleProcedure(
     checkout.getFile.input.omit({ checkout: true }).extend(workspaceKeySchema.shape),
     checkout.getFile.output

@@ -28,6 +28,7 @@ export type GitFilePath = z.infer<typeof gitFilePathSchema>;
 /** Paths within a checkout use the portable, checkout-relative path vocabulary. */
 export const fileChangeSchema = z.object({
   path: gitFilePathSchema,
+  originalPath: gitFilePathSchema.optional(),
   status: gitChangeStatusSchema,
   additions: z.number().int(),
   deletions: z.number().int(),

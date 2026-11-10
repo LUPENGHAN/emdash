@@ -36,10 +36,11 @@ export async function getChangedFiles(
   const numstat = parseNumstat(numstatResult.stdout);
   const changes: GitChange[] = [];
 
-  for (const [filePath, status] of parseNameStatus(nameStatusResult.stdout)) {
+  for (const [filePath, status, originalPath] of parseNameStatus(nameStatusResult.stdout)) {
     const stat = numstat.get(filePath);
     changes.push({
       path: toPortablePath(filePath),
+      ...(originalPath ? { originalPath: toPortablePath(originalPath) } : {}),
       status,
       additions: stat?.additions ?? 0,
       deletions: stat?.deletions ?? 0,
