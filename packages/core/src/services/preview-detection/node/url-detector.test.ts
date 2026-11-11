@@ -1,3 +1,5 @@
+import http from 'node:http';
+import net from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PROBE_FAST_INTERVAL_MS,
@@ -78,6 +80,70 @@ describe('wireTerminalUrlDetector', () => {
       },
     ]);
     expect(closed).toEqual([{ reason: 'pty-exit' }]);
+  });
+
+  it('verifies listening addresses as HTTP before reporting them', async () => {
+    const pty = fakePty();
+    const detected: DetectedPreviewUrl[] = [];
+    const httpProbe = vi.fn(async (_host: string, port: number) => port !== 5432);
+    const stop = wireTerminalUrlDetector({
+      pty,
+      probeLocalPorts: false,
+      httpProbe,
+      onDetected: (server) => { detected.push(server); },
+    });
+
+    pty.emitData('listening on 127.0.0.1:92');
+    expect(httpProbe).not.toHaveBeenCalled();
+    pty.emitData('00\nlisten to :3010\nlistening on 127.0.0.1:5432\n');
+    await vi.waitFor(() => expect(detected).toHaveLength(2));
+    expect(detected).toEqual([
+      { protocol: 'http:', host: '127.0.0.1', port: 9200, urlPath: '/' },
+      { protocol: 'http:', host: '127.0.0.1', port: 3010, urlPath: '/' },
+    ]);
+    expect(httpProbe).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it('accepts an HTTP response and rejects a non-HTTP listener', async () => {
+    const web = http.createServer((_request, response) => response.writeHead(404).end());
+    const other = net.createServer((socket) => socket.end('not HTTP'));
+    await Promise.all([
+      new Promise<void>((resolve) => web.listen(0, '127.0.0.1', resolve)),
+      new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve)),
+    ]);
+    const webPort = (web.address() as net.AddressInfo).port;
+    const otherPort = (other.address() as net.AddressInfo).port;
+    const pty = fakePty();
+    const detected = vi.fn();
+    const stop = wireTerminalUrlDetector({ pty, probeLocalPorts: false, onDetected: detected });
+    try {
+      pty.emitData(`listening on 127.0.0.1:${webPort}\nlisten to :${otherPort}\n`);
+      await vi.waitFor(() => expect(detected).toHaveBeenCalledTimes(1));
+      expect(detected).toHaveBeenCalledWith({
+        protocol: 'http:', host: '127.0.0.1', port: webPort, urlPath: '/',
+      });
+    } finally {
+      stop();
+      web.close();
+      other.close();
+    }
+  });
+
+  it('does not report a verified server after the terminal exits', async () => {
+    const pty = fakePty();
+    let finish!: (value: boolean) => void;
+    const onDetected = vi.fn();
+    wireTerminalUrlDetector({
+      pty,
+      httpProbe: () => new Promise((resolve) => { finish = resolve; }),
+      onDetected,
+    });
+    pty.emitData('listen to :3010\n');
+    pty.emitExit();
+    finish(true);
+    await Promise.resolve();
+    expect(onDetected).not.toHaveBeenCalled();
   });
 
   it('accepts expanded IPv6 loopback but rejects other IPv6 addresses', () => {

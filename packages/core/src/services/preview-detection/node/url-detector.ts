@@ -1,3 +1,4 @@
+import http from 'node:http';
 import net from 'node:net';
 import { recordSpawn } from '@emdash/shared/perf';
 import { normalizeTerminalHttpUrl } from '#services/preview-detection/api';
@@ -14,6 +15,7 @@ const PROBE_TIMEOUT_MS = 500;
 const PROBE_FAILURES_TO_CLOSE = 2;
 const URL_PATTERN =
   /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[[0-9a-f:]+\])(?::\d{2,5})?(?:\/\S*)?/gi;
+const LISTEN_PATTERN = /\blisten(?:ing)?\s+(?:on|to)\s+(?:(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]))?:(\d{1,5})(?=\s|$|[,;)])/gi;
 const MAX_BUFFER = 4096;
 
 export type PreviewServerProtocol = 'http:' | 'https:';
@@ -41,12 +43,14 @@ export function wireTerminalUrlDetector({
   pty,
   probeLocalPorts = true,
   portProbe = isPortOpen,
+  httpProbe = isHttpServer,
   onDetected,
   onSourceClosed,
 }: {
   pty: TerminalOutputSource;
   probeLocalPorts?: boolean;
   portProbe?: TerminalPortProbe;
+  httpProbe?: TerminalPortProbe;
   onDetected: (server: DetectedPreviewUrl) => void | Promise<void>;
   onSourceClosed?: (event: PreviewSourceClosed) => void | Promise<void>;
 }): () => void {
@@ -54,6 +58,7 @@ export function wireTerminalUrlDetector({
   let stopped = false;
   const detected = new Map<string, DetectedPreviewUrl>();
   const stopProbes = new Map<string, () => void>();
+  const pending = new Set<string>();
 
   const stopAllProbes = () => {
     for (const stop of stopProbes.values()) stop();
@@ -80,13 +85,9 @@ export function wireTerminalUrlDetector({
     }
 
     const clean = stripTerminalControls(buffer);
-    for (const match of clean.matchAll(URL_PATTERN)) {
-      const parsed = parsePreviewUrl(match[0]);
-      if (!parsed) continue;
-
+    const register = (parsed: DetectedPreviewUrl) => {
       const key = detectedKey(parsed);
-      if (detected.has(key)) continue;
-
+      if (stopped || detected.has(key)) return;
       detected.set(key, parsed);
       void onDetected(parsed);
 
@@ -101,6 +102,30 @@ export function wireTerminalUrlDetector({
           })
         );
       }
+    };
+
+    for (const match of clean.matchAll(URL_PATTERN)) {
+      const parsed = parsePreviewUrl(match[0]);
+      if (parsed) register(parsed);
+    }
+
+    // Wait for a complete line so a port split across PTY chunks is not truncated.
+    const completeLines = clean.slice(0, clean.lastIndexOf('\n') + 1);
+    for (const match of completeLines.matchAll(LISTEN_PATTERN)) {
+      const port = Number(match[2]);
+      if (port < 1 || port > 65535) continue;
+      const host = normalizeHost(match[1] ?? '127.0.0.1');
+      if (!host) continue;
+      const server: DetectedPreviewUrl = { protocol: 'http:', host, port, urlPath: '/' };
+      const key = detectedKey(server);
+      if (detected.has(key) || pending.has(key)) continue;
+      pending.add(key);
+      void httpProbe(host, port).then((isHttp) => {
+        pending.delete(key);
+        if (isHttp) register(server);
+      }).catch(() => {
+        pending.delete(key);
+      });
     }
   });
 
@@ -138,6 +163,18 @@ function normalizeHost(host: string): DirectPreviewServerHost | null {
 
 function detectedKey(server: DetectedPreviewUrl): string {
   return `${server.protocol}:${server.port}`;
+}
+
+function isHttpServer(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const request = http.request({ host, port, method: 'HEAD', path: '/', timeout: PROBE_TIMEOUT_MS }, (response) => {
+      response.resume();
+      resolve(true);
+    });
+    request.on('error', () => resolve(false));
+    request.on('timeout', () => request.destroy());
+    request.end();
+  });
 }
 
 function isPortOpen(host: string, port: number): Promise<boolean> {
