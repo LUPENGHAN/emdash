@@ -135,6 +135,9 @@ you select an OrcaRouter model from the OpenCode model picker.
   `SessionStart`, `UserPromptSubmit`, and `Stop` report session, working, and completion events.
   `managed_hooks_env_vars` forwards the Emdash hook routing variables.
   Existing hooks are preserved; paths outside the config root are rejected.
+- Oh My Pi's TUI extension reports completion on a main-agent `agent_end` without
+  `willContinue`, not on `session_stop`, which can schedule another turn. It resets completion
+  deduplication on each `agent_start` and ignores subagent lifecycle events.
 - Prime Agent uses its native ACP stdio mode (`prime-agent --mode acp`). Its TUI extension reports
   session file paths, turn starts, and turn completion for resume and notification support. Emdash
   synchronizes standard stdio and HTTP MCP definitions in `~/.prime/agent/settings.json`. ACP

@@ -36,20 +36,21 @@ function errorMessage(error: unknown): string {
   return 'Oh My Pi exited with an error';
 }
 
-let stopNotified = false;
-
-async function notifyStopOnce(message: string) {
-  if (stopNotified) return;
-  stopNotified = true;
-  await notifyEmdash('stop', { message });
-}
-
 ${EMDASH_PROVIDER_EXTENSION_SOURCE}
 export default function (pi: ExtensionAPI) {
   registerEmdashProvider(pi);
 
+  let stopNotified = false;
+
+  async function notifyStopOnce(message: string) {
+    if (stopNotified) return;
+    stopNotified = true;
+    await notifyEmdash('stop', { message });
+  }
+
   pi.on('session_start', async (_event, ctx) => {
     await selectEmdashModel(pi, ctx);
+    if (ctx?.agent?.kind === 'sub') return;
     stopNotified = false;
     // The session id (its file's header), which both --session and \`omp acp\` take.
     const sessionId = ctx.sessionManager?.getSessionId?.();
@@ -57,17 +58,25 @@ export default function (pi: ExtensionAPI) {
     await notifyEmdash('session', { providerSessionId: sessionId });
   });
 
+  pi.on('agent_start', async (_event, ctx) => {
+    if (ctx?.agent?.kind === 'sub') return;
+    stopNotified = false;
+  });
+
   pi.on('session_stop', async (_event, ctx) => {
+    if (ctx?.agent?.kind === 'sub') return;
     const sessionId = ctx?.sessionManager?.getSessionId?.();
     if (sessionId) await notifyEmdash('session', { providerSessionId: sessionId });
+  });
+
+  pi.on('agent_end', async (event, ctx) => {
+    // session_stop may schedule a continuation; agent_end reports the settled outcome.
+    if (ctx?.agent?.kind === 'sub' || event.willContinue === true) return;
     await notifyStopOnce('Task completed');
   });
 
-  pi.on('agent_end', async () => {
-    await notifyStopOnce('Task completed');
-  });
-
-  pi.on('session_shutdown', async () => {
+  pi.on('session_shutdown', async (_event, ctx) => {
+    if (ctx?.agent?.kind === 'sub') return;
     await notifyStopOnce('Session ended');
   });
 
