@@ -229,7 +229,13 @@ export function buildSourceLaunch(
           [AGENT_PROVIDER_ENV]: JSON.stringify(config),
           ...(model && { [AGENT_MODEL_ENV]: `${key}/${model}` }),
         },
-        args: model ? ['--model', `${key}/${model}`] : ['--provider', key],
+        // OMP parses colon suffixes in --model as selection options, even when
+        // the suffix is part of a registered model ID. Its session-start hook
+        // selects the exact ID from EMDASH_AGENT_MODEL instead.
+        args:
+          model && !(agent === 'oh-my-pi' && model.includes(':'))
+            ? ['--model', `${key}/${model}`]
+            : ['--provider', key],
         extensionAgent: agent,
       };
     }

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Conversation } from '@core/primitives/conversations/api';
 import {
   TuiConversationProvider,
+  type TuiConversationProviderDependencies,
   type TuiConversationProviderOptions,
 } from './tui-conversation-provider';
 
@@ -37,6 +38,24 @@ describe('TuiConversationProvider', () => {
       })
     );
     expect(resume).not.toHaveBeenCalled();
+  });
+
+  it('does not pass a conflicting OMP model flag when a source model contains a colon', async () => {
+    const provider = createProvider({
+      getProviderConfig: async () => ({
+        env: { EMDASH_AGENT_MODEL: 'emdash-test/deepseek/model:deepseek' },
+        extraArgs: '--provider emdash-test',
+      }),
+    });
+
+    await provider.ensureSession({
+      conversation: conversation({ providerId: 'oh-my-pi', model: 'previous-model' }),
+      mode: 'start',
+    });
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({ model: null, extraArgs: ['--provider', 'emdash-test'] })
+    );
   });
 
   it.each(['antigravity', 'codex', 'prime-agent'])(
@@ -214,6 +233,7 @@ function createProvider(
     host?: TuiConversationProviderOptions['host'];
     autoTrustWorktrees?: boolean;
     getTaskSettings?: () => Promise<{ autoTrustWorktrees: boolean }>;
+    getProviderConfig?: TuiConversationProviderDependencies['getProviderConfig'];
     launchContextSource?: TuiConversationProviderOptions['launchContextSource'];
   } = {}
 ): TuiConversationProvider {
@@ -240,7 +260,7 @@ function createProvider(
     },
     {
       db: { select: vi.fn() } as never,
-      getProviderConfig: () => Promise.resolve(undefined),
+      getProviderConfig: overrides.getProviderConfig ?? (() => Promise.resolve(undefined)),
       getTaskSettings:
         overrides.getTaskSettings ??
         (() => Promise.resolve({ autoTrustWorktrees: overrides.autoTrustWorktrees ?? false })),

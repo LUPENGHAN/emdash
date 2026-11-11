@@ -9,6 +9,7 @@ import type {
   EnsureConversationSessionResult,
 } from '@core/features/conversations/api/node/types';
 import { sourceOverrideOf, type ModelSourceOverride } from '@core/features/model-providers/api';
+import { AGENT_MODEL_ENV } from '@core/features/model-providers/node/source-launch';
 import type { TaskSessionLaunchContextSource } from '@core/features/tasks/api/node/task-session-launch-context';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import type { Conversation } from '@core/primitives/conversations/api';
@@ -212,7 +213,13 @@ export class TuiConversationProvider implements ConversationProvider {
       // Fresh spawns declare the emdash-chosen resume handle (resolveAgentSession falls
       // back to the conversation id), so the index learns it at spawn (spec §3.1).
       chosenSessionId: agentSession.isResuming ? null : agentSession.sessionId,
-      model: conversation.model ?? null,
+      // OMP must select source model IDs containing ':' in its session hook;
+      // passing a separate conversation model would add a conflicting --model.
+      model:
+        conversation.providerId === 'oh-my-pi' &&
+        providerConfig?.env?.[AGENT_MODEL_ENV]?.includes(':')
+          ? null
+          : (conversation.model ?? null),
       initialPrompt: effectiveInitialPrompt,
       autoApprove: conversation.autoApprove ?? false,
       trustWorkspace,

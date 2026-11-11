@@ -455,6 +455,22 @@ describe('buildSourceLaunch', () => {
     expect(piProvider(ompLaunch).apiKey).toBe(PROVIDER_KEY_ENV);
   });
 
+  it('selects Oh My Pi model IDs containing colons through its session hook', () => {
+    const model = 'deepseek/deepseek-v4.1-flash:deepseek';
+    const launch = buildSourceLaunch('oh-my-pi', provider, 'sk-1', model)!;
+
+    expect(launch.args).toEqual(['--provider', 'emdash-newapi']);
+    expect(launch.env[AGENT_MODEL_ENV]).toBe(`emdash-newapi/${model}`);
+    expect(buildSourceLaunch('pi', provider, 'sk-1', model)!.args).toEqual([
+      '--model',
+      `emdash-newapi/${model}`,
+    ]);
+    expect(buildSourceLaunch('oh-my-pi', provider, 'sk-1', 'moonshotai/kimi-k3')!.args).toEqual([
+      '--model',
+      'emdash-newapi/moonshotai/kimi-k3',
+    ]);
+  });
+
   it('passes context windows and reasoning (on unless turned off) to Pi and Oh My Pi models', () => {
     const sized = {
       ...provider,
