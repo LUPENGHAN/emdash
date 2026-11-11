@@ -15,6 +15,8 @@ export type IHooksBehavior = {
   writeHooks(fs: PluginFs, hooks: HookRegistration[]): Promise<string[]>;
   deleteHooks(fs: PluginFs): Promise<void>;
   getHooksInstalled(fs: PluginFs): Promise<boolean>;
+  /** Whether installed start hooks are enabled by the provider's configuration. */
+  getStartHooksEnabled?(fs: PluginFs): Promise<boolean>;
   /**
    * Parse a raw hook event (event type header + JSON body) into a canonical form.
    * Optional — runtimes fall back to defaultHookEventParser when absent.

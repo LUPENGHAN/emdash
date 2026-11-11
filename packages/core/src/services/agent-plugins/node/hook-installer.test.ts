@@ -82,6 +82,27 @@ describe('AgentHookInstaller', () => {
     await expect(nodeFs.stat(providerRoot)).rejects.toThrow();
   });
 
+  it('checks start hook availability without rewriting an installed provider configuration', async () => {
+    const homeDir = await makeTempDir();
+    const root = path.join(homeDir, 'custom-codex');
+    const writeHooks = vi.fn(async (fs) => {
+      await fs.write('hooks.json', 'installed');
+      return ['hooks.json'];
+    });
+    const getStartHooksEnabled = vi.fn(async (_fs: { root?: string }) => false);
+    const behavior = hookBehavior({
+      resolveConfigRoots: configRoots(envConfigRoot('CODEX_HOME', '.codex')),
+      writeHooks,
+      getStartHooksEnabled,
+    });
+    const installer = createInstaller(homeDir, {}, [hookProvider('codex', behavior)]);
+    const params = { providerId: 'codex', workspacePath: '/workspace', env: { CODEX_HOME: root } };
+    await expect(installer.ensureHooksInstalled(params)).resolves.toBe(true);
+    await expect(installer.areStartHooksEnabled(params)).resolves.toBe(false);
+    expect(writeHooks).toHaveBeenCalledTimes(1);
+    expect(getStartHooksEnabled.mock.calls[0]?.[0]).toMatchObject({ root });
+  });
+
   it('serializes writes shared by providers resolving to the same root', async () => {
     const homeDir = await makeTempDir();
     const root = path.join(homeDir, '.shared');

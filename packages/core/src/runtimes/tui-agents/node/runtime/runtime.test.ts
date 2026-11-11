@@ -443,6 +443,27 @@ describe('TuiAgentsRuntime', () => {
     }
   });
 
+  it.each([true, false])(
+    'only uses an enabled start hook to suppress input status (enabled=%s)',
+    async (enabled) => {
+      const { runtime } = createRuntime({
+        hooks: { kind: 'config', scope: 'global', supportedEvents: ['start', 'stop'] },
+      });
+      vi.spyOn(runtime['hookInstaller'], 'ensureHooksInstalled').mockResolvedValue(true);
+      vi.spyOn(runtime['hookInstaller'], 'areStartHooksEnabled').mockResolvedValue(enabled);
+      await runtime.startSession(startInput({ initialPrompt: undefined }));
+      try {
+        runtime.sendInput('conversation-1', '\r');
+        const status = peek(runtime.agentStatesLiveModel.get(undefined)!.states.list)[
+          'conversation-1'
+        ]?.status;
+        expect(status === 'working').toBe(!enabled);
+      } finally {
+        await runtime.dispose();
+      }
+    }
+  );
+
   it.each([false, true])('answers terminal probes on the host only with tmux=%s', async (tmux) => {
     const { runtime, spawner } = createRuntime();
     const replies = '\x1b[?1;2c\x1b[>0;276;0c\x1bP>|XTerm(380)\x1b\\';

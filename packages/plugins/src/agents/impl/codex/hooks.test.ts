@@ -3,7 +3,7 @@ import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PluginFs } from '@emdash/core/services/agent-plugins/api/plugins';
-import { parse as parseToml } from 'smol-toml';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { describe, expect, it } from 'vitest';
 import {
   CODEX_CONFIG_PATH,
@@ -11,6 +11,7 @@ import {
   buildCodexHookConfig,
   codexHookHash,
 } from './hooks';
+import { provider } from './index';
 
 function createMemoryFs(initial: Record<string, string> = {}): PluginFs & {
   files: Map<string, string>;
@@ -79,7 +80,53 @@ describe('buildCodexHookConfig', () => {
     expect(config).toContain('echo user-prompt');
     expect(config).toContain('notification_type');
     expect(config).toContain('session-start');
+    const parsed = parseToml(config ?? '') as {
+      hooks: { UserPromptSubmit: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    expect(parsed.hooks.UserPromptSubmit).toHaveLength(2);
+    expect(parsed.hooks.UserPromptSubmit[0]?.hooks[0]?.command).toBe('echo user-prompt');
+    expect(parsed.hooks.UserPromptSubmit[1]?.hooks[0]?.command).toContain('X-Emdash-Event-Type');
   });
+
+  it('declares a start hook and maps the event to working status', () => {
+    expect(provider.capabilities.hooks).toMatchObject({
+      supportedEvents: expect.arrayContaining(['start']),
+    });
+    expect(buildCodexHookConfig().parseHookEvent('start', {})).toMatchObject({
+      kind: 'status',
+      type: 'start',
+    });
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'posts a fixed start payload without exposing the prompt or hook response to Codex',
+    async () => {
+      const fs = createMemoryFs();
+      await buildCodexHookConfig().writeHooks(fs, []);
+      const config = parseToml((await fs.read(CODEX_CONFIG_PATH)) ?? '') as {
+        hooks: { UserPromptSubmit: Array<{ hooks: Array<{ command: string }> }> };
+      };
+      const command = config.hooks.UserPromptSubmit[0]?.hooks[0]?.command;
+      expect(command).toContain('X-Emdash-Event-Type: start');
+      expect(command).toContain("--data-binary '{}'");
+      const result = spawnSync(
+        '/bin/sh',
+        ['-c', `curl() { printf '%s' 'server output'; }; ${command}`],
+        {
+          encoding: 'utf8',
+          input: '{"prompt":"private user input"}',
+          env: {
+            PATH: process.env.PATH ?? '',
+            EMDASH_HOOK_PORT: '1234',
+            EMDASH_HOOK_NONCE: 'nonce',
+            EMDASH_PTY_ID: 'pty-1',
+          },
+        }
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe('{}');
+    }
+  );
 
   it('keeps legacy hooks.json when writing config.toml fails', async () => {
     const legacyHooks = JSON.stringify({
@@ -146,6 +193,38 @@ trusted_hash = "sha256:trusted"
     expect(await hooks.getHooksInstalled(fs)).toBe(false);
   });
 
+  it('installs the start hook when upgrading an older managed configuration', async () => {
+    const fs = { ...createMemoryFs(), root: '/home/user/.codex' };
+    const hooks = buildCodexHookConfig();
+    await hooks.writeHooks(fs, []);
+    const config = parseToml((await fs.read(CODEX_CONFIG_PATH)) ?? '') as {
+      hooks: Record<string, unknown>;
+    };
+    delete config.hooks.UserPromptSubmit;
+    await fs.write(CODEX_CONFIG_PATH, stringifyToml(config));
+    expect(await hooks.getHooksInstalled(fs)).toBe(false);
+
+    await hooks.writeHooks(fs, []);
+    expect(await hooks.getHooksInstalled(fs)).toBe(true);
+  });
+
+  it('preserves an explicitly disabled start hook and reports it unavailable', async () => {
+    const fs = { ...createMemoryFs(), root: '/home/user/.codex' };
+    const hooks = buildCodexHookConfig();
+    await hooks.writeHooks(fs, []);
+    const config = parseToml((await fs.read(CODEX_CONFIG_PATH)) ?? '') as {
+      hooks: { state: Record<string, { enabled?: boolean; trusted_hash?: string }> };
+    };
+    const key = '/home/user/.codex/config.toml:user_prompt_submit:0:0';
+    config.hooks.state[key]!.enabled = false;
+    await fs.write(CODEX_CONFIG_PATH, stringifyToml(config));
+
+    expect(await hooks.getHooksInstalled(fs)).toBe(true);
+    expect(await hooks.getStartHooksEnabled(fs)).toBe(false);
+    const saved = parseToml((await fs.read(CODEX_CONFIG_PATH)) ?? '') as typeof config;
+    expect(saved.hooks.state[key]?.enabled).toBe(false);
+  });
+
   it.skipIf(process.platform === 'win32')(
     'marks its own hooks reviewed with the hash Codex records, keeping user hooks as they are',
     async () => {
@@ -172,6 +251,7 @@ enabled = false
       const config = parseToml((await fs.read(CODEX_CONFIG_PATH)) ?? '') as {
         hooks: {
           Stop: Record<string, unknown>[];
+          UserPromptSubmit: Record<string, unknown>[];
           state: Record<string, { enabled?: boolean; trusted_hash?: string }>;
         };
       };
@@ -181,6 +261,9 @@ enabled = false
       });
       expect(config.hooks.state['/home/user/.codex/config.toml:session_start:0:0']).toEqual({
         trusted_hash: 'sha256:931fab1a98b72edec8d861b8cde90927998064f5d0e3e8df70fdc0c9f3d27947',
+      });
+      expect(config.hooks.state['/home/user/.codex/config.toml:user_prompt_submit:0:0']).toEqual({
+        trusted_hash: codexHookHash('UserPromptSubmit', config.hooks.UserPromptSubmit[0]!),
       });
       expect(
         config.hooks.state['/home/user/.codex/config.toml:permission_request:0:0']?.trusted_hash

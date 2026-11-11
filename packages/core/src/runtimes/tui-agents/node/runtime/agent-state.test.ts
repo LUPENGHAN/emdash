@@ -62,6 +62,29 @@ describe('TuiAgentStates', () => {
     expect(peek(agentStates.states.list)['conv-2']).toBeUndefined();
   });
 
+  it('ignores terminal Enter when an installed start hook owns Codex activity', () => {
+    const { tracker, agentStates } = createTracker();
+    const provider = {
+      hooks: {
+        kind: 'config' as const,
+        scope: 'global' as const,
+        supportedEvents: ['start' as const, 'stop' as const, 'session' as const],
+      },
+    };
+
+    tracker.applyCanonicalEvent('codex-1', 'codex', { kind: 'status', type: 'start' });
+    expect(peek(agentStates.states.list)['codex-1']?.status).toBe('working');
+    tracker.applyCanonicalEvent('codex-1', 'codex', { kind: 'status', type: 'stop' });
+    expect(peek(agentStates.states.list)['codex-1']?.status).toBe('completed');
+    tracker.markInputSubmitted('codex-1', provider, '\r', true);
+    expect(peek(agentStates.states.list)['codex-1']?.status).toBe('completed');
+    tracker.applyCanonicalEvent('codex-1', 'codex', { kind: 'status', type: 'start' });
+    expect(peek(agentStates.states.list)['codex-1']?.status).toBe('working');
+
+    tracker.markInputSubmitted('codex-2', provider, '\r', false);
+    expect(peek(agentStates.states.list)['codex-2']?.status).toBe('working');
+  });
+
   it('keeps Enter→working when start hooks are declared but not active', () => {
     const { tracker, agentStates } = createTracker();
     const provider = {

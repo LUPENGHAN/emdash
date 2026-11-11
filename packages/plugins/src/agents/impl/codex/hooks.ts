@@ -285,10 +285,12 @@ function parseCodexHookEvent(eventType: string, body: Record<string, unknown>): 
 }
 
 export function buildCodexHookConfig() {
+  const startCmd = makeHookPostCommand('start', { json: {} }, { stdoutJson: {} });
   const stopCmd = makeNotificationHookCommand('idle_prompt');
   const permCmd = makeNotificationHookCommand('permission_prompt');
   const sessionCmd = makeCodexSessionStartCommand();
   const specs: [string, string][] = [
+    ['UserPromptSubmit', startCmd],
     ['Stop', stopCmd],
     ['PermissionRequest', permCmd],
     ['SessionStart', sessionCmd],
@@ -349,6 +351,22 @@ export function buildCodexHookConfig() {
       // Installed but never reviewed (hooks written by an older Emdash) counts as not
       // installed, so the next install adds the review.
       return hasCodexEmdashHooks(hooks, specs) && emdashHooksTrusted(config, hooks, specs, fs.root);
+    },
+    async getStartHooksEnabled(fs: PluginFs): Promise<boolean> {
+      const config = await readTomlConfig(fs, CODEX_CONFIG_PATH);
+      const hooks = getHooks(config, CODEX_CONFIG_PATH);
+      const startSpecs: [string, string][] = [['UserPromptSubmit', startCmd]];
+      if (
+        !hasCodexEmdashHooks(hooks, startSpecs) ||
+        !emdashHooksTrusted(config, hooks, startSpecs, fs.root)
+      )
+        return false;
+      if (!fs.root) return true;
+      const state = hookState(config);
+      return [...emdashHookTrust(hooks, startSpecs, fs.root).keys()].every((key) => {
+        const entry = state[key];
+        return !isConfigObject(entry) || entry.enabled !== false;
+      });
     },
     parseHookEvent: parseCodexHookEvent,
   };

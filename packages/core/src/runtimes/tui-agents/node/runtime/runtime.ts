@@ -920,8 +920,15 @@ export class TuiAgentsRuntime {
         EMDASH_HOOK_NONCE: hook.token,
         EMDASH_HOOK_TOKEN: hook.token,
       },
-      // Suppress Enter→working only when start hooks were actually installed.
-      startHooksActive: declaresStart && hooksAvailable,
+      // Suppress Enter→working only when installed start hooks are enabled.
+      startHooksActive:
+        declaresStart &&
+        hooksAvailable &&
+        (await this.hookInstaller.areStartHooksEnabled({
+          providerId: input.providerId,
+          workspacePath: input.cwd,
+          env: input.providerVars,
+        })),
     };
   }
 

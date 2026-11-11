@@ -121,6 +121,9 @@ you select an OrcaRouter model from the OpenCode model picker.
   provider-owned `collaboration_mode` config category to the chat composer's Default/Plan selector
   and persists that selection with the conversation; filesystem and approval controls remain in
   the existing permission-mode selector.
+- Codex TUI activity starts on `UserPromptSubmit`, not every terminal Enter; `Stop` reports
+  completion. If hook installation fails or the start hook is disabled, terminal input remains
+  the fallback for working status.
 - Agents that cannot receive an automated initial prompt via argv or stdin declare `pty-only`
   prompt delivery. Their TUI opens without an initial prompt, and automation flows exclude them
   unless they also support ACP.

@@ -19,6 +19,7 @@ type ResolvedHookInstallation = {
   providerId: string;
   roots: string[];
   isInstalled(): Promise<boolean>;
+  areStartHooksEnabled(): Promise<boolean>;
   install(): Promise<void>;
 };
 
@@ -82,6 +83,24 @@ export class AgentHookInstaller {
     }
   }
 
+  async areStartHooksEnabled(params: {
+    providerId: string;
+    workspacePath: string;
+    env?: Record<string, string>;
+  }): Promise<boolean> {
+    try {
+      const installation = await this.resolveInstallation(params);
+      return installation ? await installation.areStartHooksEnabled() : false;
+    } catch (error) {
+      this.options.logger.warn('AgentHookInstaller: failed to inspect start hooks', {
+        providerId: params.providerId,
+        workspacePath: params.workspacePath,
+        error: String(error),
+      });
+      return false;
+    }
+  }
+
   private async resolveInstallation(params: {
     providerId: string;
     workspacePath?: string;
@@ -104,6 +123,7 @@ export class AgentHookInstaller {
       : baseConfigContext;
     if (descriptor.kind === 'config' && plugin.behavior.hooks) {
       const behavior = plugin.behavior.hooks;
+      const getStartHooksEnabled = behavior.getStartHooksEnabled;
       const roots =
         descriptor.scope === 'global'
           ? behavior.resolveConfigRoots(configContext)
@@ -116,6 +136,10 @@ export class AgentHookInstaller {
         roots,
         isInstalled: async () =>
           everyAsync(roots, (root) => behavior.getHooksInstalled(createLocalPluginFs(root))),
+        areStartHooksEnabled: async () =>
+          getStartHooksEnabled
+            ? everyAsync(roots, (root) => getStartHooksEnabled(createLocalPluginFs(root)))
+            : true,
         install: async () => {
           for (const root of roots) {
             const fs = createLocalPluginFs(root);
@@ -141,6 +165,7 @@ export class AgentHookInstaller {
         providerId: params.providerId,
         roots: [root],
         isInstalled: () => behavior.isPluginInstalled(fs, scope),
+        areStartHooksEnabled: async () => true,
         install: async () => {
           await behavior.installPlugin(fs, scope);
         },
