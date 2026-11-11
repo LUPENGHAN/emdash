@@ -1,5 +1,7 @@
+import { toast } from '@emdash/ui/react/primitives';
 import type { ILink, ILinkProvider, Terminal } from '@xterm/xterm';
 import { findFileLinks, type FileLinkMatch } from '../../../browser/pty/file-link-detection';
+import { isImagePath } from '../../../browser/pty/terminal-image-link';
 
 let activationModifierListenersAttached = false;
 
@@ -87,14 +89,10 @@ export class FileLinkProvider implements ILinkProvider {
       leave: () => {
         this.tracker.leave(link.decorations ?? decorations);
       },
-      activate: (event, linkText) => {
+      activate: (event) => {
         if (!isPrimaryMouseButton(event)) return;
         if (!this.tracker.isPressed(event)) return;
-        if (match.isExternal) {
-          this.onOpenExternal(linkText);
-        } else {
-          this.onOpenFile(normalizeFilePath(linkText));
-        }
+        openTerminalFileLink(match, this.onOpenFile, this.onOpenExternal);
       },
       dispose: () => {
         this.tracker.leave(link.decorations ?? decorations);
@@ -102,6 +100,25 @@ export class FileLinkProvider implements ILinkProvider {
     };
     return link;
   }
+}
+
+export function openTerminalFileLink(
+  match: FileLinkMatch,
+  onOpenFile: (filePath: string) => void,
+  onOpenExternal: (filePath: string) => void
+): void {
+  if (isImagePath(match.text)) openTerminalImage(match.text, onOpenFile);
+  else if (match.isExternal) onOpenExternal(match.text);
+  else onOpenFile(normalizeFilePath(match.text));
+}
+
+export function openTerminalImage(filePath: string, onOpenFile: (filePath: string) => void): void {
+  // A shell or TUI may change its working directory or HOME after startup.
+  if (!filePath.startsWith('/') && !/^[A-Za-z]:[\\/]/u.test(filePath)) {
+    toast.error('Could not open image: use an absolute path');
+    return;
+  }
+  onOpenFile(normalizeFilePath(filePath));
 }
 
 function normalizeFilePath(filePath: string): string {

@@ -1,4 +1,5 @@
 import '@xterm/xterm/css/xterm.css';
+import { toast } from '@emdash/ui/react/primitives';
 import { act, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,7 +7,9 @@ import { FrontendPty } from '@core/features/terminals/api/browser/pty/pty';
 import { getCellMetrics } from '@core/features/terminals/api/browser/pty/xterm-cell-metrics';
 import { usePty } from '@core/features/terminals/browser/pty/use-pty';
 
-const { openLink, showContextMenu, settings } = vi.hoisted(() => ({
+const { openFile, openExternalFile, openLink, showContextMenu, settings } = vi.hoisted(() => ({
+  openFile: vi.fn(),
+  openExternalFile: vi.fn(),
   openLink: vi.fn(),
   showContextMenu: vi.fn(),
   settings: { autoCopyOnSelection: false },
@@ -48,6 +51,8 @@ describe('terminal links and copy through real xterm and usePty', () => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
     vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
     settings.autoCopyOnSelection = false;
+    openFile.mockClear();
+    openExternalFile.mockClear();
     openLink.mockClear();
     showContextMenu.mockClear();
     for (const [name, value] of Object.entries({
@@ -61,7 +66,7 @@ describe('terminal links and copy through real xterm and usePty', () => {
       document.documentElement.style.setProperty(name, value);
     }
     input = [];
-    pty = new FrontendPty('terminal-links', undefined, undefined, undefined, {
+    pty = new FrontendPty('terminal-links', undefined, openFile, openExternalFile, {
       connect: () => () => {},
       sendInput: (data) => input.push(data),
     });
@@ -140,6 +145,147 @@ describe('terminal links and copy through real xterm and usePty', () => {
         'https://example.com/target',
         expect.any(Function)
       );
+      expect(input).toEqual([]);
+    }
+  );
+
+  it('opens a quoted Unicode image path without passing its modified click to the TUI', async () => {
+    await write('\x1b[?1000h\x1b[?1006hopen "/tmp/图片 1.png" here');
+    const modifier = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+    // Column 14 is the second cell of a wide character in the link.
+    mouse('mousemove', 14, 1, modifier);
+    await frame();
+    input.length = 0;
+    mouse('mousedown', 14, 1, modifier);
+    mouse('mouseup', 14, 1, modifier);
+    expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/图片 1.png');
+    expect(input).toEqual([]);
+  });
+
+  it('opens a quoted image path from its wide-character soft-wrapped continuation', async () => {
+    pty.terminal.resize(24, 10);
+    await write('open "/tmp/long-name-图片 1.png"');
+    expect(pty.terminal.buffer.active.getLine(1)?.isWrapped).toBe(true);
+    const modifier = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+    mouse('mousemove', 3, 2, modifier);
+    await frame();
+    mouse('mousedown', 3, 2, modifier);
+    mouse('mouseup', 3, 2, modifier);
+    expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/long-name-图片 1.png');
+  });
+
+  it('does not open an image when the user drags an intercepted OSC link', async () => {
+    await write('\x1b[?1002h\x1b[?1006h\x1b]8;;file:///tmp/image.png\x07image\x1b]8;;\x07');
+    mouse('mousemove', 3);
+    await expect.poll(() => pty.getHoveredOscLink()).toBe('file:///tmp/image.png');
+    input.length = 0;
+    mouse('mousedown', 3);
+    mouse('mousemove', 10, 1, { buttons: 1 });
+    mouse('mouseup', 10);
+    expect(openFile).not.toHaveBeenCalled();
+    expect(input).toEqual([]);
+  });
+
+  it('does not mistake an unknown OSC destination with an image path label for a plain file', async () => {
+    await write('\x1b[?1000h\x1b[?1006h\x1b]8;;custom://host\x07/tmp/image.png\x1b]8;;\x07');
+    const modifier = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+    mouse('mousemove', 3, 1, modifier);
+    await frame();
+    input.length = 0;
+    mouse('mousedown', 3, 1, modifier);
+    mouse('mouseup', 3, 1, modifier);
+    expect(openFile).not.toHaveBeenCalled();
+    expect(input).toEqual([expect.stringMatching(/M$/), expect.stringMatching(/m$/)]);
+  });
+
+  it.each([9, 1000, 1002, 1003])(
+    'opens an OSC 8 image in the task without reporting a mouse click in mode %s',
+    async (mode) => {
+      const uri = 'file:///private/tmp/%E5%9B%BE%E7%89%87%20one.png';
+      await write(`\x1b[?${mode}h\x1b[?1006h\x1b]8;;${uri}\x07Viewed image\x1b]8;;\x07`);
+      mouse('mousemove', 3);
+      await expect.poll(() => pty.getHoveredOscLink()).toBe(uri);
+      input.length = 0;
+      mouse('mousedown', 3);
+      mouse('mouseup', 3);
+      expect(openFile).toHaveBeenCalledExactlyOnceWith('/private/tmp/图片 one.png');
+      expect(openLink).not.toHaveBeenCalled();
+      expect(openExternalFile).not.toHaveBeenCalled();
+      expect(input).toEqual([]);
+    }
+  );
+
+  it('opens an OSC 8 image when mouse reporting is off', async () => {
+    await write('\x1b]8;;file:///tmp/screenshot.png\x07screenshot\x1b]8;;\x07');
+    mouse('mousemove', 3);
+    await expect.poll(() => pty.getHoveredOscLink()).toBe('file:///tmp/screenshot.png');
+    mouse('mousedown', 3);
+    mouse('mouseup', 3);
+    expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/screenshot.png');
+    expect(input).toEqual([]);
+  });
+
+  it('blocks invalid image destinations instead of passing the click to the TUI', async () => {
+    const notify = vi.spyOn(toast, 'error');
+    await write('\x1b[?1000h\x1b[?1006h\x1b]8;;file://other/tmp/image.png\x07image\x1b]8;;\x07');
+    mouse('mousemove', 3);
+    await expect.poll(() => pty.getHoveredOscLink()).toBe('file://other/tmp/image.png');
+    input.length = 0;
+    mouse('mousedown', 3);
+    mouse('mouseup', 3);
+    expect(notify).toHaveBeenCalledOnce();
+    expect(openFile).not.toHaveBeenCalled();
+    expect(openLink).not.toHaveBeenCalled();
+    expect(openExternalFile).not.toHaveBeenCalled();
+    expect(input).toEqual([]);
+  });
+
+  it('leaves other OSC 8 file links to a mouse-reporting TUI', async () => {
+    await write('\x1b[?1000h\x1b[?1006h\x1b]8;;file:///tmp/code.ts\x07code\x1b]8;;\x07');
+    mouse('mousemove', 3);
+    await frame();
+    expect(pty.getHoveredOscLink()).toBeNull();
+    input.length = 0;
+    mouse('mousedown', 3);
+    mouse('mouseup', 3);
+    expect(openFile).not.toHaveBeenCalled();
+    expect(input).toEqual(['\x1b[<0;3;1M', '\x1b[<0;3;1m']);
+  });
+
+  it('preserves the plain file gesture beneath a non-image OSC link', async () => {
+    await write('\x1b]8;;file:///tmp/source.ts\x07/tmp/source.ts\x1b]8;;\x07');
+    const modifier = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+    mouse('mousemove', 3, 1, modifier);
+    await frame();
+    mouse('mousedown', 3, 1, modifier);
+    mouse('mouseup', 3, 1, modifier);
+    expect(openExternalFile).toHaveBeenCalledExactlyOnceWith('/tmp/source.ts');
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it('opens a plain absolute image path in the task with the file-link modifier', async () => {
+    await write('open /tmp/screenshot.png here');
+    const modifier = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+    mouse('mousemove', 10, 1, modifier);
+    await frame();
+    mouse('mousedown', 10, 1, modifier);
+    mouse('mouseup', 10, 1, modifier);
+    expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/screenshot.png');
+    expect(openExternalFile).not.toHaveBeenCalled();
+  });
+
+  it.each([9, 1000, 1002, 1003])(
+    'opens a plain image once without reporting its modified click in mode %s',
+    async (mode) => {
+      await write(`\x1b[?${mode}h\x1b[?1006hopen /tmp/screenshot.png here`);
+      const modifier = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+      mouse('mousemove', 10, 1, modifier);
+      await frame();
+      input.length = 0;
+      mouse('mousedown', 10, 1, modifier);
+      mouse('mouseup', 10, 1, modifier);
+      expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/screenshot.png');
+      expect(openExternalFile).not.toHaveBeenCalled();
       expect(input).toEqual([]);
     }
   );

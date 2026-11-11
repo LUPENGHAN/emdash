@@ -1,14 +1,18 @@
 import type { ILink } from '@xterm/xterm';
+import { isImagePath } from './terminal-image-link';
 
 // Lookbehind on `:` keeps URLs (`https://...`) with WebLinksAddon.
 const FILE_PATH_PATTERN =
-  '(?<![\\w\\-./@:])(~/|/|\\.{1,2}/)?(?:[\\w\\-.@]+/)+[\\w\\-.@]+\\.[a-zA-Z][a-zA-Z0-9]{0,9}\\b';
+  '(?<![\\p{L}\\p{M}\\p{N}_\\-./@:])(~/|/|\\.{1,2}/)?(?:[\\p{L}\\p{M}\\p{N}_\\-.@]+/)+[\\p{L}\\p{M}\\p{N}_\\-.@]+\\.[a-zA-Z][a-zA-Z0-9]{0,9}\\b(?![\\p{L}\\p{M}\\p{N}_])';
+// Quotes make spaces in a displayed image path unambiguous.
+const QUOTED_IMAGE_PATTERN = /(["'`])((?:\/|~\/|\.{1,2}\/)[^"'`\r\n\u0000]+)\1/gu;
 const URL_PROTOCOL_PATTERN = /[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
 const MAX_WRAPPED_LINE_LENGTH = 4096;
 
 export type BufferLineLike = {
   isWrapped: boolean;
   translateToString(trimRight?: boolean): string;
+  getCell?(index: number): { getChars(): string; getWidth(): number } | undefined;
 };
 
 export type BufferLike = {
@@ -34,19 +38,40 @@ export function findFileLinks(buffer: BufferLike, bufferLineNumber: number): Fil
     return [];
   }
 
-  const links: FileLinkMatch[] = [];
+  const matches: Array<{ text: string; start: number; end: number }> = [];
+  const quoted = new RegExp(QUOTED_IMAGE_PATTERN);
+  let quotedMatch: RegExpExecArray | null;
+  while ((quotedMatch = quoted.exec(logicalLine.text)) !== null) {
+    const text = quotedMatch[2];
+    if (!isImagePath(text)) continue;
+    const start = quotedMatch.index + quotedMatch[1].length;
+    matches.push({ text, start, end: start + text.length });
+  }
   // Fresh regex per call — module-level /g state isn't safe across reentrancy.
-  const regex = new RegExp(FILE_PATH_PATTERN, 'g');
+  const regex = new RegExp(FILE_PATH_PATTERN, 'gu');
   let match: RegExpExecArray | null;
   while ((match = regex.exec(logicalLine.text)) !== null) {
     const matched = match[0];
     const startOffset = match.index;
     if (isEmbeddedInUrl(logicalLine.text, startOffset)) continue;
     const endOffset = startOffset + matched.length;
-    const range = mapOffsetRangeToBufferRange(logicalLine, startOffset, endOffset);
+    if (matches.some((entry) => startOffset < entry.end && endOffset > entry.start)) continue;
+    matches.push({ text: matched, start: startOffset, end: endOffset });
+  }
+
+  const links: FileLinkMatch[] = [];
+  for (const { text: matched, start: startOffset, end: endOffset } of matches.sort(
+    (a, b) => a.start - b.start
+  )) {
+    const range = mapOffsetRangeToBufferRange(buffer, logicalLine, startOffset, endOffset);
     if (!range) continue;
 
-    const visibleRanges = mapOffsetRangeToVisibleBufferRanges(logicalLine, startOffset, endOffset);
+    const visibleRanges = mapOffsetRangeToVisibleBufferRanges(
+      buffer,
+      logicalLine,
+      startOffset,
+      endOffset
+    );
     const linkRanges = shouldUseVisibleRanges(visibleRanges) ? visibleRanges : [range];
     for (const linkRange of linkRanges) {
       if (!rangeContainsBufferLine(linkRange, bufferLineNumber)) continue;
@@ -178,17 +203,19 @@ function trailingToken(text: string): string {
 }
 
 function mapOffsetRangeToBufferRange(
+  buffer: BufferLike,
   logicalLine: LogicalLine,
   startOffset: number,
   endOffset: number
 ): ILink['range'] | null {
-  const start = mapOffsetToBufferPosition(logicalLine, startOffset);
-  const end = mapOffsetToBufferPosition(logicalLine, endOffset - 1);
+  const start = mapOffsetToBufferPosition(buffer, logicalLine, startOffset, false);
+  const end = mapOffsetToBufferPosition(buffer, logicalLine, endOffset - 1, true);
   if (!start || !end) return null;
   return { start, end };
 }
 
 function mapOffsetRangeToVisibleBufferRanges(
+  buffer: BufferLike,
   logicalLine: LogicalLine,
   startOffset: number,
   endOffset: number
@@ -203,13 +230,14 @@ function mapOffsetRangeToVisibleBufferRanges(
     if (segmentStartOffset < segmentEndOffset) {
       const xOffset = logicalLine.lineStartColumns[lineIndex] ?? 0;
       const y = logicalLine.startBufferIndex + lineIndex + 1;
+      const line = buffer.getLine(y - 1);
       ranges.push({
         start: {
-          x: xOffset + segmentStartOffset - lineStartOffset + 1,
+          x: textOffsetToColumn(line, xOffset + segmentStartOffset - lineStartOffset, false),
           y,
         },
         end: {
-          x: xOffset + segmentEndOffset - lineStartOffset,
+          x: textOffsetToColumn(line, xOffset + segmentEndOffset - lineStartOffset - 1, true),
           y,
         },
       });
@@ -228,19 +256,44 @@ function rangeContainsBufferLine(range: ILink['range'], bufferLineNumber: number
 }
 
 function mapOffsetToBufferPosition(
+  buffer: BufferLike,
   logicalLine: LogicalLine,
-  offset: number
+  offset: number,
+  end: boolean
 ): ILink['range']['start'] | null {
   let remaining = offset;
   for (let lineIndex = 0; lineIndex < logicalLine.lineTexts.length; lineIndex += 1) {
     const lineLength = logicalLine.lineTexts[lineIndex]?.length ?? 0;
     if (remaining < lineLength) {
       return {
-        x: (logicalLine.lineStartColumns[lineIndex] ?? 0) + remaining + 1,
+        x: textOffsetToColumn(
+          buffer.getLine(logicalLine.startBufferIndex + lineIndex),
+          (logicalLine.lineStartColumns[lineIndex] ?? 0) + remaining,
+          end
+        ),
         y: logicalLine.startBufferIndex + lineIndex + 1,
       };
     }
     remaining -= lineLength;
   }
   return null;
+}
+
+/** Maps UTF-16 string offsets to xterm cells, including wide and combined characters. */
+function textOffsetToColumn(
+  line: BufferLineLike | undefined,
+  offset: number,
+  end: boolean
+): number {
+  if (!line?.getCell) return offset + 1;
+  let textOffset = 0;
+  for (let column = 0; ; column += 1) {
+    const cell = line.getCell(column);
+    if (!cell) return offset + 1;
+    const width = cell.getWidth();
+    if (width === 0) continue;
+    const length = cell.getChars().length || 1;
+    if (offset < textOffset + length) return column + (end ? width : 1);
+    textOffset += length;
+  }
 }

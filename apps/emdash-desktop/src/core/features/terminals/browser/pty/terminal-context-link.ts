@@ -1,6 +1,6 @@
 import type { ILink, Terminal } from '@xterm/xterm';
 import { getCellMetrics } from '@core/features/terminals/api/browser/pty/xterm-cell-metrics';
-import { findFileLinks, type BufferLike } from './file-link-detection';
+import { findFileLinks, type BufferLike, type FileLinkMatch } from './file-link-detection';
 import { findUrlLinks } from './url-link-detection';
 
 export function getTerminalContextLink(terminal: Terminal, event: MouseEvent): string | null {
@@ -16,6 +16,17 @@ export function isTerminalLinkAtMouseEvent(
 ): boolean {
   const position = getTerminalBufferCell(terminal, event);
   return position !== null && rangeContainsColumn(range, position.y, position.x);
+}
+
+export function getTerminalFileLinkAtMouseEvent(
+  terminal: Terminal,
+  event: MouseEvent
+): FileLinkMatch | undefined {
+  const position = getTerminalBufferCell(terminal, event);
+  if (!position) return undefined;
+  return findFileLinks(terminal.buffer.active, position.y).find((link) =>
+    rangeContainsColumn(link.range, position.y, position.x)
+  );
 }
 
 function getTerminalBufferCell(

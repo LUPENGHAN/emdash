@@ -142,6 +142,10 @@ The PTY frontend is owned by the terminals slice:
   propagation of a release when xterm saw the press; it must finish selection and mouse reports.
   An intercepted gesture must also end on a move without the primary button or on the next
   primary press, so a lost release never leaves the shield swallowing input.
+  OSC 8 image file URLs and modified clicks on visible image paths open in the task editor on
+  the task's host. The OSC handler accepts HTTP(S) and validated image file URLs only; it must
+  never turn arbitrary schemes, remote file authorities, or unknown OSC labels into local paths.
+  Keep the gesture shield's single activation and selection behavior for image links as well.
 
 ## React Query Context Pattern
 

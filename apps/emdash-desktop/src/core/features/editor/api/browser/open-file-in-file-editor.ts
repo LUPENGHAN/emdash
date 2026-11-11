@@ -30,7 +30,13 @@ function resolveTaskFileRef(
 ): HostFileRef | null {
   try {
     const root = hostPathFromNative(workspacePath);
-    const resolved = absoluteRuntimePath(root, filePath);
+    // A file URL carries a drive as /C:/..., but the same spelling is a valid
+    // POSIX path. Interpret it using the task host, never the desktop platform.
+    const hostPath =
+      root.root.kind !== 'posix' && /^\/[A-Za-z]:\//u.test(filePath)
+        ? filePath.slice(1).replaceAll('/', '\\')
+        : filePath;
+    const resolved = absoluteRuntimePath(root, hostPath);
     return hostFileRefFromNativePath(nativePathFromHost(resolved), sshConnectionId);
   } catch {
     return null;

@@ -155,6 +155,38 @@ describe('task file opening', () => {
     expect(mocks.openPath).not.toHaveBeenCalled();
   });
 
+  it('opens a remote image outside the workspace on the task host, never on the desktop', async () => {
+    mocks.getWorkspace.mockReturnValue({
+      workspaceId: 'workspace-1',
+      path: '/home/dev/repo',
+      sshConnectionId: 'ssh-1',
+    });
+    const handlers = makeFileLinkHandlers('project-1', 'task-1', { target: 'right' });
+    handlers.onOpenFile('/tmp/图片 1.png');
+    await flushMicrotasks();
+    expect(mocks.openFile).toHaveBeenCalledWith(
+      hostFileRefFromNativePath('/tmp/图片 1.png', 'ssh-1'),
+      { context: { projectId: 'project-1', taskId: 'task-1' }, target: 'right', reveal: true }
+    );
+    expect(mocks.openPath).not.toHaveBeenCalled();
+  });
+
+  it('interprets URL drive paths using the task host rather than the desktop platform', async () => {
+    mocks.getWorkspace.mockReturnValue({ workspaceId: 'workspace-1', path: 'C:\\repo' });
+    await openFileInTaskEditor('project-1', 'task-1', '/C:/Users/Me/image.png');
+    expect(mocks.openFile).toHaveBeenLastCalledWith(
+      hostFileRefFromNativePath('C:\\Users\\Me\\image.png'),
+      expect.anything()
+    );
+
+    mocks.getWorkspace.mockReturnValue({ workspaceId: 'workspace-1', path: '/repo' });
+    await openFileInTaskEditor('project-1', 'task-1', '/C:/Users/Me/image.png');
+    expect(mocks.openFile).toHaveBeenLastCalledWith(
+      hostFileRefFromNativePath('/C:/Users/Me/image.png'),
+      expect.anything()
+    );
+  });
+
   it('does nothing for spellings that cannot form a path', async () => {
     await openFileInTaskEditor('project-1', 'task-1', 'src/\u0000bad.ts');
 

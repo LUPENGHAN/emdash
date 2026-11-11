@@ -1,8 +1,12 @@
+import { toast } from '@emdash/ui/react/primitives';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal, type IBufferRange, type ITerminalOptions } from '@xterm/xterm';
 import {
   FileLinkProvider,
+  isActivationModifierPressed,
   isPrimaryMouseButton,
+  openTerminalFileLink,
+  openTerminalImage,
 } from '@core/features/terminals/api/browser/pty/file-link-provider';
 import { buildTerminalFontFamily } from '@core/features/terminals/api/browser/pty/terminal-font';
 import { confirmOpenExternalLink } from '@core/features/workbench/api/browser/open-external-link';
@@ -10,7 +14,11 @@ import { copyTextToClipboard } from '@core/primitives/desktop-host/browser/host-
 import { log } from '@core/primitives/logging/browser/logger';
 import { cssColorToHex, cssVar } from '@core/primitives/styling/browser/cssVars';
 import { decodeOsc52ClipboardData } from '../../../browser/pty/pty-clipboard';
-import { isTerminalLinkAtMouseEvent } from '../../../browser/pty/terminal-context-link';
+import {
+  getTerminalFileLinkAtMouseEvent,
+  isTerminalLinkAtMouseEvent,
+} from '../../../browser/pty/terminal-context-link';
+import { classifyOscLink, isImagePath } from '../../../browser/pty/terminal-image-link';
 import { ensureXtermHost } from '../../../browser/pty/xterm-host';
 
 /**
@@ -106,8 +114,8 @@ export class FrontendPty {
   constructor(
     readonly sessionId: string,
     theme?: SessionTheme,
-    onOpenFile?: (filePath: string) => void,
-    onOpenExternal?: (filePath: string) => void,
+    private readonly onOpenFile?: (filePath: string) => void,
+    private readonly onOpenExternal?: (filePath: string) => void,
     private readonly connector: FrontendPtyConnector = noopConnector()
   ) {
     this.theme = theme;
@@ -133,6 +141,8 @@ export class FrontendPty {
       allowProposedApi: true,
       scrollOnUserInput: false,
       linkHandler: {
+        // xterm exposes all protocols with this option; classifyOscLink is the allowlist.
+        allowNonHttpProtocols: true,
         activate: (event: MouseEvent, text: string) => {
           this.activateOscLink(event, text);
         },
@@ -193,7 +203,11 @@ export class FrontendPty {
 
   getHoveredOscLink(event?: MouseEvent): string | null {
     const link = this.hoveredOscLink;
-    if (!link || (event && !isTerminalLinkAtMouseEvent(this.terminal, event, link.range))) {
+    if (
+      !link ||
+      !classifyOscLink(link.text) ||
+      (event && !isTerminalLinkAtMouseEvent(this.terminal, event, link.range))
+    ) {
       return null;
     }
     return link.text;
@@ -201,9 +215,30 @@ export class FrontendPty {
 
   private activateOscLink(event: MouseEvent, text: string): void {
     if (!isPrimaryMouseButton(event) || this.isForcedSelection(event)) return;
+    const target = classifyOscLink(text);
+    if (!target) {
+      // Non-image OSC links were ignored by xterm before enabling file links.
+      // Preserve the plain-text file link that was visible beneath their label.
+      if (this.onOpenFile && this.onOpenExternal && isActivationModifierPressed(event)) {
+        const file = getTerminalFileLinkAtMouseEvent(this.terminal, event);
+        if (file && !isImagePath(file.text)) {
+          openTerminalFileLink(file, this.onOpenFile, this.onOpenExternal);
+        }
+      }
+      return;
+    }
     // Let the release propagate: when xterm saw the press, its document listeners
     // must still finish the selection or mouse report.
     event.preventDefault();
+    if (target.kind === 'invalid-image') {
+      toast.error('Could not open image: invalid file link');
+      return;
+    }
+    if (target.kind === 'image') {
+      if (this.onOpenFile) this.onOpenFile(target.path);
+      else toast.error('Could not open image: no task is available');
+      return;
+    }
     confirmOpenExternalLink(text, (error) => {
       log.warn('FrontendPty: failed to open external link', { text, error });
     });
@@ -223,9 +258,21 @@ export class FrontendPty {
         if (!isPrimaryMouseButton(event)) return;
         if (this.terminal.modes.mouseTrackingMode === 'none' || this.isForcedSelection(event))
           return;
-        // xterm only hovers http(s) OSC 8 links, so this matches what it would activate.
-        const link = this.hoveredOscLink;
-        if (!link || !this.getHoveredOscLink(event)) return;
+        const oscLink = this.hoveredOscLink;
+        const oscAtPointer =
+          oscLink && isTerminalLinkAtMouseEvent(this.terminal, event, oscLink.range);
+        // Never treat an unrecognized OSC destination's label as a plain file path.
+        if (oscAtPointer && !classifyOscLink(oscLink.text)) return;
+        const fileLink =
+          !oscAtPointer && this.onOpenFile && isActivationModifierPressed(event)
+            ? getTerminalFileLinkAtMouseEvent(this.terminal, event)
+            : undefined;
+        const link = oscAtPointer
+          ? oscLink
+          : fileLink && isImagePath(fileLink.text)
+            ? fileLink
+            : null;
+        if (!link) return;
 
         // Consuming the press also bypasses xterm's linkifier. Own the entire
         // gesture and activate on release, while keeping it out of the PTY.
@@ -275,11 +322,22 @@ export class FrontendPty {
             if (
               !dragged &&
               !moved(release) &&
-              this.hoveredOscLink &&
-              isSameLink(this.hoveredOscLink, link) &&
+              (oscAtPointer
+                ? this.hoveredOscLink && isSameLink(this.hoveredOscLink, link)
+                : (() => {
+                    if (
+                      this.hoveredOscLink &&
+                      isTerminalLinkAtMouseEvent(this.terminal, release, this.hoveredOscLink.range)
+                    ) {
+                      return false;
+                    }
+                    const current = getTerminalFileLinkAtMouseEvent(this.terminal, release);
+                    return current && isSameLink(current, link);
+                  })()) &&
               isTerminalLinkAtMouseEvent(this.terminal, release, link.range)
             ) {
-              this.activateOscLink(release, link.text);
+              if (oscAtPointer) this.activateOscLink(release, link.text);
+              else if (this.onOpenFile) openTerminalImage(link.text, this.onOpenFile);
             }
           },
           options

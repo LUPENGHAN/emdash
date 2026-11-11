@@ -1,5 +1,6 @@
+import { toast } from '@emdash/ui/react/primitives';
 import type { ILink } from '@xterm/xterm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   ActivationModifierTracker,
   FileLinkProvider,
@@ -128,6 +129,14 @@ describe('file link provider', () => {
     expect(findFileLinks(buffer, 1)).toEqual([]);
   });
 
+  it('recognizes quoted image paths without creating a partial path', () => {
+    const buffer = makeBuffer([new MockBufferLine('open "/tmp/图片 1.png" and src/file.ts')]);
+    expect(findFileLinks(buffer, 1).map((link) => link.text)).toEqual([
+      '/tmp/图片 1.png',
+      'src/file.ts',
+    ]);
+  });
+
   it('requires Command on macOS and Control elsewhere', () => {
     expect(isActivationModifierPressed({ metaKey: true, ctrlKey: false }, true)).toBe(true);
     expect(isActivationModifierPressed({ metaKey: false, ctrlKey: true }, true)).toBe(false);
@@ -211,4 +220,46 @@ describe('file link provider', () => {
     expect(openedFiles).toEqual(['src/app.ts']);
     expect(openedExternal).toEqual(['/tmp/report.md']);
   });
+
+  it('opens absolute image paths in the task instead of the OS', () => {
+    const openedFiles: string[] = [];
+    const openedExternal: string[] = [];
+    const buffer = makeBuffer([new MockBufferLine('open /tmp/screenshot.png')]);
+    const provider = new FileLinkProvider(
+      { buffer: { active: buffer } } as never,
+      (filePath) => openedFiles.push(filePath),
+      (filePath) => openedExternal.push(filePath),
+      new ActivationModifierTracker(true)
+    );
+    provider.provideLinks(1, (links) => {
+      const link = links?.[0];
+      link?.activate({ button: 0, metaKey: true, ctrlKey: false } as MouseEvent, link.text);
+    });
+    expect(openedFiles).toEqual(['/tmp/screenshot.png']);
+    expect(openedExternal).toEqual([]);
+  });
+
+  it.each(['./images/screenshot.png', '~/images/screenshot.png'])(
+    'does not guess the host path for %s',
+    (path) => {
+      const notify = vi.spyOn(toast, 'error');
+      const openFile = vi.fn();
+      const openExternal = vi.fn();
+      const buffer = makeBuffer([new MockBufferLine(`open ${path}`)]);
+      const provider = new FileLinkProvider(
+        { buffer: { active: buffer } } as never,
+        openFile,
+        openExternal,
+        new ActivationModifierTracker(true)
+      );
+      provider.provideLinks(1, (links) => {
+        const link = links?.[0];
+        link?.activate({ button: 0, metaKey: true, ctrlKey: false } as MouseEvent, link.text);
+      });
+      expect(notify).toHaveBeenCalledOnce();
+      expect(openFile).not.toHaveBeenCalled();
+      expect(openExternal).not.toHaveBeenCalled();
+      notify.mockRestore();
+    }
+  );
 });
