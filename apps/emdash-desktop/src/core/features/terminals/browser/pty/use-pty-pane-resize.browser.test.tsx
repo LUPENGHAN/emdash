@@ -1,3 +1,4 @@
+import '@xterm/xterm/css/xterm.css';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -154,6 +155,86 @@ describe('PtyPane remount', () => {
     expect(grid).toEqual([]);
     expect([pty.terminal.cols, pty.terminal.rows]).toEqual(settled);
     for (const call of backend) expect(call).toEqual(settled);
+  });
+
+  it('synchronizes the backend before mounting a terminal at the pane size', async () => {
+    const events: string[] = [];
+    pty = new FrontendPty('pane-mount-sizing', undefined, undefined, undefined, {
+      connect: () => () => {},
+      resize: (cols, rows) => events.push(`backend:${cols}x${rows}`),
+    });
+    pty.terminal.onResize(({ cols, rows }) => events.push(`grid:${cols}x${rows}`));
+    container = document.createElement('div');
+    document.body.appendChild(container);
+
+    pty.mount(container, { cols: 80, rows: 24 });
+    expect(events).toEqual(['backend:80x24', 'grid:80x24']);
+
+    // The grid can already match while a newly connected backend still needs its size.
+    events.length = 0;
+    pty.mount(container, { cols: 80, rows: 24 });
+    expect(events).toEqual(['backend:80x24']);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+
+  it('keeps mixed Chinese and ASCII text within the last terminal column', async () => {
+    pty = new FrontendPty('pane-mixed-width', undefined, undefined, undefined, {
+      connect: () => () => {},
+    });
+    container = document.createElement('div');
+    container.style.width = '800px';
+    container.style.height = '400px';
+    document.body.appendChild(container);
+    pty.mount(container, { cols: 80, rows: 24 });
+    await new Promise<void>((resolve) => pty!.terminal.write(`${'中文'.repeat(10)}${'A'.repeat(40)}`, resolve));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const row = container.querySelector<HTMLElement>('.xterm-rows > div');
+    expect(row).not.toBeNull();
+    const range = document.createRange();
+    range.selectNodeContents(row!);
+    const textRight = range.getBoundingClientRect().right;
+    const rowRight = row!.getBoundingClientRect().right;
+    expect(textRight).toBeLessThanOrEqual(rowRight + 1);
+  });
+
+  it('fits the grid and updates the backend when a split pane narrows', async () => {
+    const backend: Array<[number, number]> = [];
+    pty = new FrontendPty('pane-real-resize', undefined, undefined, undefined, {
+      connect: () => () => {},
+      resize: (cols, rows) => backend.push([cols, rows]),
+    });
+    const sink = createPaneDimensionSink();
+    container = document.createElement('div');
+    container.style.width = '1000px';
+    container.style.height = '400px';
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <PaneDimensionProvider sink={sink}>
+          <PaneSizingContextProvider sessionIds={[pty!.sessionId]}>
+            <PtyPane
+              attachments={createWorkspaceTerminalAttachments('workspace-1')}
+              pty={pty!}
+              sessionId={pty!.sessionId}
+              workspaceId="workspace-1"
+            />
+          </PaneSizingContextProvider>
+        </PaneDimensionProvider>
+      );
+    });
+    await expect.poll(() => backend.length).toBeGreaterThan(0);
+    const initialCols = pty.terminal.cols;
+    container.style.width = '500px';
+    await expect.poll(() => pty!.terminal.cols).toBeLessThan(initialCols);
+    await expect.poll(() => backend.at(-1)).toEqual([pty!.terminal.cols, pty!.terminal.rows]);
+    const screen = container.querySelector<HTMLElement>('.xterm-screen');
+    const terminal = container.querySelector<HTMLElement>('[data-terminal-container]');
+    expect(screen).not.toBeNull();
+    expect(terminal).not.toBeNull();
+    expect(screen!.getBoundingClientRect().right).toBeLessThanOrEqual(
+      terminal!.getBoundingClientRect().right - TERMINAL_PADDING_PX + 1
+    );
   });
 
   it('resizes the terminal and the PTY on the same cols for a width burst', async () => {

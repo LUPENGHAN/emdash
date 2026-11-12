@@ -391,15 +391,15 @@ export class FrontendPty {
 
   /**
    * Append ownedContainer to a visible mount target.
-   * If targetDims are provided the terminal is resized BEFORE the appendChild
-   * to eliminate the flash caused by a post-mount resize.
+   * If targetDims are provided, synchronize the PTY and terminal before
+   * appendChild to avoid displaying a grid with stale backend dimensions.
    */
   mount(mountTarget: HTMLElement, targetDims?: { cols: number; rows: number }): void {
-    if (
-      targetDims &&
-      (this.terminal.cols !== targetDims.cols || this.terminal.rows !== targetDims.rows)
-    ) {
-      this.terminal.resize(targetDims.cols, targetDims.rows);
+    if (targetDims) {
+      this.resizeBackend(targetDims.cols, targetDims.rows);
+      if (this.terminal.cols !== targetDims.cols || this.terminal.rows !== targetDims.rows) {
+        this.terminal.resize(targetDims.cols, targetDims.rows);
+      }
     }
     mountTarget.appendChild(this.ownedContainer);
     // Force a repaint after reparenting in the DOM.
