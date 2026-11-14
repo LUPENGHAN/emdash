@@ -57,11 +57,6 @@ export function apiProviders(config: Document): ApiProvider[] {
       !['http:', 'https:'].includes(parsed.protocol)
     )
       throw new Error('Provider URL must be HTTP or HTTPS without embedded credentials.');
-    if (
-      parsed.protocol === 'http:' &&
-      !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
-    )
-      throw new Error('Use HTTPS for remote providers.');
     const modelMap: Record<string, string> = {};
     const contextWindows: Record<string, number> = {};
     for (const item of Array.isArray(raw.models) ? raw.models : []) {

@@ -36,8 +36,6 @@ export function gatewayProviders(inventory: ProviderCredential[]): ApiProvider[]
         !['http:', 'https:'].includes(url.protocol)
       )
         throw new Error(`Invalid provider URL: ${provider.name}`);
-      if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
-        throw new Error(`Use HTTPS for ${provider.name}.`);
     }
     return [
       {

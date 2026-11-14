@@ -18,6 +18,11 @@ settings and remain encrypted at rest. Flexible agents can choose a default laun
 protocol; Codex stays on Responses and Claude Code on Messages. Changing an existing
 agent's protocol requires a restart; URL/key updates apply to subsequent routed calls.
 
+Explicitly configured provider URLs accept HTTP as well as HTTPS, including internal
+hosts. HTTP sends API keys and request contents without transport encryption; use it
+only over a trusted network. URLs with embedded credentials, query strings, fragments,
+or schemes other than HTTP/HTTPS are rejected.
+
 ## Build and verification
 
 Developers need Go 1.27.1 and the repository's pinned pnpm toolchain. End users receive
