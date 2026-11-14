@@ -33,12 +33,12 @@ function setup(initial: ModelProvider[], keys: Record<string, string>) {
       state.providers = providers;
     },
     keys: {
-      read: async (id) => state.keys[id] ?? null,
-      set: async (id, key) => {
-        state.keys[id] = key;
+      read: async (id, protocol) => state.keys[protocol ? `${id}:${protocol}` : id] ?? null,
+      set: async (id, key, protocol) => {
+        state.keys[protocol ? `${id}:${protocol}` : id] = key;
       },
-      clear: async (id) => {
-        delete state.keys[id];
+      clear: async (id, protocol) => {
+        delete state.keys[protocol ? `${id}:${protocol}` : id];
       },
     },
     pickExportPath: async () => '/out.json',
@@ -53,6 +53,36 @@ function setup(initial: ModelProvider[], keys: Record<string, string>) {
 }
 
 describe('provider transfer', () => {
+  it('round-trips protocol addresses and keys while keeping keys out of the import preview', async () => {
+    const multi: ModelProvider = {
+      ...api('a'),
+      endpoints: {
+        anthropic: 'https://messages.example',
+        'openai-responses': 'https://responses.example/v1',
+      },
+    };
+    const { state, transfer } = setup([multi], { a: 'shared', 'a:anthropic': 'messages-key' });
+    await transfer.exportProviders({ providerIds: ['a'], includeKeys: true });
+    const body = state.files.get('/out.json')!;
+    expect(parseProviderExport(body).entries[0]).toMatchObject({
+      provider: multi,
+      apiKey: 'shared',
+      protocolKeys: { anthropic: 'messages-key' },
+    });
+    state.files.set('/in.json', body);
+    const preview = await transfer.readImport();
+    expect(JSON.stringify(preview)).not.toContain('messages-key');
+    state.keys = {};
+    await transfer.importProviders({
+      token: preview!.token,
+      providerIds: ['a'],
+      includeKeys: true,
+    });
+    expect(state.keys).toEqual({ a: 'shared', 'a:anthropic': 'messages-key' });
+    await transfer.exportProviders({ providerIds: ['a'], includeKeys: false });
+    expect(state.files.get('/out.json')).not.toContain('messages-key');
+  });
+
   it('exports only the chosen API providers, with keys only when asked', async () => {
     const { state, modes, transfer } = setup([api('a'), api('b'), account], { a: 'sk-a' });
     await transfer.exportProviders({ providerIds: ['a', 'work'], includeKeys: false });

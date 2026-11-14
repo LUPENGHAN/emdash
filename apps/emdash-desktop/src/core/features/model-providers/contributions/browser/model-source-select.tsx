@@ -1,7 +1,9 @@
 import { Field, Select } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
+import { useGatewayStatus } from '@core/features/model-gateway/api/browser/use-gateway';
 import {
   defaultSourceLabel,
+  providerRoutingSources,
   isProviderCapableAgent,
   providerSupportsAgent,
   sourcesForAgent,
@@ -20,13 +22,23 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
   agentId,
   value,
   onChange,
+  remote = false,
 }: {
   agentId: string | null | undefined;
+  remote?: boolean;
   value: ModelSourceValue;
   onChange: (value: ModelSourceValue) => void;
 }) {
   const { value: settings } = useAppSettingsKey('modelProviders');
-  const providers = settings?.providers ?? [];
+  const gateway = useGatewayStatus();
+  const providers = remote
+    ? [...(settings?.providers ?? [])]
+    : providerRoutingSources(settings?.providers ?? [], gateway.data?.providers ?? []);
+  const direct = settings?.providers?.find(
+    (provider) => provider.id === value.modelSource && !provider.account
+  );
+  if (direct && !providers.some((p) => p.id === direct.id))
+    providers.push({ ...direct, name: `${direct.name} (direct)` });
   if (!agentId || !isProviderCapableAgent(agentId)) return null;
   if (providers.length === 0) {
     return (

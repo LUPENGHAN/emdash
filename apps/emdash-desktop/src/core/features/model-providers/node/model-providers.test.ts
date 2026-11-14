@@ -14,23 +14,24 @@ import {
   providerEndpoints,
   providerModelsAuth,
   providerModelsUrl,
+  providerProtocolForAgent,
   providerSupportsAgent,
   sourceOverrideOf,
   usesProviderSource,
   type CodexReasoning,
   type ModelProvider,
 } from '../api';
-import { agentProviderFilePath, removeLegacyProviderEntries } from './agent-provider-files';
-import { createEffectiveAgentConfig, ModelSourceUnavailableError } from './effective-agent-config';
-import { createModelProviderKeys } from './provider-keys';
+import { AGENT_MODEL_ENV } from '../api/launch-env';
 import {
-  AGENT_MODEL_ENV,
   AGENT_PROVIDER_ENV,
   buildSourceLaunch,
   PROVIDER_KEY_ENV,
   type SourceLaunch,
   userCodexEfforts,
-} from './source-launch';
+} from '../api/node/source-launch';
+import { agentProviderFilePath, removeLegacyProviderEntries } from './agent-provider-files';
+import { createEffectiveAgentConfig, ModelSourceUnavailableError } from './effective-agent-config';
+import { createModelProviderKeys } from './provider-keys';
 
 const provider: ModelProvider = {
   id: 'NewAPI',
@@ -45,6 +46,68 @@ function piProvider(launch: SourceLaunch | null) {
 }
 
 describe('base urls', () => {
+  it('inherits the shared base and selects Chat, Responses or Messages for flexible agents', () => {
+    const multi: ModelProvider = {
+      ...provider,
+      baseUrl: 'https://shared.example/v1',
+      endpoints: { anthropic: '', 'openai-chat': '', 'openai-responses': '' },
+    };
+    expect(providerEndpoints(multi)).toEqual({
+      anthropic: { url: 'https://shared.example', auth: 'bearer' },
+      openai: { url: 'https://shared.example/v1', api: 'both' },
+    });
+    for (const preferredProtocol of ['anthropic', 'openai-chat', 'openai-responses'] as const) {
+      const selected = { ...multi, preferredProtocol };
+      expect(providerProtocolForAgent(selected, 'pi')).toBe(preferredProtocol);
+      expect(providerProtocolForAgent(selected, 'codex')).toBe('openai-responses');
+      expect(providerProtocolForAgent(selected, 'claude')).toBe('anthropic');
+      expect(piProvider(buildSourceLaunch('pi', selected, 'fake')).api).toBe(
+        preferredProtocol === 'anthropic'
+          ? 'anthropic-messages'
+          : preferredProtocol === 'openai-chat'
+            ? 'openai-completions'
+            : 'openai-responses'
+      );
+      const config = JSON.parse(
+        buildSourceLaunch('opencode', selected, 'fake')!.env.OPENCODE_CONFIG_CONTENT
+      );
+      expect(config.provider['emdash-newapi'].npm).toBe(
+        preferredProtocol === 'anthropic'
+          ? '@ai-sdk/anthropic'
+          : preferredProtocol === 'openai-chat'
+            ? '@ai-sdk/openai-compatible'
+            : '@ai-sdk/openai'
+      );
+    }
+  });
+
+  it('keeps one provider with separate protocol bases and launches each agent on its API', () => {
+    const multi: ModelProvider = {
+      ...provider,
+      endpoints: {
+        anthropic: 'https://messages.example/anthropic',
+        'openai-chat': 'https://chat.example/api/v4',
+        'openai-responses': 'https://responses.example/v1',
+      },
+    };
+    expect(buildSourceLaunch('claude', multi, 'fake')?.env.ANTHROPIC_BASE_URL).toBe(
+      'https://messages.example/anthropic'
+    );
+    expect(
+      JSON.parse(buildSourceLaunch('codex', multi, 'fake')!.env.CODEX_CONFIG).model_providers[
+        'emdash-newapi'
+      ].base_url
+    ).toBe('https://responses.example/v1');
+    expect(piProvider(buildSourceLaunch('pi', multi, 'fake')).baseUrl).toBe(
+      'https://chat.example/api/v4'
+    );
+    expect(providerModelsUrl(multi)).toBe('https://chat.example/api/v4/models');
+    const chatOnly = { ...multi, endpoints: { 'openai-chat': 'https://chat.example/v1' } };
+    expect(providerSupportsAgent(chatOnly, 'codex').ok).toBe(false);
+    expect(providerSupportsAgent(chatOnly, 'claude').ok).toBe(false);
+    expect(modelProviderSchema.safeParse({ ...multi, endpoints: {} }).success).toBe(false);
+  });
+
   it('normalizes to an OpenAI /v1 base and an Anthropic root', () => {
     expect(openAiBaseUrl('http://h:3000')).toBe('http://h:3000/v1');
     expect(openAiBaseUrl('http://h:3000/v1/')).toBe('http://h:3000/v1');
@@ -687,6 +750,20 @@ describe('createModelProviderKeys', () => {
     await keys.set('p', '  sk-1 ');
     expect(await keys.read('p')).toBe('sk-1');
     await keys.clear('p');
+    expect(await keys.hasKey('p')).toBe(false);
+  });
+
+  it('stores and reads protocol overrides independently from the shared key', async () => {
+    const keys = createModelProviderKeys(memoryStore());
+    await keys.set('p', 'shared');
+    await keys.set('p', 'messages', 'anthropic');
+    expect(await keys.read('p')).toBe('shared');
+    expect(await keys.read('p', 'anthropic')).toBe('messages');
+    expect(await keys.read('p', 'openai-responses')).toBeNull();
+    await keys.clear('p');
+    expect(await keys.hasKey('p')).toBe(true);
+    expect(await keys.read('p', 'anthropic')).toBe('messages');
+    await keys.clear('p', 'anthropic');
     expect(await keys.hasKey('p')).toBe(false);
   });
 

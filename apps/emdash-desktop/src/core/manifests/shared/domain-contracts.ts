@@ -17,6 +17,10 @@ import { promptLibraryContract, promptLibraryDomain } from '@core/features/libra
 import { machinesContract, machinesDomain } from '@core/features/machines/api';
 import { mcpContract, mcpDomain } from '@core/features/mcp/api';
 import { memoryContract, memoryDomain } from '@core/features/memory/api/contract';
+import {
+  modelGatewayContract,
+  modelGatewayDomain,
+} from '@core/features/model-gateway/api/contract';
 import { previewServersContract, previewServersDomain } from '@core/features/preview-servers/api';
 import { projectsDomain, projectsWireContract } from '@core/features/projects/api';
 import {
@@ -62,6 +66,7 @@ import { appSettingsContract, appSettingsDomain } from '@core/services/settings/
 import { sshContract, sshDomain } from '@core/services/ssh/api';
 
 export const desktopDomainContracts = {
+  [modelGatewayDomain]: modelGatewayContract,
   [usageDomain]: usageContract,
   [usageStatsDomain]: usageStatsContract,
   [accountDomain]: accountContract,

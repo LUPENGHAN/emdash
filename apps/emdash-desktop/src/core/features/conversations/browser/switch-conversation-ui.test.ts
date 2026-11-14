@@ -3,8 +3,21 @@ import type { Conversation } from '@core/primitives/conversations/api';
 import {
   canSwitchConversationUi,
   switchConversationUiCommands,
+  switchConversationUi,
   switchTarget,
 } from './switch-conversation-ui';
+
+const gateway = vi.hoisted(() => ({ pending: false }));
+vi.mock('@core/features/model-gateway/api/browser/client', () => ({
+  getModelGatewayClient: async () => ({
+    route: async () => ({
+      sourceId: 'gateway:applied',
+      model: 'test',
+      ...(gateway.pending ? { pending: { sourceId: 'gateway:pending', model: 'test' } } : {}),
+    }),
+  }),
+}));
+import * as restartModule from './restart-conversation';
 
 vi.mock('@core/features/conversations/api/browser/stores/conversation-registry', () => ({
   conversationRegistry: { get: vi.fn() },
@@ -33,6 +46,36 @@ vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
 }));
 
 describe('canSwitchConversationUi', () => {
+  it.each([false, true])(
+    'preserves the gateway route when changing UI (pending: %s)',
+    async (pending) => {
+      gateway.pending = pending;
+      const source = conversation({
+        providerId: 'codex',
+        modelSource: 'gateway:initial',
+        sourceModel: 'test',
+        sessionId: 'thread',
+      });
+      const restart = vi
+        .spyOn(restartModule, 'restartConversation')
+        .mockResolvedValue(conversation({ id: 'replacement' }));
+      try {
+        await switchConversationUi(source);
+        expect(restart).toHaveBeenCalledWith(
+          source,
+          expect.objectContaining({
+            modelSource: pending ? 'gateway:pending' : 'gateway:applied',
+            sourceModel: 'test',
+          }),
+          { type: 'acp' }
+        );
+      } finally {
+        restart.mockRestore();
+        gateway.pending = false;
+      }
+    }
+  );
+
   it('offers terminal conversations whose real session id is known', () => {
     expect(canSwitchConversationUi(conversation({ sessionId: 'native-1' }))).toBe(true);
     expect(

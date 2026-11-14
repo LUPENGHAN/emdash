@@ -4,6 +4,8 @@ import path from 'node:path';
 import { z } from 'zod';
 import {
   describeProvider,
+  PROVIDER_PROTOCOLS,
+  type ProviderProtocol,
   modelProviderSchema,
   type ModelProvider,
   type ModelProviderKeys,
@@ -18,9 +20,16 @@ const exportFileSchema = z.object({
   providers: z.array(z.unknown()),
 });
 
-const exportedProviderSchema = modelProviderSchema.extend({ apiKey: z.string().optional() });
+const exportedProviderSchema = modelProviderSchema.extend({
+  apiKey: z.string().optional(),
+  protocolKeys: z.partialRecord(z.enum(PROVIDER_PROTOCOLS), z.string()).optional(),
+});
 
-type ImportEntry = { provider: ModelProvider; apiKey: string | null };
+type ImportEntry = {
+  provider: ModelProvider;
+  apiKey: string | null;
+  protocolKeys?: Partial<Record<ProviderProtocol, string>>;
+};
 
 export type ProviderTransferDeps = {
   getProviders: () => Promise<ModelProvider[]>;
@@ -56,7 +65,23 @@ export function createProviderTransfer(deps: ProviderTransferDeps): ModelProvide
       const providers = await Promise.all(
         chosen.map(async (provider) => {
           const apiKey = input.includeKeys ? await deps.keys.read(provider.id) : null;
-          return apiKey ? { ...provider, apiKey } : provider;
+          const protocolKeys = input.includeKeys
+            ? Object.fromEntries(
+                (
+                  await Promise.all(
+                    PROVIDER_PROTOCOLS.map(
+                      async (protocol) =>
+                        [protocol, await deps.keys.read(provider.id, protocol)] as const
+                    )
+                  )
+                ).filter((entry): entry is readonly [ProviderProtocol, string] => Boolean(entry[1]))
+              )
+            : {};
+          return {
+            ...provider,
+            ...(apiKey && { apiKey }),
+            ...(Object.keys(protocolKeys).length && { protocolKeys }),
+          };
         })
       );
       const body = { format: PROVIDER_EXPORT_FORMAT, version: 1, providers };
@@ -85,14 +110,14 @@ export function createProviderTransfer(deps: ProviderTransferDeps): ModelProvide
       return {
         token: pending.token,
         skipped,
-        providers: entries.map(({ provider, apiKey }) => {
+        providers: entries.map(({ provider, apiKey, protocolKeys }) => {
           const current = existing.get(provider.id);
           return {
             id: provider.id,
             name: provider.name,
             description: describeProvider(provider),
             models: provider.models.length,
-            hasKey: apiKey !== null,
+            hasKey: apiKey !== null || Object.values(protocolKeys ?? {}).some(Boolean),
             exists: current !== undefined,
             previousUrl: current ? changedAddress(current, provider) : null,
           };
@@ -111,25 +136,30 @@ export function createProviderTransfer(deps: ProviderTransferDeps): ModelProvide
       const current = await deps.getProviders();
       const next = [...current];
       const staleKeys: string[] = [];
-      for (const { provider, apiKey } of chosen) {
+      for (const { provider } of chosen) {
         const at = next.findIndex((candidate) => candidate.id === provider.id);
         const replaced = at === -1 ? undefined : next[at];
         if (replaced?.account) continue;
         if (at === -1) next.push(provider);
         else next[at] = provider;
         // The saved key must not follow a provider to an address the file chose.
-        const keyImported = input.includeKeys && apiKey !== null;
-        if (replaced && !keyImported && changedAddress(replaced, provider)) {
+        if (replaced && changedAddress(replaced, provider)) {
           staleKeys.push(provider.id);
         }
       }
       // Cleared before the new addresses are saved: a failure in between loses a key
       // rather than sending it somewhere new.
-      for (const id of staleKeys) await deps.keys.clear(id);
+      for (const id of staleKeys) {
+        await deps.keys.clear(id);
+        for (const protocol of PROVIDER_PROTOCOLS) await deps.keys.clear(id, protocol);
+      }
       await deps.saveProviders(next);
       if (input.includeKeys) {
-        for (const { provider, apiKey } of chosen) {
+        for (const { provider, apiKey, protocolKeys } of chosen) {
           if (apiKey) await deps.keys.set(provider.id, apiKey);
+          for (const protocol of PROVIDER_PROTOCOLS)
+            if (protocolKeys?.[protocol])
+              await deps.keys.set(provider.id, protocolKeys[protocol]!, protocol);
         }
       }
       return { imported: chosen.length };
@@ -143,6 +173,12 @@ export function createProviderTransfer(deps: ProviderTransferDeps): ModelProvide
  */
 function changedAddress(previous: ModelProvider, next: ModelProvider): string | null {
   const trim = (url: string | undefined) => url?.trim().replace(/\/+$/, '') ?? '';
+  if (
+    PROVIDER_PROTOCOLS.some(
+      (protocol) => trim(previous.endpoints?.[protocol]) !== trim(next.endpoints?.[protocol])
+    )
+  )
+    return previous.baseUrl;
   if (trim(previous.baseUrl) !== trim(next.baseUrl)) return previous.baseUrl;
   if (trim(previous.modelsUrl) !== trim(next.modelsUrl)) {
     return previous.modelsUrl ?? previous.baseUrl;
@@ -184,9 +220,13 @@ export function parseProviderExport(text: string): { entries: ImportEntry[]; ski
       skipped += 1;
       continue;
     }
-    const { apiKey, ...provider } = parsed.data;
+    const { apiKey, protocolKeys, ...provider } = parsed.data;
     seen.add(provider.id);
-    entries.push({ provider, apiKey: apiKey?.trim() || null });
+    entries.push({
+      provider,
+      apiKey: apiKey?.trim() || null,
+      ...(protocolKeys && { protocolKeys }),
+    });
   }
   return { entries, skipped };
 }

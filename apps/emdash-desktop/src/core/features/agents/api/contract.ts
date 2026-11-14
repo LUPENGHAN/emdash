@@ -28,6 +28,7 @@ import {
 import { z } from 'zod';
 import {
   providerImportPreviewSchema,
+  PROVIDER_PROTOCOLS,
   type AgentUsage,
   type UsageLimits,
 } from '@core/features/model-providers/api';
@@ -171,18 +172,28 @@ export const agentsContract = defineContract({
   loginOutput: liveLog({
     key: providerInputSchema,
   }),
-  // Model provider API keys (encrypted store). Keys can be set, cleared and checked from
-  // the renderer, never read back.
+  // Provider keys remain encrypted at rest; settings can explicitly read and copy them.
   modelProviderKeyStatus: procedure({
     input: z.object({ providerId: z.string() }),
     output: z.object({ hasKey: z.boolean() }),
   }),
+  readModelProviderKeys: procedure({
+    input: z.object({ providerId: z.string() }),
+    output: z.object({
+      shared: z.string().nullable(),
+      protocols: z.partialRecord(z.enum(PROVIDER_PROTOCOLS), z.string().nullable()),
+    }),
+  }),
   setModelProviderKey: procedure({
-    input: z.object({ providerId: z.string(), apiKey: z.string().min(1) }),
+    input: z.object({
+      providerId: z.string(),
+      apiKey: z.string().min(1),
+      protocol: z.enum(PROVIDER_PROTOCOLS).optional(),
+    }),
     output: z.void(),
   }),
   clearModelProviderKey: procedure({
-    input: z.object({ providerId: z.string() }),
+    input: z.object({ providerId: z.string(), protocol: z.enum(PROVIDER_PROTOCOLS).optional() }),
     output: z.void(),
   }),
   /** Writes the chosen API providers (and, when asked, their keys) to a file the user picks. */

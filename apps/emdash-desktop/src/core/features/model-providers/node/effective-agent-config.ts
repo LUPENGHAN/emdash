@@ -4,18 +4,26 @@ import {
   isProviderCapableAgent,
   MODEL_SOURCE_UNAVAILABLE_HINT,
   type ModelProvider,
+  type ProviderProtocol,
+  providerProtocolForAgent,
   type ModelSourceOverride,
   type OfficialAccount,
 } from '../api';
-import type { CodexModelCatalog, CodexModelInfo } from './codex-model-catalog';
+import type { CodexModelCatalog, CodexModelInfo } from '../api/node/codex-launch';
+import { buildSourceLaunch, type ExtensionProviderAgent } from '../api/node/source-launch';
 import { ACCOUNT_HOME_ENV } from './official-accounts';
-import { buildSourceLaunch, type ExtensionProviderAgent } from './source-launch';
 
 export type EffectiveAgentConfigDeps = {
   getAgentConfig: (agentId: string) => Promise<ProviderCustomConfig | undefined>;
   getProviders: () => Promise<ModelProvider[]>;
-  getApiKey: (providerId: string) => Promise<string | null>;
+  prepareGateway?: (
+    sourceId: string,
+    model: string | undefined,
+    conversationId?: string
+  ) => Promise<{ provider: ModelProvider; apiKey: string }>;
+  getApiKey: (providerId: string, protocol?: ProviderProtocol) => Promise<string | null>;
   prepareAgentProvider: (agent: ExtensionProviderAgent) => Promise<void>;
+  ensureCodexAppServerWrapper?: () => Promise<void>;
   ensureCodexModelCatalog?: (catalog: CodexModelCatalog) => Promise<void>;
   /** Codex's cached model metadata, for the effort a model it knows starts with. */
   readKnownCodexModels?: () => Promise<CodexModelInfo[]>;
@@ -35,12 +43,25 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
     override?: ModelSourceOverride
   ): Promise<ProviderCustomConfig | undefined> => {
     const config = await deps.getAgentConfig(agentId);
-    const sourceId = override ? override.modelSource : config?.modelSource;
+    const sourceId =
+      override?.modelSource !== undefined ? override.modelSource : config?.modelSource;
     if (!sourceId || !isProviderCapableAgent(agentId)) return withCodexContext(agentId, config);
 
     // A chosen provider that cannot be used stops the launch: falling back to the
     // agent's own login would silently spend the user's subscription instead.
-    const provider = (await deps.getProviders()).find((candidate) => candidate.id === sourceId);
+    const gateway = sourceId.startsWith('gateway:');
+    if (gateway && !deps.prepareGateway)
+      throw new ModelSourceUnavailableError('This agent cannot use the local gateway.');
+    const target = gateway
+      ? await deps.prepareGateway!(
+          sourceId,
+          override?.modelSource !== undefined ? override.sourceModel : config?.sourceModel,
+          override?.conversationId
+        )
+      : undefined;
+    const provider =
+      target?.provider ??
+      (await deps.getProviders()).find((candidate) => candidate.id === sourceId);
     if (!provider) {
       throw new ModelSourceUnavailableError(
         'The provider this agent is set to run on was deleted.'
@@ -57,7 +78,11 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
         env: { ...config?.env, [ACCOUNT_HOME_ENV[provider.account.agent]]: home },
       });
     }
-    const apiKey = await deps.getApiKey(provider.id);
+    const keyProtocol = providerProtocolForAgent(provider, agentId);
+    const apiKey =
+      target?.apiKey ??
+      (await deps.getApiKey(provider.id, keyProtocol)) ??
+      (await deps.getApiKey(provider.id));
     if (!apiKey) {
       throw new ModelSourceUnavailableError(
         `The provider “${provider.name}” has no API key saved.`
@@ -66,7 +91,10 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
 
     // No model picked: the provider's first model, not the agent's own default (a Claude
     // or GPT id the provider may not serve).
-    const model = (override ? override.sourceModel : config?.sourceModel) || provider.models[0];
+    const model = target
+      ? provider.models[0]
+      : (override?.modelSource !== undefined ? override.sourceModel : config?.sourceModel) ||
+        provider.models[0];
     const known = agentId === 'codex' ? await deps.readKnownCodexModels?.() : undefined;
     const launch = buildSourceLaunch(agentId, provider, apiKey, model || undefined, known);
     if (!launch) {
@@ -75,6 +103,7 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
       );
     }
     if (launch.extensionAgent) await deps.prepareAgentProvider(launch.extensionAgent);
+    if (launch.codexWrapper) await deps.ensureCodexAppServerWrapper?.();
     if (launch.codexCatalog) {
       await deps.ensureCodexModelCatalog?.(launch.codexCatalog);
     } else if (agentId === 'codex' && provider.models.length > 0) {

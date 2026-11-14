@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-/** The wire protocols a provider can speak; each provider speaks one. */
+/** Wire protocols supported by API providers. */
 export const PROVIDER_PROTOCOLS = ['anthropic', 'openai-chat', 'openai-responses'] as const;
 export type ProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number];
 
@@ -61,7 +61,7 @@ export function defaultAfterRemoving(
 
 /**
  * A model provider the user configured once and can route agents through: any API that
- * speaks one of {@link PROVIDER_PROTOCOLS} (a vendor, a gateway such as new-api, …). Its
+ * speaks one or more of {@link PROVIDER_PROTOCOLS} (a vendor, a gateway such as new-api, …). Its
  * API key is never part of this record; it lives in the encrypted secrets store under
  * {@link modelProviderSecretKey}.
  */
@@ -75,6 +75,16 @@ export const modelProviderSchema = z.object({
    * Empty for an official account.
    */
   baseUrl: z.string(),
+  preferredProtocol: z.enum(PROVIDER_PROTOCOLS).optional(),
+  /** Explicit per-protocol bases. Empty bases inherit baseUrl. Present entries are the only supported protocols. */
+  endpoints: z
+    .object({
+      anthropic: z.string().trim().optional(),
+      'openai-chat': z.string().trim().optional(),
+      'openai-responses': z.string().trim().optional(),
+    })
+    .refine((value) => Object.keys(value).length > 0, 'Add at least one protocol URL')
+    .optional(),
   /**
    * Set when this is not an API but another sign-in of an agent's own vendor account:
    * the agent runs with its own login, kept in a config dir of its own for this account.
@@ -84,6 +94,8 @@ export const modelProviderSchema = z.object({
   modelsUrl: z.string().optional(),
   /** The models agents may use: the ones picked from the upstream list or typed in. */
   models: z.array(z.string()).default([]),
+  /** Public model id to upstream model id, used by the local router. */
+  modelAliases: z.record(z.string(), z.string()).optional(),
   /**
    * Context window in tokens, per model, where an agent would otherwise guess it.
    */
@@ -197,7 +209,8 @@ export function defaultSourceLabel(agentId: string): string {
   }
 }
 
-export function modelProviderSecretKey(providerId: string): string {
+export function modelProviderSecretKey(providerId: string, protocol?: ProviderProtocol): string {
+  if (protocol) return `model-provider-protocol:${JSON.stringify([providerId, protocol])}`;
   return `model-provider:${providerId}:api-key`;
 }
 
@@ -228,14 +241,45 @@ function openAiBaseAsTyped(baseUrl: string): string {
 
 export type ProviderEndpoints = {
   anthropic?: { url: string; auth: 'bearer' | 'api-key' };
-  openai?: { url: string; api: 'chat' | 'responses' | 'both' };
+  openai?: { url: string; api: 'chat' | 'responses' | 'both'; responsesUrl?: string };
 };
 
 /** The APIs a provider speaks, with normalized URLs. */
 export function providerEndpoints(
-  provider: Pick<ModelProvider, 'protocol' | 'baseUrl'> & Partial<Pick<ModelProvider, 'account'>>
+  provider: Pick<ModelProvider, 'protocol' | 'baseUrl'> &
+    Partial<Pick<ModelProvider, 'account' | 'endpoints'>>
 ): ProviderEndpoints {
   if ('account' in provider && provider.account) return {};
+  if (provider.endpoints) {
+    const bases = provider.endpoints;
+    const chat =
+      bases['openai-chat'] !== undefined
+        ? openAiBaseAsTyped(bases['openai-chat'] || provider.baseUrl)
+        : undefined;
+    const responses =
+      bases['openai-responses'] !== undefined
+        ? openAiBaseAsTyped(bases['openai-responses'] || provider.baseUrl)
+        : undefined;
+    const anthropic =
+      bases.anthropic !== undefined &&
+      providerEndpoints({ protocol: 'anthropic', baseUrl: bases.anthropic || provider.baseUrl })
+        .anthropic;
+    return {
+      ...(anthropic && { anthropic }),
+      ...((chat || responses) && {
+        openai: {
+          url: chat || responses!,
+          api:
+            chat && responses
+              ? ('both' as const)
+              : chat
+                ? ('chat' as const)
+                : ('responses' as const),
+          ...(chat && responses && chat !== responses && { responsesUrl: responses }),
+        },
+      }),
+    };
+  }
   const base = provider.baseUrl;
   switch (provider.protocol) {
     case undefined:
@@ -258,7 +302,8 @@ export function providerEndpoints(
 
 /** The upstream models list: the provider's own URL, else the protocol's usual one. */
 export function providerModelsUrl(
-  provider: Pick<ModelProvider, 'protocol' | 'baseUrl' | 'modelsUrl'>
+  provider: Pick<ModelProvider, 'protocol' | 'baseUrl' | 'modelsUrl'> &
+    Partial<Pick<ModelProvider, 'endpoints'>>
 ): string {
   if (provider.modelsUrl?.trim()) return provider.modelsUrl.trim();
   const { openai, anthropic } = providerEndpoints(provider);
@@ -267,12 +312,11 @@ export function providerModelsUrl(
 
 /** How the models request sends the key. */
 export function providerModelsAuth(
-  provider: Pick<ModelProvider, 'protocol' | 'baseUrl'>
+  provider: Pick<ModelProvider, 'protocol' | 'baseUrl'> & Partial<Pick<ModelProvider, 'endpoints'>>
 ): 'bearer' | 'anthropic-bearer' | 'anthropic-api-key' {
-  if (provider.protocol !== 'anthropic') return 'bearer';
-  return providerEndpoints(provider).anthropic?.auth === 'api-key'
-    ? 'anthropic-api-key'
-    : 'anthropic-bearer';
+  const endpoints = providerEndpoints(provider);
+  if (endpoints.openai) return 'bearer';
+  return endpoints.anthropic?.auth === 'api-key' ? 'anthropic-api-key' : 'anthropic-bearer';
 }
 
 /** Whether an agent can run on a provider, and if not, why (for the pickers). */
@@ -298,9 +342,37 @@ export function providerSupportsAgent(
   }
 }
 
+/** Protocol selected for a new agent process; native single-protocol agents stay fixed. */
+export function providerProtocolForAgent(
+  provider: ModelProvider,
+  agentId: string
+): ProviderProtocol {
+  if (agentId === 'claude') return 'anthropic';
+  if (agentId === 'codex') return 'openai-responses';
+  const endpoints = providerEndpoints(provider);
+  const preferred = provider.preferredProtocol;
+  if (preferred === 'anthropic' && endpoints.anthropic) return preferred;
+  if (preferred === 'openai-chat' && endpoints.openai && endpoints.openai.api !== 'responses')
+    return preferred;
+  if (preferred === 'openai-responses' && endpoints.openai && endpoints.openai.api !== 'chat')
+    return preferred;
+  return endpoints.openai
+    ? endpoints.openai.api === 'responses'
+      ? 'openai-responses'
+      : 'openai-chat'
+    : 'anthropic';
+}
+
 /** One line describing a provider's protocol and URL, for lists. */
 export function describeProvider(provider: ModelProvider): string {
   if (provider.account) return `${OFFICIAL_ACCOUNT_LABELS[provider.account.agent]} account`;
+  if (provider.endpoints)
+    return Object.entries(provider.endpoints)
+      .map(
+        ([protocol, url]) =>
+          `${PROVIDER_PROTOCOL_LABELS[protocol as ProviderProtocol]} · ${url || provider.baseUrl}`
+      )
+      .join(' · ');
   const protocol = provider.protocol
     ? PROVIDER_PROTOCOL_LABELS[provider.protocol]
     : 'Gateway (all protocols)';
@@ -349,10 +421,10 @@ export type ModelProviderTransfer = {
 
 /** Provider key operations the main process exposes (implemented over the secrets store). */
 export type ModelProviderKeys = {
-  read(providerId: string): Promise<string | null>;
+  read(providerId: string, protocol?: ProviderProtocol): Promise<string | null>;
   hasKey(providerId: string): Promise<boolean>;
-  set(providerId: string, apiKey: string): Promise<void>;
-  clear(providerId: string): Promise<void>;
+  set(providerId: string, apiKey: string, protocol?: ProviderProtocol): Promise<void>;
+  clear(providerId: string, protocol?: ProviderProtocol): Promise<void>;
   listModels(input: {
     providerId: string;
     url: string;
@@ -380,14 +452,24 @@ export function modelSourceUnavailableMessage(error: unknown): string | null {
  */
 export type OwnSource = { official: boolean; provider: string | null; model: string | null };
 
-export type ModelSourceOverride = { modelSource: string | null; sourceModel?: string };
+export type ModelSourceOverride = {
+  modelSource?: string | null;
+  sourceModel?: string;
+  conversationId?: string;
+};
 
 /** The conversation's own source choice, or undefined to use the agent's default. */
 export function sourceOverrideOf(
-  config: { modelSource?: string | null; sourceModel?: string } | null | undefined
+  config: { modelSource?: string | null; sourceModel?: string } | null | undefined,
+  conversationId?: string
 ): ModelSourceOverride | undefined {
-  if (!config || config.modelSource === undefined) return undefined;
-  return { modelSource: config.modelSource, sourceModel: config.sourceModel };
+  if (!config || config.modelSource === undefined)
+    return conversationId ? { conversationId } : undefined;
+  return {
+    modelSource: config.modelSource,
+    sourceModel: config.sourceModel,
+    ...(conversationId ? { conversationId } : {}),
+  };
 }
 
 /** A conversation's source: absent = agent default, null = own login, id = that provider. */
@@ -442,4 +524,18 @@ export function formatContextWindow(tokens: number): string {
   if (tokens % 1_000_000 === 0) return `${tokens / 1_000_000}m`;
   if (tokens % 1_000 === 0) return `${tokens / 1_000}k`;
   return String(tokens);
+}
+
+/** One visible source per configured provider, routed locally by default. */
+export function providerRoutingSources(
+  providers: ModelProvider[],
+  accounts: ModelProvider[] = []
+): ModelProvider[] {
+  const routed = providers.map((provider) =>
+    provider.account ? provider : { ...provider, id: `gateway:${provider.id}` }
+  );
+  return [
+    ...routed,
+    ...accounts.filter((account) => !routed.some((provider) => provider.id === account.id)),
+  ];
 }

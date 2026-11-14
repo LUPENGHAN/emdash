@@ -1,0 +1,384 @@
+import { execFile } from 'node:child_process';
+import { access, mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { secret, type Secret } from '@emdash/shared';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  ensureCodexModelCatalog,
+  codexModelCatalogPath,
+  codexAppServerWrapperPath,
+} from '@core/features/model-providers/api/node/codex-launch';
+import { buildSourceLaunch } from '@core/features/model-providers/api/node/source-launch';
+import type { GatewayUsage } from '../api/contract';
+import { startAcpTestClient } from './acp-test-client';
+import {
+  ModelGatewayService,
+  type GatewayRoute,
+  type GatewayDependencies,
+} from './gateway-service';
+
+function store<T>() {
+  const data = new Map<string, T>();
+  return {
+    getOrThrow: async (key: string) => data.get(key) ?? null,
+    setOrThrow: async (key: string, value: T) => {
+      data.set(key, structuredClone(value));
+    },
+    getAll: async () => Object.fromEntries(data),
+    clear: async () => {
+      data.clear();
+    },
+  };
+}
+const resources = resolve('../model-gateway/dist');
+const binary = join(
+  resources,
+  `${process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux'}-${process.arch}`,
+  process.platform === 'win32' ? 'model-gateway.exe' : 'model-gateway'
+);
+const built = await access(binary).then(
+  () => true,
+  () => false
+);
+const cleanup: Array<() => Promise<unknown>> = [];
+afterEach(async () => {
+  for (const dispose of cleanup.splice(0).reverse()) await dispose();
+});
+
+describe.runIf(built)('model gateway process integration', () => {
+  it('saves providers securely, keeps concurrent session routes isolated, resumes after a process stop, and retains usage', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'emdash-gateway-test-'));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const seen: Array<{
+      upstream: string;
+      model: string;
+      input: unknown;
+      authorization: string | undefined;
+    }> = [];
+    const backend = async (name: string) => {
+      const server = createServer((req, res) => {
+        void (async () => {
+          const parts = [];
+          for await (const part of req) parts.push(Buffer.from(part));
+          const payload = JSON.parse(Buffer.concat(parts).toString()) as {
+            model: string;
+            input: unknown;
+          };
+          seen.push({
+            upstream: name,
+            model: payload.model,
+            input: payload.input,
+            authorization: req.headers.authorization,
+          });
+          res.writeHead(200, { 'content-type': 'text/event-stream' });
+          const response = {
+            id: 'r',
+            object: 'response',
+            status: 'completed',
+            model: payload.model,
+            output: [
+              {
+                id: 'msg',
+                type: 'message',
+                role: 'assistant',
+                status: 'completed',
+                content: [{ type: 'output_text', text: name, annotations: [] }],
+              },
+            ],
+            usage: { input_tokens: 7, output_tokens: 3, total_tokens: 10 },
+          };
+          res.end(
+            `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response })}\n\n`
+          );
+        })().catch(() => res.destroy());
+      });
+      await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+      cleanup.push(
+        () =>
+          new Promise<void>((done) => {
+            server.closeAllConnections();
+            server.close(() => done());
+          })
+      );
+      const bound = server.address();
+      if (!bound || typeof bound === 'string') throw new Error('No listener');
+      return `http://127.0.0.1:${bound.port}`;
+    };
+    const a = await backend('A');
+    const b = await backend('B');
+    const vault = new Map<string, string>();
+    let idle = true;
+    let localConversation = true;
+    const routes = store<GatewayRoute>();
+    const ledger = store<GatewayUsage>();
+    let failLedger = false;
+    const deps: GatewayDependencies = {
+      binary,
+      inventory: async () => [
+        {
+          provider: {
+            id: 'provider-a',
+            name: new URL(a).host,
+            protocol: 'openai-responses',
+            baseUrl: a,
+            models: ['test'],
+            modelAliases: { test: 'upstream' },
+          },
+          apiKey: 'fake-provider-A',
+        },
+        {
+          provider: {
+            id: 'provider-b',
+            name: new URL(b).host,
+            protocol: 'openai-responses',
+            baseUrl: b,
+            models: ['test'],
+            modelAliases: { test: 'upstream' },
+          },
+          apiKey: 'fake-provider-B',
+        },
+      ],
+      dataDir: dir,
+      secrets: {
+        getSecret: async (key): Promise<Secret<string> | null> =>
+          vault.has(key) ? secret(vault.get(key)!, key) : null,
+        setSecret: async (key, value) => {
+          vault.set(key, value.expose());
+        },
+        deleteSecret: async (key) => {
+          vault.delete(key);
+        },
+      },
+      routes,
+      ledger: {
+        ...ledger,
+        setOrThrow: async (key, value) => {
+          if (failLedger) throw new Error('Simulated ledger failure');
+          await ledger.setOrThrow(key, value);
+        },
+      },
+      conversationIdle: async () => idle,
+      conversationLocal: async () => localConversation,
+    };
+    const service = new ModelGatewayService(deps);
+    cleanup.push(() => service.dispose());
+    await service.restore();
+    const status = await service.status();
+    expect(status.providers, JSON.stringify(status)).toHaveLength(2);
+    const providerA = status.providers.find((p) => p.name.includes(new URL(a).host))!;
+    const providerB = status.providers.find((p) => p.name.includes(new URL(b).host))!;
+    const first = await service.prepareLaunch(providerA.id, 'test', 'one');
+    const second = await service.prepareLaunch(providerA.id, 'test', 'two');
+    const send = async (target: typeof first) => {
+      const res = await fetch(target.provider.baseUrl + '/responses', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${target.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'test', input: 'remember context', stream: true }),
+      });
+      const text = await res.text();
+      expect(res.status, text).toBe(200);
+      return text;
+    };
+    expect(await send(first)).toContain('completed');
+    idle = false;
+    await service.switchRoute({ conversationId: 'one', sourceId: providerB.id, model: 'test' });
+    expect((await service.route('one'))?.pending?.sourceId).toBe(providerB.id);
+    expect((await service.route('one'))?.sourceId).toBe(providerA.id);
+    idle = true;
+    await new Promise((done) => setTimeout(done, 600));
+    expect((await service.route('one'))?.pending).toBeUndefined();
+    await Promise.all([send(first), send(second)]);
+    expect(seen[0].upstream).toBe('A');
+    expect(
+      seen
+        .slice(1)
+        .map((v) => v.upstream)
+        .sort()
+    ).toEqual(['A', 'B']);
+    expect(seen.every((v) => v.model === 'upstream')).toBe(true);
+    expect(seen.every((v) => v.authorization === `Bearer fake-provider-${v.upstream}`)).toBe(true);
+    failLedger = true;
+    await send(first);
+    await service.stop();
+    failLedger = false;
+    await service.start();
+    await send(first);
+    expect(seen.at(-1)?.upstream).toBe('B');
+    const deadline = Date.now() + 3000;
+    while ((await service.usage(100)).length < 5 && Date.now() < deadline)
+      await new Promise((done) => setTimeout(done, 20));
+    expect(await service.usage(100), JSON.stringify(await service.usage(100))).toHaveLength(5);
+    expect((await service.status()).usageError).toBeUndefined();
+    expect((await service.usage(100))[0]).toMatchObject({ inputTokens: 7, outputTokens: 3 });
+    // Exercise the actual Codex CLI and the bundled ACP adapter through the product service.
+    const codex = process.env.EMDASH_CODEX_TEST_BINARY ?? 'codex';
+    const cli = await promisify(execFile)(codex, ['--version']).then(
+      () => true,
+      () => false
+    );
+    if (process.env.EMDASH_CODEX_TEST_BINARY) expect(cli).toBe(true);
+    if (cli) {
+      const cliTarget = await service.prepareLaunch(providerA.id, 'test', 'cli-probe');
+      const launch = buildSourceLaunch(
+        'codex',
+        { ...cliTarget.provider, models: [] },
+        cliTarget.apiKey,
+        'test'
+      );
+      if (!launch) throw new Error('No Codex launch');
+      const home = join(dir, 'codex-cli');
+      await mkdir(home);
+      const env = { ...process.env, ...launch.env, CODEX_HOME: home, OTEL_SDK_DISABLED: 'true' };
+      const runCodex = (args: string[]) => {
+        const result = promisify(execFile)(codex, args, { cwd: dir, env, timeout: 40000 });
+        result.child.stdin?.end();
+        return result;
+      };
+      const first = await runCodex([
+        'exec',
+        '--skip-git-repo-check',
+        '--json',
+        ...launch.args,
+        'remember product-cli-marker',
+      ]);
+      const started = first.stdout
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as { type: string; thread_id?: string })
+        .find((l) => l.type === 'thread.started');
+      expect(started?.thread_id).toBeTruthy();
+      await service.switchRoute({
+        conversationId: 'cli-probe',
+        sourceId: providerB.id,
+        model: 'test',
+      });
+      const resumed = await runCodex([
+        'exec',
+        '--skip-git-repo-check',
+        '--json',
+        ...launch.args,
+        'resume',
+        started!.thread_id!,
+        'repeat the marker',
+      ]);
+      expect(resumed.stdout).toContain(started!.thread_id);
+      expect(
+        seen.some(
+          (v) => v.upstream === 'B' && JSON.stringify(v.input).includes('product-cli-marker')
+        )
+      ).toBe(true);
+      const acpTarget = await service.prepareLaunch(providerA.id, 'test', 'acp-probe');
+      const acpLaunch = buildSourceLaunch('codex', acpTarget.provider, acpTarget.apiKey, 'test');
+      if (!acpLaunch) throw new Error('No ACP launch');
+      const acpHome = join(dir, 'codex-acp');
+      await mkdir(acpHome);
+      if (!acpLaunch.codexCatalog) throw new Error('No ACP model catalog');
+      await ensureCodexModelCatalog(acpLaunch.codexCatalog, acpHome);
+      const catalogFile = codexModelCatalogPath(acpLaunch.codexCatalog.providerKey, acpHome);
+      const adapter = resolve('out/main/adapters/codex-acp.cjs');
+      if (
+        await access(adapter).then(
+          () => true,
+          () => false
+        )
+      ) {
+        const acp = startAcpTestClient(adapter, dir, {
+          ...process.env,
+          ...acpLaunch.env,
+          EMDASH_CODEX_MODEL_CATALOG: catalogFile,
+          CODEX_CONFIG: JSON.stringify({
+            ...JSON.parse(acpLaunch.env.CODEX_CONFIG),
+            model_catalog_json: catalogFile,
+          }),
+          CODEX_HOME: acpHome,
+          CODEX_PATH: codexAppServerWrapperPath(acpHome),
+          EMDASH_CODEX_BIN: codex,
+          OTEL_SDK_DISABLED: 'true',
+        });
+        try {
+          await acp.call('initialize', {
+            protocolVersion: 1,
+            clientCapabilities: {},
+            clientInfo: { name: 'emdash-gateway-test', version: '1' },
+          });
+          await acp.call('authenticate', JSON.parse(acpLaunch.env.DEFAULT_AUTH_REQUEST));
+          const session = (await acp.call('session/new', { cwd: dir, mcpServers: [] })) as {
+            sessionId: string;
+          };
+          expect(
+            await acp.call('session/prompt', {
+              sessionId: session.sessionId,
+              prompt: [{ type: 'text', text: 'remember product-acp-marker' }],
+            })
+          ).toMatchObject({ stopReason: 'end_turn' });
+          await service.switchRoute({
+            conversationId: 'acp-probe',
+            sourceId: providerB.id,
+            model: 'test',
+          });
+          expect(
+            await acp.call('session/prompt', {
+              sessionId: session.sessionId,
+              prompt: [{ type: 'text', text: 'repeat the marker' }],
+            })
+          ).toMatchObject({ stopReason: 'end_turn' });
+          expect(
+            seen.some(
+              (v) => v.upstream === 'B' && JSON.stringify(v.input).includes('product-acp-marker')
+            )
+          ).toBe(true);
+        } finally {
+          await acp.close();
+        }
+      }
+    }
+    expect(
+      (
+        await fetch(first.provider.baseUrl + '/responses', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${second.apiKey}` },
+          body: '{}',
+        })
+      ).status
+    ).toBe(401);
+    localConversation = false;
+    expect(
+      (
+        await fetch(first.provider.baseUrl + '/responses', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${first.apiKey}` },
+          body: '{}',
+        })
+      ).status
+    ).toBe(404);
+    localConversation = true;
+    const recorded = await service.usage(100);
+    await routes.clear();
+    expect(await service.usage(100)).toEqual(recorded);
+    expect(
+      (
+        await fetch(first.provider.baseUrl + '/responses', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${first.apiKey}` },
+          body: '{}',
+        })
+      ).status
+    ).toBe(404);
+    const masked = JSON.stringify(await service.status());
+    expect(masked).not.toContain('fake-provider');
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const bytes = await readFile(join(dir, entry.name));
+      expect(bytes.includes(Buffer.from('fake-provider'))).toBe(false);
+    }
+    await service.dispose();
+    const restored = new ModelGatewayService(deps);
+    cleanup.push(() => restored.dispose());
+    await restored.restore();
+    expect((await restored.status()).providers).toHaveLength(2);
+    expect(await restored.usage(100)).toEqual(recorded);
+  }, 120000);
+});

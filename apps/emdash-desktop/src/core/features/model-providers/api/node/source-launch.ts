@@ -2,10 +2,12 @@ import {
   CLAUDE_MODEL_ALIASES,
   providerConfigId,
   providerEndpoints,
+  providerProtocolForAgent,
   type CodexReasoning,
   type ModelProvider,
   type ProviderCapableAgent,
-} from '../api';
+} from '..';
+import { AGENT_MODEL_ENV } from '../launch-env';
 import {
   codexAppServerWrapperPath,
   codexModelCatalogPath,
@@ -13,7 +15,7 @@ import {
   type CodexCatalogModel,
   type CodexModelCatalog,
   type CodexModelInfo,
-} from './codex-model-catalog';
+} from './codex-launch';
 
 /**
  * Carries the provider API key into the agent process. Config written to disk (Pi/OMP
@@ -28,7 +30,6 @@ export const PROVIDER_KEY_ENV = 'EMDASH_MODEL_PROVIDER_KEY';
  * (EMDASH_AGENT_MODEL). Names shared with packages/plugins/src/agents/helpers/provider-extension.ts.
  */
 export const AGENT_PROVIDER_ENV = 'EMDASH_AGENT_PROVIDER';
-export const AGENT_MODEL_ENV = 'EMDASH_AGENT_MODEL';
 
 /** Agents that take a provider through Emdash's extension (Pi, Oh My Pi). */
 export type ExtensionProviderAgent = 'pi' | 'oh-my-pi';
@@ -41,6 +42,7 @@ export type SourceLaunch = {
   extensionAgent?: ExtensionProviderAgent;
   /** Model metadata Codex reads (model_catalog_json), written before the launch. */
   codexCatalog?: CodexModelCatalog;
+  codexWrapper?: boolean;
 };
 
 /**
@@ -58,8 +60,25 @@ export function buildSourceLaunch(
   model?: string,
   codexKnownModels: CodexModelInfo[] = []
 ): SourceLaunch | null {
-  const key = providerConfigId(provider);
-  const { anthropic, openai } = providerEndpoints(provider);
+  const key =
+    provider.id.startsWith('gateway:') && agent !== 'codex'
+      ? 'emdash-gateway'
+      : providerConfigId(provider);
+  const endpoints = providerEndpoints(provider);
+  const selectedProtocol = providerProtocolForAgent(provider, agent);
+  const anthropic = endpoints.anthropic;
+  const openai =
+    selectedProtocol === 'anthropic' ||
+    (selectedProtocol === 'openai-responses' && endpoints.openai?.api === 'chat')
+      ? undefined
+      : endpoints.openai && {
+          ...endpoints.openai,
+          url:
+            selectedProtocol === 'openai-responses'
+              ? (endpoints.openai.responsesUrl ?? endpoints.openai.url)
+              : endpoints.openai.url,
+          ...(selectedProtocol === 'openai-responses' && { api: 'responses' as const }),
+        };
   switch (agent) {
     case 'claude': {
       if (!anthropic) return null;
@@ -76,6 +95,7 @@ export function buildSourceLaunch(
     }
     case 'codex': {
       if (!openai || openai.api === 'chat') return null;
+      const providerId = provider.id.startsWith('gateway:') ? 'custom-gateway' : key;
       // Codex sizes its context (and when to compact) from its own model metadata, which a
       // provider's model ids usually miss; the provider's figure, when set, wins.
       const contextWindow = model ? provider.contextWindows?.[model] : undefined;
@@ -118,15 +138,15 @@ export function buildSourceLaunch(
           [PROVIDER_KEY_ENV]: apiKey,
           // Read by the chat UI adapter (codex-acp); the terminal CLI takes the -c flags.
           CODEX_CONFIG: JSON.stringify({
-            model_provider: key,
-            model_providers: { [key]: providerConfig },
+            model_provider: providerId,
+            model_providers: { [providerId]: providerConfig },
             ...(model && { model }),
             ...(effort && { model_reasoning_effort: effort }),
             ...(webSearch && { web_search: webSearch }),
             ...(contextWindow && { model_context_window: contextWindow }),
             ...(catalog && { model_catalog_json: catalogFile }),
           }),
-          MODEL_PROVIDER: key,
+          MODEL_PROVIDER: providerId,
           // Without a ChatGPT login the chat UI adapter refuses to start ("sign in")
           // before it ever reads CODEX_CONFIG. This sign-in routes it to the provider
           // instead; it lives in the adapter's memory only, never in Codex's auth.json.
@@ -144,15 +164,16 @@ export function buildSourceLaunch(
           APP_SERVER_LOGS: '',
           // The chat UI's Codex reads the catalog only at startup (see the wrapper),
           // through a platform-appropriate script the launch writes first.
-          ...(catalog && {
+          ...(provider.id.startsWith('gateway:') && { EMDASH_CODEX_GATEWAY_URL: openai.url }),
+          ...((catalog || provider.id.startsWith('gateway:')) && {
             CODEX_PATH: codexAppServerWrapperPath(),
-            EMDASH_CODEX_MODEL_CATALOG: catalogFile!,
+            ...(catalog && { EMDASH_CODEX_MODEL_CATALOG: catalogFile! }),
           }),
         },
         args: [
-          ...codexOverride('model_provider', key),
+          ...codexOverride('model_provider', providerId),
           ...Object.entries(providerConfig).flatMap(([field, value]) =>
-            codexOverride(`model_providers.${key}.${field}`, value)
+            codexOverride(`model_providers.${providerId}.${field}`, value)
           ),
           ...(model ? codexOverride('model', model) : []),
           ...(effort ? codexOverride('model_reasoning_effort', effort) : []),
@@ -161,6 +182,7 @@ export function buildSourceLaunch(
           ...(catalog ? codexOverride('model_catalog_json', catalogFile!) : []),
         ],
         ...(catalog && { codexCatalog: catalog }),
+        codexWrapper: provider.id.startsWith('gateway:'),
       };
     }
     case 'opencode': {

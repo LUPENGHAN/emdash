@@ -453,6 +453,7 @@ export function InitialConversationField({
         ) : null}
 
         <ModelSourceSelect
+          remote={Boolean(state.connectionId)}
           agentId={state.provider}
           value={state.source}
           onChange={state.setSource}

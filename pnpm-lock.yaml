@@ -318,6 +318,8 @@ importers:
         specifier: ^2.9.0
         version: 2.9.0
 
+  apps/model-gateway: {}
+
   apps/workspace-server:
     dependencies:
       '@emdash/core':

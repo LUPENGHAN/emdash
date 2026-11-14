@@ -11,11 +11,14 @@ import {
 } from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getAgentsClient, hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgentSettings } from '@core/features/agents/api/browser/use-agent-settings';
+import { useGatewayStatus } from '@core/features/model-gateway/api/browser/use-gateway';
+import { GatewayProvidersPanel } from '@core/features/model-gateway/contributions/browser/providers-panel';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { openModal } from '@core/manifests/browser/modal-api';
+import { copyTextToClipboard } from '@core/primitives/desktop-host/browser/host-client';
 import {
   CLAUDE_MODEL_ALIASES,
   CODEX_REASONING_EFFORTS,
@@ -33,7 +36,9 @@ import {
   PROVIDER_CAPABLE_AGENTS,
   PROVIDER_PROTOCOL_LABELS,
   PROVIDER_PROTOCOLS,
+  providerEndpoints,
   providerModelsAuth,
+  providerRoutingSources,
   providerModelsUrl,
   providerSupportsAgent,
   type ClaudeModelRoles,
@@ -62,6 +67,7 @@ const AGENT_NAMES: Record<string, string> = {
 export function ProvidersSettingsPage() {
   const { value, update } = useAppSettingsKey('modelProviders');
   const providers = value?.providers ?? [];
+  const gateway = useGatewayStatus();
   const apis = providers.filter((provider) => !provider.account);
   const [editing, setEditing] = useState<ModelProvider | 'new' | null>(null);
 
@@ -72,8 +78,9 @@ export function ProvidersSettingsPage() {
       <PageLayout.Header
         sticky
         title="Providers"
-        description="APIs agents can run on instead of their own login: any Anthropic- or OpenAI-compatible endpoint, such as a vendor API or a gateway like new-api. Keys are kept in the OS keychain."
+        description="Configure providers once. Anthropic Messages, OpenAI Chat Completions and Responses share the local router. Credentials stay in secure storage."
       />
+      <GatewayProvidersPanel />
       <section className="space-y-3">
         <h3 className="text-sm font-medium text-foreground">Your providers</h3>
         {apis.length === 0 && !editing ? (
@@ -108,6 +115,10 @@ export function ProvidersSettingsPage() {
                     await (
                       await getAgentsClient()
                     ).clearModelProviderKey({ providerId: provider.id });
+                    for (const protocol of PROVIDER_PROTOCOLS)
+                      await (
+                        await getAgentsClient()
+                      ).clearModelProviderKey({ providerId: provider.id, protocol });
                     saveProviders(providers.filter((p) => p.id !== provider.id));
                   }}
                 />
@@ -131,7 +142,7 @@ export function ProvidersSettingsPage() {
         {!editing ? <ProviderTransfer providers={apis} /> : null}
       </section>
       <OfficialAccounts providers={providers} saveProviders={saveProviders} />
-      <AgentDefaults providers={providers} />
+      <AgentDefaults providers={providerRoutingSources(providers, gateway.data?.providers ?? [])} />
     </div>
   );
 }
@@ -159,7 +170,8 @@ function ProviderRow({
         <p className="text-sm text-foreground">{provider.name}</p>
         <p className="truncate text-xs text-foreground-muted">{describeProvider(provider)}</p>
         <p className="truncate text-xs text-foreground-muted">
-          {provider.models.length} models · {keyStatus?.hasKey ? 'key saved' : 'no key'} · for{' '}
+          Local router · {provider.models.length} models ·{' '}
+          {keyStatus?.hasKey ? 'key saved' : 'no key'} · for{' '}
           {agents.length > 0 ? agents.map((agent) => AGENT_NAMES[agent]).join(', ') : 'no agent'}
         </p>
       </div>
@@ -186,11 +198,58 @@ function ProviderForm({
   const [id] = useState(() => initial?.id ?? crypto.randomUUID().slice(0, 8));
   const [name, setName] = useState(initial?.name ?? '');
   // Providers saved before protocols keep serving every protocol until one is picked.
-  const [protocol, setProtocol] = useState<ProviderProtocol | 'gateway'>(
-    initial ? (initial.protocol ?? 'gateway') : 'anthropic'
+  const [protocol, setProtocol] = useState<ProviderProtocol | 'multi'>(
+    initial && !initial.endpoints && initial.protocol ? initial.protocol : 'multi'
+  );
+  const [endpoints, setEndpoints] = useState<Partial<Record<ProviderProtocol, string>>>(() => {
+    if (initial?.endpoints) return initial.endpoints;
+    if (!initial) return { anthropic: '', 'openai-chat': '', 'openai-responses': '' };
+    if (initial.protocol) return {};
+    const existing = providerEndpoints(initial);
+    return {
+      anthropic: existing.anthropic?.url,
+      'openai-chat': existing.openai?.url,
+      'openai-responses': existing.openai?.url,
+    };
+  });
+  const [preferredProtocol, setPreferredProtocol] = useState<ProviderProtocol | undefined>(
+    initial?.preferredProtocol
+  );
+  const activeEndpoints = Object.fromEntries(
+    Object.entries(endpoints)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+      .map(([key, value]) => [key, value.trim()])
   );
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '');
+  const multiBaseUrl =
+    baseUrl.trim() ||
+    activeEndpoints['openai-chat'] ||
+    activeEndpoints['openai-responses'] ||
+    activeEndpoints.anthropic ||
+    '';
+  const hasBaseUrl =
+    protocol === 'multi'
+      ? Object.keys(activeEndpoints).length > 0 &&
+        Object.values(activeEndpoints).every((value) => value || baseUrl.trim())
+      : Boolean(baseUrl.trim());
   const [apiKey, setApiKey] = useState('');
+  const [protocolKeys, setProtocolKeys] = useState<Partial<Record<ProviderProtocol, string>>>({});
+  const storedKeys = useQuery({
+    queryKey: ['modelProviderKeys', id],
+    queryFn: async () => (await getAgentsClient()).readModelProviderKeys({ providerId: id }),
+    enabled: Boolean(initial),
+    gcTime: 0,
+    staleTime: Infinity,
+  });
+  useEffect(() => {
+    if (!storedKeys.data) return;
+    setApiKey(storedKeys.data.shared ?? '');
+    setProtocolKeys(
+      Object.fromEntries(
+        Object.entries(storedKeys.data.protocols).map(([key, value]) => [key, value ?? ''])
+      )
+    );
+  }, [storedKeys.data]);
   const [modelsUrl, setModelsUrl] = useState(initial?.modelsUrl ?? '');
   const [upstream, setUpstream] = useState<string[]>([]);
   const [selected, setSelected] = useState<string[]>(initial?.models ?? []);
@@ -217,17 +276,17 @@ function ProviderForm({
   const [bulkContext, setBulkContext] = useState('');
   const [testState, setTestState] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const { data: keyStatus } = useQuery({
-    queryKey: keyStatusQueryKey(id),
-    enabled: !!initial,
-    queryFn: async () => (await getAgentsClient()).modelProviderKeyStatus({ providerId: id }),
-  });
 
   const draft: ModelProvider = {
+    ...(initial?.modelAliases && { modelAliases: initial.modelAliases }),
     id,
     name: name.trim(),
-    ...(protocol !== 'gateway' && { protocol }),
-    baseUrl: baseUrl.trim(),
+    ...(protocol !== 'multi' && { protocol }),
+    ...(protocol === 'multi' && {
+      endpoints: activeEndpoints,
+      ...(preferredProtocol && { preferredProtocol }),
+    }),
+    baseUrl: protocol === 'multi' ? multiBaseUrl : baseUrl.trim(),
     ...(modelsUrl.trim() && { modelsUrl: modelsUrl.trim() }),
     models: selected,
   };
@@ -242,8 +301,12 @@ function ProviderForm({
   if (nonReasoningModels.length > 0) draft.nonReasoningModels = nonReasoningModels;
   const webSearchModels = webSearch.filter((model) => selected.includes(model));
   if (webSearchModels.length > 0) draft.webSearchModels = webSearchModels;
-  const speaksAnthropic = protocol === 'anthropic' || protocol === 'gateway';
-  const speaksResponses = protocol === 'openai-responses' || protocol === 'gateway';
+  const speaksAnthropic =
+    protocol === 'anthropic' ||
+    (protocol === 'multi' && Object.hasOwn(activeEndpoints, 'anthropic'));
+  const speaksResponses =
+    protocol === 'openai-responses' ||
+    (protocol === 'multi' && Object.hasOwn(activeEndpoints, 'openai-responses'));
   const claude = speaksAnthropic ? cleanClaudeRoles(claudeRoles, selected) : undefined;
   if (claude) draft.claude = claude;
   if (speaksResponses && codexReasoning) draft.codexReasoning = codexReasoning;
@@ -258,7 +321,7 @@ function ProviderForm({
     (model) => (contexts[model] ?? '').trim() !== '' && !parseContextWindow(contexts[model] ?? '')
   );
   const bulkContextInvalid = bulkContext.trim() !== '' && parseContextWindow(bulkContext) === null;
-  const defaultModelsUrl = baseUrl.trim()
+  const defaultModelsUrl = hasBaseUrl
     ? providerModelsUrl({ ...draft, modelsUrl: undefined })
     : 'Filled in from the base URL';
   const listed = [...new Set([...upstream, ...selected])].filter((model) =>
@@ -278,7 +341,18 @@ function ProviderForm({
       providerId: id,
       url: providerModelsUrl(draft),
       auth: providerModelsAuth(draft),
-      apiKey: apiKey || undefined,
+      apiKey:
+        protocolKeys[
+          draft.endpoints
+            ? providerEndpoints(draft).openai
+              ? Object.hasOwn(draft.endpoints, 'openai-chat')
+                ? 'openai-chat'
+                : 'openai-responses'
+              : 'anthropic'
+            : (protocol as ProviderProtocol)
+        ] ||
+        apiKey ||
+        undefined,
     });
     setBusy(false);
     if (result.success) {
@@ -290,13 +364,19 @@ function ProviderForm({
   };
 
   const save = async () => {
-    if (!name.trim() || !baseUrl.trim()) return;
+    if (!name.trim() || !hasBaseUrl) return;
     setBusy(true);
     try {
-      if (apiKey.trim()) {
-        await (await getAgentsClient()).setModelProviderKey({ providerId: id, apiKey });
-        await queryClient.invalidateQueries({ queryKey: keyStatusQueryKey(id) });
+      const client = await getAgentsClient();
+      if (apiKey.trim()) await client.setModelProviderKey({ providerId: id, apiKey });
+      else await client.clearModelProviderKey({ providerId: id });
+      for (const candidate of PROVIDER_PROTOCOLS) {
+        const key = protocolKeys[candidate]?.trim();
+        if (key)
+          await client.setModelProviderKey({ providerId: id, protocol: candidate, apiKey: key });
+        else await client.clearModelProviderKey({ providerId: id, protocol: candidate });
       }
+      await queryClient.invalidateQueries({ queryKey: keyStatusQueryKey(id) });
       onSaved(draft);
     } catch (error) {
       toast.error(`Could not save the provider: ${String(error)}`);
@@ -315,13 +395,11 @@ function ProviderForm({
         <Field.Label>Protocol</Field.Label>
         <Select.Root
           value={protocol}
-          onValueChange={(next) => next && setProtocol(next as ProviderProtocol | 'gateway')}
+          onValueChange={(next) => next && setProtocol(next as ProviderProtocol | 'multi')}
         >
           <Select.Trigger appearance="input" className="w-full">
             <Select.Value>
-              {protocol === 'gateway'
-                ? 'Gateway (all protocols)'
-                : PROVIDER_PROTOCOL_LABELS[protocol]}
+              {protocol === 'multi' ? 'Multiple protocols' : PROVIDER_PROTOCOL_LABELS[protocol]}
             </Select.Value>
           </Select.Trigger>
           <Select.Content align="start" width="trigger">
@@ -330,9 +408,7 @@ function ProviderForm({
                 {PROVIDER_PROTOCOL_LABELS[candidate]}
               </Select.Item>
             ))}
-            {initial && !initial.protocol ? (
-              <Select.Item value="gateway">Gateway (all protocols)</Select.Item>
-            ) : null}
+            <Select.Item value="multi">Multiple protocols</Select.Item>
           </Select.Content>
         </Select.Root>
         <Field.Description>
@@ -344,24 +420,142 @@ function ProviderForm({
         <Field.Label>Base URL</Field.Label>
         <Input
           value={baseUrl}
-          placeholder={
-            protocol === 'anthropic'
-              ? 'https://api.example.com/anthropic'
-              : 'https://api.example.com/v1'
-          }
-          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="https://api.example.com"
+          onChange={(event) => setBaseUrl(event.target.value)}
         />
+        {protocol === 'multi' ? (
+          <Field.Description>
+            Shared base for enabled protocols. Override individual URLs below when needed.
+          </Field.Description>
+        ) : null}
       </Field.Root>
+      {protocol === 'multi' ? (
+        <>
+          <div className="space-y-3">
+            <p className="text-sm font-medium">Protocol URLs</p>
+            {PROVIDER_PROTOCOLS.map((candidate) => (
+              <div key={candidate} className="space-y-2">
+                <label className="flex items-center gap-2 text-xs">
+                  <Checkbox
+                    checked={Object.hasOwn(activeEndpoints, candidate)}
+                    onCheckedChange={(checked) => {
+                      setEndpoints((current) => {
+                        const next = { ...current };
+                        if (checked === true) next[candidate] = '';
+                        else delete next[candidate];
+                        return next;
+                      });
+                      if (checked !== true && preferredProtocol === candidate)
+                        setPreferredProtocol(undefined);
+                    }}
+                  />
+                  <span>{PROVIDER_PROTOCOL_LABELS[candidate]}</span>
+                </label>
+                {Object.hasOwn(activeEndpoints, candidate) ? (
+                  <Input
+                    aria-label={PROVIDER_PROTOCOL_LABELS[candidate] + ' URL'}
+                    value={endpoints[candidate] ?? ''}
+                    placeholder="Use Base URL"
+                    onChange={(event) =>
+                      setEndpoints((current) => ({ ...current, [candidate]: event.target.value }))
+                    }
+                  />
+                ) : null}
+              </div>
+            ))}
+          </div>
+          <Field.Root>
+            <Field.Label>Default launch protocol</Field.Label>
+            <Select.Root
+              value={preferredProtocol ?? 'auto'}
+              onValueChange={(value) =>
+                setPreferredProtocol(value === 'auto' ? undefined : (value as ProviderProtocol))
+              }
+            >
+              <Select.Trigger appearance="input">
+                <Select.Value>
+                  {preferredProtocol ? PROVIDER_PROTOCOL_LABELS[preferredProtocol] : 'Automatic'}
+                </Select.Value>
+              </Select.Trigger>
+              <Select.Content>
+                <Select.Item value="auto">Automatic</Select.Item>
+                {PROVIDER_PROTOCOLS.filter((candidate) =>
+                  Object.hasOwn(activeEndpoints, candidate)
+                ).map((candidate) => (
+                  <Select.Item key={candidate} value={candidate}>
+                    {PROVIDER_PROTOCOL_LABELS[candidate]}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+            <Field.Description>
+              Used by new OpenCode, Pi and Oh My Pi sessions. Claude Code uses Messages; Codex uses
+              Responses. Changing this setting requires restarting existing sessions.
+            </Field.Description>
+          </Field.Root>
+        </>
+      ) : null}
       <Field.Root>
-        <Field.Label>API key</Field.Label>
-        <Input
-          type="password"
-          autoComplete="off"
-          value={apiKey}
-          placeholder={keyStatus?.hasKey ? 'Saved — type to replace' : 'sk-…'}
-          onChange={(e) => setApiKey(e.target.value)}
-        />
+        <Field.Label>Default API key</Field.Label>
+        <div className="flex gap-2">
+          <Input
+            type="text"
+            autoComplete="off"
+            value={apiKey}
+            placeholder="sk-…"
+            onChange={(event) => setApiKey(event.target.value)}
+          />
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={!apiKey}
+            onClick={() =>
+              void copyTextToClipboard(apiKey).catch(() => toast.error('Could not copy the key.'))
+            }
+          >
+            Copy
+          </Button>
+        </div>
+        <Field.Description>
+          Shared by all protocols unless overridden below. Keys are visible and stored encrypted.
+        </Field.Description>
       </Field.Root>
+      {PROVIDER_PROTOCOLS.filter((candidate) =>
+        protocol === 'multi' ? Object.hasOwn(activeEndpoints, candidate) : candidate === protocol
+      ).map((candidate) => (
+        <Field.Root key={candidate}>
+          <Field.Label>{PROVIDER_PROTOCOL_LABELS[candidate]} API key</Field.Label>
+          <div className="flex gap-2">
+            <Input
+              type="text"
+              aria-label={PROVIDER_PROTOCOL_LABELS[candidate] + ' API key'}
+              autoComplete="off"
+              value={protocolKeys[candidate] ?? ''}
+              placeholder="Use default API key"
+              onChange={(event) =>
+                setProtocolKeys((current) => ({ ...current, [candidate]: event.target.value }))
+              }
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!protocolKeys[candidate] && !apiKey}
+              onClick={() =>
+                void copyTextToClipboard(protocolKeys[candidate] || apiKey).catch(() =>
+                  toast.error('Could not copy the key.')
+                )
+              }
+            >
+              Copy
+            </Button>
+          </div>
+        </Field.Root>
+      ))}
+      {storedKeys.error ? (
+        <p role="alert" className="text-destructive text-xs">
+          Could not load saved keys.
+        </p>
+      ) : null}
       <Field.Root>
         <Field.Label>Models URL</Field.Label>
         <div className="flex gap-2">
@@ -375,7 +569,7 @@ function ProviderForm({
           <Button
             size="sm"
             variant="secondary"
-            disabled={busy || !baseUrl.trim()}
+            disabled={busy || !hasBaseUrl}
             onClick={() => void fetchModels()}
           >
             Fetch models
@@ -587,7 +781,13 @@ function ProviderForm({
         <Button
           size="sm"
           variant="primary"
-          disabled={busy || !name.trim() || !baseUrl.trim() || invalidContext}
+          disabled={
+            busy ||
+            (Boolean(initial) && !storedKeys.data) ||
+            !name.trim() ||
+            !hasBaseUrl ||
+            invalidContext
+          }
           onClick={() => void save()}
         >
           Save
@@ -1101,7 +1301,9 @@ const AgentDefaultRow = observer(function AgentDefaultRow({
 }) {
   const { value: config, update, reset } = useAgentSettings(agentId, hostRefFromConnectionId());
   const sourceId = config?.modelSource ?? '';
-  const provider = providers.find((candidate) => candidate.id === sourceId);
+  const provider =
+    providers.find((candidate) => candidate.id === sourceId) ??
+    providers.find((candidate) => candidate.id === `gateway:${sourceId}`);
   const model = config?.sourceModel ?? '';
 
   const save = (patch: { modelSource?: string; sourceModel?: string }) => {
@@ -1121,14 +1323,20 @@ const AgentDefaultRow = observer(function AgentDefaultRow({
       >
         <Select.Trigger appearance="input" className="min-w-0 flex-1">
           <Select.Value>
-            {provider?.name ?? (sourceId ? 'Missing provider' : defaultSourceLabel(agentId))}
+            {provider
+              ? `${provider.name}${sourceId && provider.id !== sourceId ? ' (direct)' : ''}`
+              : sourceId
+                ? 'Missing provider'
+                : defaultSourceLabel(agentId)}
           </Select.Value>
         </Select.Trigger>
         <Select.Content align="start" width="trigger">
           <Select.Item value="">{defaultSourceLabel(agentId)}</Select.Item>
           {/* Kept selectable so the select does not reset (and clear) a deleted provider. */}
-          {sourceId && !provider ? (
-            <Select.Item value={sourceId}>Missing provider</Select.Item>
+          {sourceId && !providers.some((candidate) => candidate.id === sourceId) ? (
+            <Select.Item value={sourceId}>
+              {provider ? `${provider.name} (direct)` : 'Missing provider'}
+            </Select.Item>
           ) : null}
           {sourcesForAgent(providers, agentId).map((candidate) => {
             const support = providerSupportsAgent(candidate, agentId);

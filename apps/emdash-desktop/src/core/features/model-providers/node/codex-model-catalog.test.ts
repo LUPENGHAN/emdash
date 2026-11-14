@@ -10,7 +10,7 @@ import {
   codexStartingEffort,
   ensureCodexModelCatalog,
   readKnownCodexModels,
-} from './codex-model-catalog';
+} from '../api/node/codex-launch';
 
 describe('Codex model catalog', () => {
   const known = [
@@ -194,7 +194,7 @@ describe('Codex model catalog', () => {
       const wrapper = codexAppServerWrapperPath(home);
       expect((await stat(wrapper)).mode & 0o111).not.toBe(0);
       expect(await readFile(wrapper, 'utf8')).toContain(
-        'exec "${EMDASH_CODEX_BIN:-codex}" -c "model_catalog_json=\\"$EMDASH_CODEX_MODEL_CATALOG\\"" "$@"'
+        'set -- -c "model_catalog_json=\\"$EMDASH_CODEX_MODEL_CATALOG\\"" "$@"'
       );
     });
 
@@ -215,7 +215,7 @@ describe('Codex model catalog', () => {
       );
       const wrapper = codexAppServerWrapperPath(home, 'win32');
       const content = await readFile(wrapper, 'utf8');
-      expect(content).toContain(`-c "model_catalog_json='%EMDASH_CODEX_MODEL_CATALOG%'" %*`);
+      expect(content).toContain(`-c "model_catalog_json='%EMDASH_CODEX_MODEL_CATALOG%'"`);
       expect(content).toContain('\r\n');
       // The Windows wrapper runs through the shell; no executable bit is needed.
       expect((await stat(wrapper)).mode & 0o111).toBe(0);

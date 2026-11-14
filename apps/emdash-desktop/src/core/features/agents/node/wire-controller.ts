@@ -4,6 +4,7 @@ import { err, ok, type Result } from '@emdash/shared';
 import type { LiveModelProvider, LiveSource } from '@emdash/wire/rpc';
 import { createController, type CallMeta, type Controller } from '@emdash/wire/rpc';
 import type { AgentOperations } from '@core/features/agents/node/controller';
+import { PROVIDER_PROTOCOLS } from '@core/features/model-providers/api';
 import type {
   ModelProviderKeys,
   ModelProviderTransfer,
@@ -153,12 +154,23 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
     modelProviderKeyStatus: async ({ providerId }) => ({
       hasKey: (await options.modelProviderKeys?.hasKey(providerId)) ?? false,
     }),
-    setModelProviderKey: async ({ providerId, apiKey }) => {
+    readModelProviderKeys: async ({ providerId }) => ({
+      shared: (await options.modelProviderKeys?.read(providerId)) ?? null,
+      protocols: Object.fromEntries(
+        await Promise.all(
+          PROVIDER_PROTOCOLS.map(async (protocol) => [
+            protocol,
+            (await options.modelProviderKeys?.read(providerId, protocol)) ?? null,
+          ])
+        )
+      ),
+    }),
+    setModelProviderKey: async ({ providerId, apiKey, protocol }) => {
       if (!options.modelProviderKeys) throw new Error('Provider keys are unavailable');
-      await options.modelProviderKeys.set(providerId, apiKey);
+      await options.modelProviderKeys.set(providerId, apiKey, protocol);
     },
-    clearModelProviderKey: async ({ providerId }) => {
-      await options.modelProviderKeys?.clear(providerId);
+    clearModelProviderKey: async ({ providerId, protocol }) => {
+      await options.modelProviderKeys?.clear(providerId, protocol);
     },
     exportModelProviders: (input) => requireTransfer(options).exportProviders(input),
     readModelProvidersImport: () => requireTransfer(options).readImport(),

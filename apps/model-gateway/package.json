@@ -1,0 +1,26 @@
+{
+  "name": "@emdash/model-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "pnpm exec nx test @emdash/model-gateway",
+    "typecheck": "go vet ./...",
+    "lint": "go vet ./...",
+    "format": "gofmt -w main.go main_test.go internal/gateway",
+    "format:check": "node scripts/check-format.mjs"
+  },
+  "nx": {
+    "targets": {
+      "test": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "go test -race ./...",
+          "cwd": "apps/model-gateway"
+        }
+      }
+    }
+  }
+}

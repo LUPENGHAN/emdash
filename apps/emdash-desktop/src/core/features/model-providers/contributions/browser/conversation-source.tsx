@@ -2,7 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
 import { getAgentsClient, hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgentSettings } from '@core/features/agents/api/browser/use-agent-settings';
-import { isProviderCapableAgent } from '@core/features/model-providers/api';
+import { getModelGatewayClient } from '@core/features/model-gateway/api/browser/client';
+import { useGatewayStatus } from '@core/features/model-gateway/api/browser/use-gateway';
+import { isProviderCapableAgent, providerRoutingSources } from '@core/features/model-providers/api';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import type { Conversation } from '@core/primitives/conversations/api';
@@ -15,6 +17,8 @@ import type { Conversation } from '@core/primitives/conversations/api';
 export type ConversationSource =
   | {
       kind: 'provider';
+      pending?: string;
+      routed?: boolean;
       name: string;
       model: string | null;
       /** An official account (another sign-in), not an API. */
@@ -50,11 +54,17 @@ export function useConversationSource(
   const { value: agentConfig } = useAgentSettings(agentId, hostRefFromConnectionId(connectionId));
   const capable = isProviderCapableAgent(agentId);
   const isAgentDefault = capable && conversation?.modelSource === undefined;
-  const sourceId = !capable
-    ? null
-    : isAgentDefault
-      ? agentConfig?.modelSource
-      : conversation?.modelSource;
+  const gateway = useGatewayStatus();
+  const route = useQuery({
+    queryKey: ['modelGateway', 'route', conversation?.id],
+    enabled: Boolean(conversation?.modelSource?.startsWith('gateway:')),
+    refetchInterval: 2000,
+    queryFn: async () =>
+      (await getModelGatewayClient()).route({ conversationId: conversation!.id }),
+  });
+  const sourceId =
+    route.data?.sourceId ??
+    (!capable ? null : isAgentDefault ? agentConfig?.modelSource : conversation?.modelSource);
   const onProvider = typeof sourceId === 'string' && sourceId !== '';
   const ownModel = modelId ?? conversation?.model ?? undefined;
   // Agent configs are read on this computer, so a remote host's agent stays undescribed.
@@ -71,11 +81,20 @@ export function useConversationSource(
 
   if (!conversation) return null;
   if (onProvider) {
-    const provider = settings?.providers.find((candidate) => candidate.id === sourceId);
-    const chosenModel = isAgentDefault ? agentConfig?.sourceModel : conversation.sourceModel;
+    const provider = [
+      ...providerRoutingSources(settings?.providers ?? [], gateway.data?.providers ?? []),
+      ...(settings?.providers ?? []),
+    ].find((candidate) => candidate.id === sourceId);
+    const chosenModel =
+      route.data?.model ?? (isAgentDefault ? agentConfig?.sourceModel : conversation.sourceModel);
     return {
       kind: 'provider',
+      routed: sourceId.startsWith('gateway:'),
       name: provider?.name ?? 'Missing provider',
+      pending: route.data?.pending
+        ? (gateway.data?.providers.find((p) => p.id === route.data?.pending?.sourceId)?.name ??
+          'Selected gateway provider')
+        : undefined,
       account: Boolean(provider?.account),
       // No model picked runs on the provider's first one (see effectiveAgentConfig).
       model: chosenModel || provider?.models[0] || null,
@@ -132,7 +151,13 @@ export const ConversationSourceSuffix = observer(function ConversationSourceSuff
     );
   return (
     <span className="ml-1 text-xs text-foreground-muted">
+      {source.kind === 'provider' && source.routed ? (
+        <span translate="yes">Local router → </span>
+      ) : null}
       {name}
+      {source.kind === 'provider' && source.pending ? (
+        <span translate="yes"> → {source.pending} (after this turn)</span>
+      ) : null}
       {source.isAgentDefault ? <span translate="yes">(default)</span> : null}
     </span>
   );

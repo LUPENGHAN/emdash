@@ -1,11 +1,12 @@
 import { Dialog, Field, Input, Select, toast } from '@emdash/ui/react/primitives';
 import { useQuery } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getAgentsClient, hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgents } from '@core/features/agents/api/browser/use-agents';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
+import { getModelGatewayClient } from '@core/features/model-gateway/api/browser/client';
 import {
   isProviderCapableAgent,
   usesProviderSource,
@@ -95,8 +96,50 @@ export async function restartConversation(
   const manager = conversationRegistry.get(conversation.taskId);
   if (!manager) throw new Error('The task is not loaded');
   // The old conversation goes first, so a source that cannot start must stop us here.
+  if (
+    conversation.providerId === 'codex' &&
+    resumableSessionId(conversation) &&
+    Boolean(conversation.modelSource?.startsWith('gateway:')) !==
+      Boolean(choice.modelSource?.startsWith('gateway:'))
+  ) {
+    throw new Error(
+      'Start a gateway conversation to switch gateway accounts. Existing native Codex sessions keep their original provider identity.'
+    );
+  }
   const problem = await sourceProblem(conversation.providerId, choice);
   if (problem) throw new Error(problem);
+  if (
+    conversation.modelSource?.startsWith('gateway:') &&
+    choice.modelSource?.startsWith('gateway:') &&
+    (!type || type === conversation.type)
+  ) {
+    const client = await getModelGatewayClient();
+    const route = await client.route({ conversationId: conversation.id });
+    const status = await client.status();
+    const model =
+      choice.sourceModel || status.providers.find((p) => p.id === choice.modelSource)?.models[0];
+    const currentProvider = status.providers.find((p) => p.id === route?.sourceId);
+    const nextProvider = status.providers.find((p) => p.id === choice.modelSource);
+    const sameContext =
+      model && currentProvider?.contextWindows?.[model] === nextProvider?.contextWindows?.[model];
+    if (
+      route &&
+      model === route.model &&
+      sameContext &&
+      currentProvider?.protocol === nextProvider?.protocol &&
+      status.accountTypes?.[route.sourceId] === status.accountTypes?.[choice.modelSource] &&
+      (!route.launchConfiguration ||
+        route.launchConfiguration === status.accountTypes?.[choice.modelSource])
+    ) {
+      await client.switchRoute({
+        conversationId: conversation.id,
+        sourceId: choice.modelSource,
+        model,
+      });
+      toast.success('Gateway selection saved. It applies when the agent is idle.');
+      return conversation;
+    }
+  }
   const sessionId = resumableSessionId(conversation);
   if (!sessionId && requireSession) throw new Error('The conversation has no session to resume');
   const currentType = conversation.type ?? 'pty';
@@ -131,6 +174,19 @@ const RestartConversationModal = observer(function RestartConversationModal({
       ? { modelSource: conversation.modelSource, sourceModel: conversation.sourceModel }
       : {}
   );
+  const [sourceTouched, setSourceTouched] = useState(false);
+  const gatewayRoute = useQuery({
+    queryKey: ['modelGateway', 'route', conversation.id],
+    enabled: Boolean(conversation.modelSource?.startsWith('gateway:')),
+    queryFn: async () => (await getModelGatewayClient()).route({ conversationId: conversation.id }),
+  });
+  useEffect(() => {
+    if (gatewayRoute.data && !sourceTouched)
+      setSource({
+        modelSource: gatewayRoute.data.pending?.sourceId ?? gatewayRoute.data.sourceId,
+        sourceModel: gatewayRoute.data.model,
+      });
+  }, [gatewayRoute.data, sourceTouched]);
   const [model, setModel] = useState(conversation.model ?? '');
   const [busy, setBusy] = useState(false);
   useCloseGuard(busy);
@@ -149,6 +205,9 @@ const RestartConversationModal = observer(function RestartConversationModal({
     gcTime: 0,
     queryFn: () => sourceProblem(conversation.providerId, source),
   });
+  const gatewaySelection = Boolean(
+    conversation.modelSource?.startsWith('gateway:') && source.modelSource?.startsWith('gateway:')
+  );
   const isTerminal = (conversation.type ?? 'pty') === 'pty';
 
   const restart = async () => {
@@ -169,19 +228,28 @@ const RestartConversationModal = observer(function RestartConversationModal({
   return (
     <>
       <Dialog.Header>
-        <Dialog.Title>Restart {agentDisplayName(conversation.providerId)}</Dialog.Title>
+        <Dialog.Title>
+          {gatewaySelection ? 'Switch source for' : 'Restart'}{' '}
+          {agentDisplayName(conversation.providerId)}
+        </Dialog.Title>
       </Dialog.Header>
       <Dialog.Body>
         <Field.Group>
           <p className="text-xs text-foreground-muted">
-            {resumes
-              ? 'The agent stops and the same session continues on the source below. A reply in progress is cut off.'
-              : 'This conversation has no session to resume yet, so a new one starts on the source below.'}
+            {gatewaySelection
+              ? 'Switching gateway accounts for the same model and context window keeps this session and applies after the current turn. Changing the model or context window restarts the agent.'
+              : resumes
+                ? 'The agent stops and the same session continues on the source below. A reply in progress is cut off.'
+                : 'This conversation has no session to resume yet, so a new one starts on the source below.'}
           </p>
           <ModelSourceSelect
+            remote={Boolean(connectionId)}
             agentId={conversation.providerId}
             value={source}
-            onChange={setSource}
+            onChange={(next) => {
+              setSourceTouched(true);
+              setSource(next);
+            }}
           />
           {!usesProviderSource(source) && (modelOptions || isTerminal) ? (
             <Field.Root>
@@ -226,7 +294,7 @@ const RestartConversationModal = observer(function RestartConversationModal({
           disabled={busy || problem === undefined || problem !== null}
           onClick={() => void restart()}
         >
-          {busy ? 'Restarting…' : 'Restart'}
+          {busy ? 'Applying…' : gatewaySelection ? 'Apply source' : 'Restart'}
         </ConfirmButton>
       </Dialog.Footer>
     </>
@@ -244,7 +312,9 @@ export function restartConversationCommands(conversation: Conversation | undefin
   return [
     {
       id: 'conversation:restart-source',
-      label: 'Restart with another provider…',
+      label: conversation.modelSource?.startsWith('gateway:')
+        ? 'Switch gateway provider…'
+        : 'Restart with another provider…',
       group: 'handoff',
       run: () => {
         void (async () => {

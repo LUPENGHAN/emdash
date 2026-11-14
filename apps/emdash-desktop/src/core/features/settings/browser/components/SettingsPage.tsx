@@ -104,6 +104,10 @@ export const SettingsPage = observer(function SettingsPage({
   }, [isSearching, query, visiblePages]);
 
   useEffect(() => {
+    if (String(activeTab) === 'model-gateway') {
+      onTabChange('providers');
+      return;
+    }
     if (!isSearching || visiblePages.length === 0) return;
     if (!visiblePages.some((page) => page.id === activeTab)) {
       onTabChange(visiblePages[0]!.id);

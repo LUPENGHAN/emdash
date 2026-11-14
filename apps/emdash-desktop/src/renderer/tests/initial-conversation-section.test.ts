@@ -56,6 +56,10 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock('@core/features/model-gateway/api/browser/use-gateway', () => ({
+  useGatewayStatus: () => ({ data: { state: 'stopped', providers: [] } }),
+}));
+
 vi.mock('@core/features/tasks/api/browser/create-task-modal/use-project-git-context', () => ({
   useProjectGitContext: () => ({ defaultBranch: 'main', hasRepository: true }),
 }));

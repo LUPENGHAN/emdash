@@ -1,4 +1,5 @@
 import { toast } from '@emdash/ui/react/primitives';
+import { getModelGatewayClient } from '@core/features/model-gateway/api/browser/client';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
 import type { Conversation, ConversationType } from '@core/primitives/conversations/api';
@@ -35,7 +36,14 @@ export async function switchConversationUi(
   conversation: Conversation
 ): Promise<{ conversationId: string; type: ConversationType }> {
   const type = switchTarget(conversation);
-  const created = await restartConversation(conversation, currentChoice(conversation), { type });
+  let choice = currentChoice(conversation);
+  if (conversation.modelSource?.startsWith('gateway:')) {
+    const route = await (await getModelGatewayClient()).route({ conversationId: conversation.id });
+    const selected = route?.pending ?? route;
+    if (selected)
+      choice = { ...choice, modelSource: selected.sourceId, sourceModel: selected.model };
+  }
+  const created = await restartConversation(conversation, choice, { type });
   return { conversationId: created.id, type };
 }
 

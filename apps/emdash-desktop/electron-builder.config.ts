@@ -44,6 +44,12 @@ const config: Configuration = {
   // electron-builder removes .d.ts files from node_modules even when unpacked.
   // tsserver reads these standard libraries as runtime data.
   extraResources: [
+    { from: '../model-gateway/dist/${os}-${arch}', to: 'model-gateway' },
+    {
+      from: '../model-gateway/dist',
+      to: 'model-gateway',
+      filter: ['*.LICENSE', 'THIRD-PARTY-NOTICES.txt'],
+    },
     {
       from: 'node_modules/typescript/lib',
       to: 'app.asar.unpacked/node_modules/typescript/lib',

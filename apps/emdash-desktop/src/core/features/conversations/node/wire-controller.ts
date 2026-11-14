@@ -534,7 +534,7 @@ async function resolveConversationRuntimeTarget(
   // renderer supplies only a conversation id and cannot inject spawn variables.
   const [providerEnv, launchContext] = await Promise.all([
     row.providerId && getProviderEnv
-      ? getProviderEnv(row.providerId, sourceOverrideOf(row.config))
+      ? getProviderEnv(row.providerId, sourceOverrideOf(row.config, conversationId))
       : undefined,
     row.type === 'acp' && workspacePath
       ? sessionLaunchContexts.resolve({

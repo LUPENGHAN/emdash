@@ -9,7 +9,7 @@ import type {
   EnsureConversationSessionResult,
 } from '@core/features/conversations/api/node/types';
 import { sourceOverrideOf, type ModelSourceOverride } from '@core/features/model-providers/api';
-import { AGENT_MODEL_ENV } from '@core/features/model-providers/node/source-launch';
+import { AGENT_MODEL_ENV } from '@core/features/model-providers/api/launch-env';
 import type { TaskSessionLaunchContextSource } from '@core/features/tasks/api/node/task-session-launch-context';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import type { Conversation } from '@core/primitives/conversations/api';
@@ -171,7 +171,7 @@ export class TuiConversationProvider implements ConversationProvider {
       await Promise.all([
         this.dependencies.getProviderConfig(
           conversation.providerId,
-          sourceOverrideOf(conversation)
+          sourceOverrideOf(conversation, conversation.id)
         ),
         conversation.autoApprove === true
           ? Promise.resolve(undefined)

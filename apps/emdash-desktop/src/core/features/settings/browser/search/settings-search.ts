@@ -227,7 +227,20 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     label: 'Providers',
     tab: 'providers',
     description: 'Gateways such as new-api that agents can run on instead of their own login.',
-    keywords: ['new-api', 'gateway', 'api key', 'base url', 'model provider', 'proxy', 'relay'],
+    keywords: [
+      'new-api',
+      'gateway',
+      'api key',
+      'base url',
+      'model provider',
+      'proxy',
+      'relay',
+      'routing',
+      'oauth',
+      'router usage',
+      '供应商',
+      '路由',
+    ],
   },
 
   // Remote access

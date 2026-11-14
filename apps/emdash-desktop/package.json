@@ -18,10 +18,10 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "node ../../tooling/scripts/ensure-packages-built.mjs && LOG_LEVEL=debug EMDASH_LOG_FILE=.emdash-logs/emdash.log electron-vite dev",
-    "dev:debug": "node ../../tooling/scripts/ensure-packages-built.mjs && VITE_LOG_LEVEL=debug LOG_LEVEL=debug EMDASH_LOG_FILE=.emdash-logs/emdash.log electron-vite dev",
-    "dev:main": "node ../../tooling/scripts/ensure-packages-built.mjs && electron-vite dev --watch main",
-    "dev:renderer": "node ../../tooling/scripts/ensure-packages-built.mjs && electron-vite dev --watch renderer",
+    "dev": "node ../model-gateway/scripts/build.mjs && node ../../tooling/scripts/ensure-packages-built.mjs && LOG_LEVEL=debug EMDASH_LOG_FILE=.emdash-logs/emdash.log electron-vite dev",
+    "dev:debug": "node ../model-gateway/scripts/build.mjs && node ../../tooling/scripts/ensure-packages-built.mjs && VITE_LOG_LEVEL=debug LOG_LEVEL=debug EMDASH_LOG_FILE=.emdash-logs/emdash.log electron-vite dev",
+    "dev:main": "node ../model-gateway/scripts/build.mjs && node ../../tooling/scripts/ensure-packages-built.mjs && electron-vite dev --watch main",
+    "dev:renderer": "node ../model-gateway/scripts/build.mjs && node ../../tooling/scripts/ensure-packages-built.mjs && electron-vite dev --watch renderer",
     "doctor": "tsx scripts/doctor.ts",
     "boot:bench": "tsx scripts/boot-bench.ts",
     "db:generate": "tsx scripts/db-generate.ts",
@@ -32,13 +32,13 @@
     "db:reset": "tsx scripts/db-reset.ts",
     "test": "pnpm exec nx test @emdash/emdash-desktop",
     "test:workspace-server-remote": "pnpm exec nx run @emdash/emdash-desktop:test-workspace-server-remote",
-    "build": "electron-vite build",
+    "build": "node ../model-gateway/scripts/build.mjs && electron-vite build",
     "build:main": "electron-vite build --filter main",
     "build:renderer": "electron-vite build --filter renderer",
     "package": "pnpm run build && electron-builder --config electron-builder.config.ts",
     "package:mac": "pnpm run build && electron-builder --mac --config electron-builder.config.ts",
-    "package:linux": "pnpm run build && electron-builder --linux --publish never --config electron-builder.config.ts",
-    "package:win": "pnpm run build && electron-builder --win --publish never --config electron-builder.config.ts",
+    "package:linux": "node ../model-gateway/scripts/build.mjs --target linux-x64 && pnpm run build && electron-builder --linux --publish never --config electron-builder.config.ts",
+    "package:win": "node ../model-gateway/scripts/build.mjs --target win32-x64 && pnpm run build && electron-builder --win --publish never --config electron-builder.config.ts",
     "postinstall": "node --experimental-strip-types scripts/postinstall.ts",
     "rebuild": "electron-rebuild -f --only=better-sqlite3",
     "clean": "rm -rf node_modules dist",
@@ -186,6 +186,9 @@
           }
         }
       }
-    }
+    },
+    "implicitDependencies": [
+      "@emdash/model-gateway"
+    ]
   }
 }

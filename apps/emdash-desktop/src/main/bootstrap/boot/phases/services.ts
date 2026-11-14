@@ -12,6 +12,7 @@ import { pullRequestsPluginRegistry } from '@emdash/plugins/pull-requests';
 import { secret } from '@emdash/shared';
 import { runWithTimeout } from '@emdash/shared/scheduling';
 import { peek } from '@emdash/wire/state';
+import { eq } from 'drizzle-orm';
 import { app, Notification, powerMonitor } from 'electron';
 import { AccountAuthServerClient } from '@core/features/account/node/services/account-auth-server-client';
 import { AccountOAuthClient } from '@core/features/account/node/services/account-oauth-client';
@@ -103,17 +104,24 @@ import { LocalSettingsSync } from '@core/features/machines/node/local-settings-s
 import type { ProjectMemory } from '@core/features/memory/api/types';
 import { memoryEvents } from '@core/features/memory/node/event-host';
 import { MemoryService } from '@core/features/memory/node/memory-service';
+import type { GatewayUsage } from '@core/features/model-gateway/api/contract';
+import {
+  ModelGatewayService,
+  type GatewayRoute,
+} from '@core/features/model-gateway/node/gateway-service';
 import {
   isOfficialAccount,
+  type ModelProvider,
   type ModelProviderKeys,
   type ModelSourceOverride,
   type UsageLimitsService,
 } from '@core/features/model-providers/api';
-import { prepareAgentProvider } from '@core/features/model-providers/node/agent-provider-files';
 import {
+  ensureCodexAppServerWrapper,
   ensureCodexModelCatalog,
   readKnownCodexModels,
-} from '@core/features/model-providers/node/codex-model-catalog';
+} from '@core/features/model-providers/api/node/codex-launch';
+import { prepareAgentProvider } from '@core/features/model-providers/node/agent-provider-files';
 import {
   createEffectiveAgentConfig,
   type EffectiveAgentConfig,
@@ -178,6 +186,7 @@ import { startPeriodicSweep } from '@core/primitives/periodic-sweep/node/periodi
 import { DEFAULT_AGENT_GIT_CREDENTIALS } from '@core/primitives/project-settings/api';
 import type { HostReachabilityProbe } from '@core/primitives/ssh/api';
 import { AppDbKeyValueStore } from '@core/services/app-db/node/key-value-store';
+import { conversations } from '@core/services/app-db/node/schema';
 import { createNotificationService } from '@core/services/notifications/node';
 import { LegacyAccountImports } from '@core/services/provider-accounts/node/migrations/legacy-account-imports';
 import { listProviderAccountSummaries } from '@core/services/provider-accounts/node/provider-account-service';
@@ -265,6 +274,7 @@ export type ServicesBundle = {
   readonly previewServerAccess: PreviewServerAccessService;
   readonly promptLibrary: ReturnType<typeof createPromptLibraryService>;
   readonly requirements: RequirementsService;
+  readonly modelGateway: ModelGatewayService;
   readonly memory: MemoryService;
   readonly projectDeletion: ProjectDeletionDependencies;
   readonly projects: ProjectAttachmentManager;
@@ -497,12 +507,116 @@ export async function bootServices(
   // Read the agents' session history once Emdash has settled, so the first look is quick.
   const usageWarmTimer = setTimeout(() => usageStats.warm(), 60_000);
   appScope.add(() => clearTimeout(usageWarmTimer));
+  const gatewayResources = app.isPackaged
+    ? join(process.resourcesPath, 'model-gateway')
+    : join(app.getAppPath(), '..', 'model-gateway', 'dist');
+  const modelGateway = new ModelGatewayService({
+    secrets: encryptedAppSecretsStore,
+    routes: new AppDbKeyValueStore<Record<string, GatewayRoute>>(db, 'model-gateway-routes', log),
+    ledger: new AppDbKeyValueStore<Record<string, GatewayUsage>>(db, 'model-gateway-usage', log),
+    binary: join(
+      gatewayResources,
+      ...(app.isPackaged
+        ? []
+        : [
+            `${{ darwin: 'mac', win32: 'win', linux: 'linux' }[process.platform as 'darwin' | 'win32' | 'linux']}-${process.arch}`,
+          ]),
+      process.platform === 'win32' ? 'model-gateway.exe' : 'model-gateway'
+    ),
+    dataDir: join(app.getPath('userData'), 'model-gateway'),
+    inventory: async () =>
+      Promise.all(
+        (await appSettingsService.get('modelProviders')).providers.map(async (provider) => ({
+          provider,
+          apiKey: await modelProviderKeys.read(provider.id),
+          protocolKeys: Object.fromEntries(
+            await Promise.all(
+              (['anthropic', 'openai-chat', 'openai-responses'] as const).map(async (protocol) => [
+                protocol,
+                await modelProviderKeys.read(provider.id, protocol),
+              ])
+            )
+          ),
+        }))
+      ),
+    adoptLegacy: async (entries) => {
+      const aliases: Record<string, string> = {};
+      const additions: ModelProvider[] = [];
+      const inventory = (await appSettingsService.get('modelProviders')).providers;
+      for (const entry of entries) {
+        let target = inventory.find((p) => p.id === entry.id);
+        if (!target) {
+          for (const candidate of inventory) {
+            if (
+              !candidate.account &&
+              candidate.protocol !== 'anthropic' &&
+              candidate.protocol !== 'openai-chat' &&
+              candidate.baseUrl.replace(/\/+$/, '') === entry.baseUrl &&
+              (await modelProviderKeys.read(candidate.id)) === entry.apiKey
+            ) {
+              target = candidate;
+              break;
+            }
+          }
+        }
+        const id = target?.id ?? entry.id;
+        await modelProviderKeys.set(id, entry.apiKey);
+        additions.push({
+          ...target,
+          id,
+          name: target?.name ?? entry.name,
+          protocol: target ? target.protocol : 'openai-responses',
+          baseUrl: target?.baseUrl ?? entry.baseUrl,
+          models: [...new Set([...(target?.models ?? []), ...entry.models])],
+          contextWindows: { ...target?.contextWindows, ...entry.contextWindows },
+          modelAliases: { ...target?.modelAliases, ...entry.modelMap },
+        });
+        aliases[entry.id] = id;
+      }
+      const latest = (await appSettingsService.get('modelProviders')).providers;
+      const changed = new Map(additions.map((p) => [p.id, p]));
+      await appSettingsService.update('modelProviders', {
+        providers: [
+          ...latest.map((p) => changed.get(p.id) ?? p),
+          ...additions.filter((p) => !latest.some((item) => item.id === p.id)),
+        ],
+      });
+      return aliases;
+    },
+    conversations: async () =>
+      db
+        .select({ id: conversations.id, title: conversations.title, agent: conversations.provider })
+        .from(conversations),
+    conversationIdle: async (id) => {
+      const [row] = await db
+        .select({ status: conversations.agentStatus })
+        .from(conversations)
+        .where(eq(conversations.id, id))
+        .limit(1);
+      return row?.status === 'idle' || row?.status === 'completed' || row?.status === 'error';
+    },
+    conversationLocal: async (id) => {
+      const [row] = await db
+        .select({ location: conversations.location, ssh: conversations.sshConnectionId })
+        .from(conversations)
+        .where(eq(conversations.id, id))
+        .limit(1);
+      return Boolean(row && row.location !== 'remote' && !row.ssh);
+    },
+  });
+  appScope.add(() => modelGateway.dispose());
+  void modelGateway
+    .restore()
+    .catch(() => log.warn('Could not restore the model gateway. Retry from settings.'));
   const effectiveAgentConfig = createEffectiveAgentConfig({
+    prepareGateway: (sourceId, model, conversationId) =>
+      modelGateway.prepareLaunch(sourceId, model, conversationId),
     getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
     getApiKey: modelProviderKeys.read,
     prepareAgentProvider: (agent) => prepareAgentProvider(agent),
     prepareAccountHome: (account) => prepareAccountHome(account),
+    ensureCodexAppServerWrapper: () => ensureCodexAppServerWrapper(),
     ensureCodexModelCatalog: (catalog) => ensureCodexModelCatalog(catalog),
     readKnownCodexModels: () => readKnownCodexModels(),
     warn: (message, details) => log.warn(message, details),
@@ -1289,6 +1403,7 @@ export async function bootServices(
     promptLibrary: promptLibraryService,
     requirements: requirementsService,
     memory: memoryService,
+    modelGateway,
     projectDeletion,
     projects: projectManager,
     projectSettings: projectSettingsService,

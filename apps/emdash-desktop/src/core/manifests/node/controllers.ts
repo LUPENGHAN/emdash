@@ -52,6 +52,8 @@ import { createMachinesWireController } from '@core/features/machines/node/wire-
 import { createMcpWireController } from '@core/features/mcp/node/wire-controller';
 import type { MemoryService } from '@core/features/memory/node/memory-service';
 import { createMemoryWireController } from '@core/features/memory/node/wire-controller';
+import type { ModelGatewayService } from '@core/features/model-gateway/node/gateway-service';
+import { createModelGatewayWireController } from '@core/features/model-gateway/node/wire-controller';
 import type { ModelProviderKeys, UsageLimitsService } from '@core/features/model-providers/api';
 import { isOfficialAccount, type OfficialAccount } from '@core/features/model-providers/api';
 import type { EffectiveAgentConfig } from '@core/features/model-providers/node/effective-agent-config';
@@ -174,6 +176,7 @@ export type DesktopControllerContext = {
   readonly projectDeletion: ProjectDeletionDependencies;
   readonly promptLibrary: PromptLibraryService;
   readonly requirements: RequirementsService;
+  readonly modelGateway: ModelGatewayService;
   readonly memory: MemoryService;
   readonly projects: ProjectAttachmentManager;
   readonly projectSettings: ProjectSettingsService;
@@ -246,6 +249,7 @@ async function findOfficialAccount(
 }
 
 export const desktopNodeControllers = {
+  modelGateway: { create: ({ modelGateway }) => createModelGatewayWireController(modelGateway) },
   account: {
     create: ({ accountService, logger, telemetry }) =>
       createAccountWireController(accountService, { logger, telemetry }),

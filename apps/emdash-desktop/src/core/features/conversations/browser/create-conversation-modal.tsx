@@ -375,7 +375,12 @@ export const CreateConversationModal = observer(function CreateConversationModal
               </Field.Description>
             </Field.Root>
           ) : null}
-          <ModelSourceSelect agentId={providerId} value={source} onChange={setSource} />
+          <ModelSourceSelect
+            remote={Boolean(connectionId)}
+            agentId={providerId}
+            value={source}
+            onChange={setSource}
+          />
           {showModelSelect && modelOptions ? (
             <Field.Root>
               <Field.Label>Model</Field.Label>

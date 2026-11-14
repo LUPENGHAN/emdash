@@ -6,10 +6,10 @@ import {
   DEFAULT_CODEX_REASONING,
   type CodexReasoning,
   type CodexReasoningEffort,
-} from '../api';
+} from '..';
 // Codex's own instructions for models it has no metadata for (openai/codex,
 // codex-rs/models-manager/prompt.md at 2cf2a6a844, Apache-2.0).
-import codexBaseInstructions from './codex-base-instructions.md?raw';
+import codexBaseInstructions from '../../node/codex-base-instructions.md?raw';
 
 export type CodexCatalogModel = {
   id: string;
@@ -57,16 +57,36 @@ export function codexAppServerWrapperPath(
 
 const APP_SERVER_WRAPPER = `#!/bin/sh
 # Written by Emdash for its Codex chat conversations on a model provider.
-exec "\${EMDASH_CODEX_BIN:-codex}" -c "model_catalog_json=\\"$EMDASH_CODEX_MODEL_CATALOG\\"" "$@"
+if [ -n "$EMDASH_CODEX_GATEWAY_URL" ]; then
+  set -- -c 'model_provider="custom-gateway"' -c 'model_providers.custom-gateway.name="Emdash"' -c "model_providers.custom-gateway.base_url=\\"$EMDASH_CODEX_GATEWAY_URL\\"" -c 'model_providers.custom-gateway.env_key="EMDASH_MODEL_PROVIDER_KEY"' -c 'model_providers.custom-gateway.wire_api="responses"' "$@"
+fi
+if [ -n "$EMDASH_CODEX_MODEL_CATALOG" ]; then
+  set -- -c "model_catalog_json=\\"$EMDASH_CODEX_MODEL_CATALOG\\"" "$@"
+fi
+exec "\${EMDASH_CODEX_BIN:-codex}" "$@"
 `;
 
-// TOML literal string ('…'): a Windows path's backslashes are not escapes there.
+// TOML literal strings preserve Windows paths; gateway URLs contain no single quotes.
 const APP_SERVER_WRAPPER_CMD = [
   '@echo off',
   'rem Written by Emdash for its Codex chat conversations on a model provider.',
-  `"%EMDASH_CODEX_BIN%" -c "model_catalog_json='%EMDASH_CODEX_MODEL_CATALOG%'" %*`,
+  'set "emdash_gateway_args="',
+  `if defined EMDASH_CODEX_GATEWAY_URL set "emdash_gateway_args=-c model_provider='custom-gateway' -c model_providers.custom-gateway.name='Emdash' -c model_providers.custom-gateway.base_url='%EMDASH_CODEX_GATEWAY_URL%' -c model_providers.custom-gateway.env_key='EMDASH_MODEL_PROVIDER_KEY' -c model_providers.custom-gateway.wire_api='responses'"`,
+  'set "emdash_catalog_args="',
+  `if defined EMDASH_CODEX_MODEL_CATALOG set "emdash_catalog_args=-c "model_catalog_json='%EMDASH_CODEX_MODEL_CATALOG%'""`,
+  '"%EMDASH_CODEX_BIN%" %emdash_gateway_args% %emdash_catalog_args% %*',
   '',
 ].join('\r\n');
+
+/** Installs the process-start configuration bridge without changing Codex config.toml. */
+export async function ensureCodexAppServerWrapper(
+  home = codexHome(),
+  platform: NodeJS.Platform = process.platform
+): Promise<void> {
+  const wrapper = codexAppServerWrapperPath(home, platform);
+  await writeIfChanged(wrapper, platform === 'win32' ? APP_SERVER_WRAPPER_CMD : APP_SERVER_WRAPPER);
+  if (platform !== 'win32') await chmod(wrapper, 0o755);
+}
 
 export type CodexModelInfo = Record<string, unknown>;
 
@@ -210,9 +230,7 @@ export async function ensureCodexModelCatalog(
   const file = codexModelCatalogPath(catalog.providerKey, home);
   const next = `${JSON.stringify(buildCodexModelCatalog(catalog, known), null, 2)}\n`;
   await writeIfChanged(file, next);
-  const wrapper = codexAppServerWrapperPath(home, platform);
-  await writeIfChanged(wrapper, platform === 'win32' ? APP_SERVER_WRAPPER_CMD : APP_SERVER_WRAPPER);
-  if (platform !== 'win32') await chmod(wrapper, 0o755);
+  await ensureCodexAppServerWrapper(home, platform);
 }
 
 /** The model metadata Codex cached from OpenAI; empty when it never signed in here. */

@@ -1,18 +1,25 @@
 import { secret } from '@emdash/shared';
 import type { SecretStore } from '@core/primitives/secrets/api/secret-store';
-import { modelProviderSecretKey, type ModelProviderKeys } from '../api';
+import {
+  PROVIDER_PROTOCOLS,
+  modelProviderSecretKey,
+  type ProviderProtocol,
+  type ModelProviderKeys,
+} from '../api';
 
 /**
  * Provider API keys, kept in the encrypted (OS keychain backed) secrets store. The
- * renderer can set, clear and check a key, but never read one back.
+ * settings UI can display and copy keys through an explicit read operation.
  */
 export function createModelProviderKeys(
   store: SecretStore,
   fetchImpl: typeof fetch = fetch
 ): ModelProviderKeys {
-  const read = async (providerId: string): Promise<string | null> => {
+  const read = async (providerId: string, protocol?: ProviderProtocol): Promise<string | null> => {
     try {
-      return (await store.getSecret(modelProviderSecretKey(providerId)))?.expose() ?? null;
+      return (
+        (await store.getSecret(modelProviderSecretKey(providerId, protocol)))?.expose() ?? null
+      );
     } catch {
       return null; // Secure storage unavailable: behave as if no key is stored.
     }
@@ -21,14 +28,19 @@ export function createModelProviderKeys(
   return {
     read,
     async hasKey(providerId: string): Promise<boolean> {
-      return (await read(providerId)) !== null;
+      return (
+        Boolean(await read(providerId)) ||
+        (await Promise.all(PROVIDER_PROTOCOLS.map((protocol) => read(providerId, protocol)))).some(
+          Boolean
+        )
+      );
     },
-    async set(providerId: string, apiKey: string): Promise<void> {
-      const key = modelProviderSecretKey(providerId);
+    async set(providerId: string, apiKey: string, protocol?: ProviderProtocol): Promise<void> {
+      const key = modelProviderSecretKey(providerId, protocol);
       await store.setSecret(key, secret(apiKey.trim(), key));
     },
-    async clear(providerId: string): Promise<void> {
-      await store.deleteSecret(modelProviderSecretKey(providerId));
+    async clear(providerId: string, protocol?: ProviderProtocol): Promise<void> {
+      await store.deleteSecret(modelProviderSecretKey(providerId, protocol));
     },
     /**
      * Lists the provider's upstream models (`GET <url>`), which also checks the URL and

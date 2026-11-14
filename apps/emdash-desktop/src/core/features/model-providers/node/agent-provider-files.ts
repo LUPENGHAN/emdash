@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createLocalPluginFs } from '@emdash/core/services/agent-plugins/api/plugins/helpers';
 import { parseDocument } from 'yaml';
 import { getPlugin } from '@core/features/agents/api/node/plugin-registry';
-import { PROVIDER_KEY_ENV, type ExtensionProviderAgent } from './source-launch';
+import { PROVIDER_KEY_ENV, type ExtensionProviderAgent } from '../api/node/source-launch';
 
 type Env = { home: string; env: NodeJS.ProcessEnv };
 
