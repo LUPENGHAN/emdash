@@ -39,9 +39,14 @@ committed and shared.
   optimistic revision, attempts, verification receipts, approval/denial evidence and last upstream
   contact. Commands remain opaque. The backend factory uses the existing effective Git-settings
   resolver and operation credential leases; it introduces no additional model/provider settings.
-  The policy and delegation callback are implemented; production verification execution,
-  bootstrap/event/Wire wiring and the settings UI are still pending. Do not treat the Host Git job
-  alone as enabled automatic baseline synchronization.
+  Desktop bootstrap composes the policy, Host Scripts verification executor, typed Wire model,
+  settings section, delegation callback and coalesced attach/recovery/observed-merge triggers.
+  Delegation freezes the approved full commit OID; configured verification runs in a separate
+  pinned checkout and persists its workspace/run receipts without replaying unknown commands.
+  Explicit cleanup persists artifact intent/outcome on the original attempt and calls the Host
+  registry's restricted `removeUnchangedWorktree` verb. It preserves approval/denial and output,
+  refuses local or active work, and never runs lifecycle teardown or deletes branches. Recovery
+  and cleanup inspect the saved path independently of placement-setting changes.
 
 - `ProjectSettingsProvider` exposes stored Git identity, stored integration account choices, stored placement, placement context, and
   resolver-backed tmux. Its only current-settings write is `setWorktreeRoot()`, which validates the
