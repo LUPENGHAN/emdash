@@ -21,6 +21,7 @@ export function createPullRequestsWireController(
   scope.add(() => details.dispose());
   scope.add(() => syncState.dispose());
   return createController(pullRequestsContract, {
+    merged: service.merged,
     listPullRequests: (input) => service.listPullRequests(input),
     getFilterOptions: (input) => service.getFilterOptions(input.repositoryUrls),
     getPullRequestsForBranch: (input) =>

@@ -132,6 +132,15 @@ export const syncStateSchema = z.object({
 
 export const syncStateKeySchema = repositoryInputSchema;
 
+export const pullRequestMergedObservationSchema = z.object({
+  repositoryUrl: z.string(),
+  url: z.string(),
+  baseRefName: z.string(),
+  headRefOid: z.string(),
+  observedAt: z.number(),
+});
+export type PullRequestMergedObservation = z.infer<typeof pullRequestMergedObservationSchema>;
+
 export type PullRequestFilters = z.infer<typeof pullRequestFiltersSchema>;
 export type PullRequestSort = z.infer<typeof pullRequestSortSchema>;
 export type ListPullRequestsInput = z.infer<typeof listPullRequestsInputSchema>;

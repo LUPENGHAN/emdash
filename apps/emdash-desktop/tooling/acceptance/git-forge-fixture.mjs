@@ -18,6 +18,7 @@ export async function startGitForgeFixture(directory, sourceRepository) {
   const prs = [];
   const requests = [];
   let loseResponse = false;
+  let closed = false;
   const repositoryUrl = (owner) => `${origin.replace('http:', 'https:')}/${owner}/sdk`;
   const oid = async (owner, branch) =>
     (
@@ -33,10 +34,10 @@ export async function startGitForgeFixture(directory, sourceRepository) {
     web_url: pr.url,
     title: pr.title,
     description: '',
-    state: 'opened',
+    state: pr.merged ? 'merged' : 'opened',
     draft: false,
     created_at: '2026-11-17T00:00:00Z',
-    updated_at: '2026-11-17T00:00:00Z',
+    updated_at: pr.updatedAt ?? '2026-11-17T00:00:00Z',
     source_branch: pr.branch,
     target_branch: pr.base,
     sha: pr.oid,
@@ -189,7 +190,15 @@ export async function startGitForgeFixture(directory, sourceRepository) {
     loseNextCreateResponse: () => {
       loseResponse = true;
     },
+    markMerged: (number) => {
+      const pr = prs.find((entry) => entry.number === number);
+      if (!pr) throw new Error('Missing fixture pull request');
+      pr.merged = true;
+      pr.updatedAt = new Date().toISOString();
+    },
     close: async () => {
+      if (closed) return;
+      closed = true;
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
     },

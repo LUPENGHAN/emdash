@@ -170,6 +170,10 @@ import { ProjectSettingsService } from '@core/features/projects/api/node/setting
 import { createBackendProjectBaselineSync } from '@core/features/projects/node/backend-baseline-sync';
 import { createBackendBaselineVerification } from '@core/features/projects/node/backend-baseline-verification';
 import { baselineSyncPokes } from '@core/features/projects/node/baseline-sync-pokes';
+import {
+  ProjectBaselineSyncTriggers,
+  resolveProjectBaselineMergeTarget,
+} from '@core/features/projects/node/baseline-sync-triggers';
 import type { ProjectDeletionDependencies } from '@core/features/projects/node/operations/deleteProject';
 import { getProjects } from '@core/features/projects/node/operations/getProjects';
 import {
@@ -1854,6 +1858,70 @@ export async function bootServices(
     }),
     changed: (projectId) => baselineSyncPokes.poke({ projectId }),
   });
+  const baselineTriggers = new ProjectBaselineSyncTriggers({
+    scope: appScope,
+    projects: projectManager,
+    availability: desktopRuntimes.hostAvailability,
+    baselines: projectBaselines,
+    mergeTarget: (project) =>
+      resolveProjectBaselineMergeTarget(project, (url) =>
+        pullRequestRepositoryUrls(
+          (value) => repositoryRouter.route(value),
+          [url],
+          (integrationId) => pullRequestsPluginRegistry.get(integrationId) !== undefined
+        )
+      ),
+    onError: (projectId, error) =>
+      log.warn('Automatic baseline check failed', { projectId, error: String(error) }),
+  });
+  // Register hooks before seeding attachments that started during service composition.
+  void getProjects(db)
+    .then((projects) => {
+      for (const project of projects) {
+        const attached = projectManager.requireAttached(project.id);
+        if (attached.success) baselineTriggers.projectOpened(project.id, attached.data);
+      }
+    })
+    .catch((error) => log.warn('Could not seed baseline observers', { error: String(error) }));
+  let baselineMergeSubscribed = false;
+  let baselineMergeSubscription: Promise<void> | undefined;
+  const subscribeBaselineMerges = () => {
+    if (baselineMergeSubscribed || baselineMergeSubscription || appScope.disposed) return;
+    baselineMergeSubscription = (async () => {
+      const client = await getPullRequestsRuntimeClient();
+      const unsubscribe = await client.merged.subscribe(undefined, {
+        signal: appScope.signal,
+        onEvent: (event) => {
+          void baselineTriggers.merged(event);
+        },
+        onGap: () => baselineTriggers.recover(),
+        onError: (error) =>
+          log.warn('Baseline merge observations unavailable', { error: String(error) }),
+      });
+      appScope.add(unsubscribe);
+      baselineMergeSubscribed = true;
+    })()
+      .catch((error) => {
+        if (!appScope.disposed)
+          log.warn('Could not subscribe to baseline merge observations', { error: String(error) });
+      })
+      .finally(() => {
+        baselineMergeSubscription = undefined;
+      });
+  };
+  appScope.add(
+    desktopRuntimes.workers.pullRequests.onStateChanged((state) => {
+      if (state.kind !== 'ready') return;
+      baselineTriggers.recover();
+      subscribeBaselineMerges();
+    })
+  );
+  const resumeBaselineChecks = () => baselineTriggers.recover();
+  powerMonitor.on('resume', resumeBaselineChecks);
+  appScope.add(() => {
+    powerMonitor.off('resume', resumeBaselineChecks);
+  });
+  subscribeBaselineMerges();
   const taskPullRequests = createBackendTaskPullRequests({
     db,
     scope: appScope,

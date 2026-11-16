@@ -21,6 +21,7 @@ import { getSidebarStore } from '@core/features/workbench/contributions/browser/
 import { openModal } from '@core/manifests/browser/modal-api';
 import { getNavigation } from '@core/primitives/navigation/browser/navigation-selectors';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
+import { getPullRequestsRuntimeClient } from '@core/services/pull-requests/api/client';
 
 /** Test renderer entry: normal typed clients and stores, with isolated paths supplied by the harness. */
 export async function prepareDelegationCaller(input: {
@@ -244,6 +245,13 @@ export function openBaselineFixtureSettings(projectId: string) {
 export async function baselineFixtureState(projectId: string) {
   return (await (await getProjectsWireClient()).baseline.state({ projectId }, 'current').snapshot())
     .data;
+}
+
+export async function observeMergedPrFixture(input: { repositoryUrl: string; number: number }) {
+  const result = await (
+    await getPullRequestsRuntimeClient()
+  ).refreshPullRequest({ ...input, policy: 'force' });
+  if (!result.success) throw new Error(result.error.type);
 }
 
 export async function coordinatorDelegationStatus(id: string, taskId: string) {

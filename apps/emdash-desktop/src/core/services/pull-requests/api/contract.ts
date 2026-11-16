@@ -1,5 +1,5 @@
 import { pullRequestFileSchema, pullRequestSchema } from '@emdash/plugins/pull-requests/schemas';
-import { defineContract, fallible, liveModel, liveState } from '@emdash/wire/rpc';
+import { defineContract, eventStream, fallible, liveModel, liveState } from '@emdash/wire/rpc';
 import { z } from 'zod';
 import { pullRequestErrorSchema } from './errors';
 import {
@@ -21,11 +21,13 @@ import {
   refreshRepositoryInputSchema,
   pullRequestDetailsKeySchema,
   pullRequestDetailsSchema,
+  pullRequestMergedObservationSchema,
 } from './schemas';
 
 export const pullRequestsDomain = 'pullRequests' as const;
 
 export const pullRequestsContract = defineContract({
+  merged: eventStream({ key: z.void(), event: pullRequestMergedObservationSchema }),
   listPullRequests: fallible({
     input: listPullRequestsInputSchema,
     data: listPullRequestsResultSchema,

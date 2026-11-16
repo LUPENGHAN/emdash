@@ -13,6 +13,7 @@ import { KeyedMutex, type Run, type Scope } from '@emdash/shared/concurrency';
 import type { Logger } from '@emdash/shared/logger';
 import { requestPriorities } from '@emdash/shared/requests';
 import { waitWithSignal } from '@emdash/shared/scheduling';
+import { createEventStreamHost } from '@emdash/wire/live';
 import { type ContractClient } from '@emdash/wire/rpc';
 import {
   cell,
@@ -36,6 +37,7 @@ import {
   type RefreshRepositoryInput,
   type RefreshPullRequestInput,
 } from '../api';
+import { pullRequestsContract } from '../api/contract';
 import type { PullRequestError } from '../api/errors';
 import type { EnsurePullRequestInput } from '../api/schemas';
 import { PullRequestEngine } from './engine';
@@ -89,6 +91,7 @@ export type PullRequestServiceOptions = {
 };
 
 export class PullRequestService {
+  readonly merged = createEventStreamHost(pullRequestsContract.merged);
   private readonly syncStateCells: Family<SyncStateKey, Cell<SyncState>>;
   private readonly repositories = new Map<string, RepositoryEntry>();
   private readSequence = 0;
@@ -101,6 +104,7 @@ export class PullRequestService {
   private readonly details = new Map<string, DetailEntry>();
 
   constructor(private readonly options: PullRequestServiceOptions) {
+    options.scope.add(() => this.merged.dispose());
     this.syncStateCells = family<SyncStateKey, Cell<SyncState>>(
       (key) => cell(this.repositoryState(key.repositoryUrl)),
       { name: 'pull-request-sync-state', key: (key) => key.repositoryUrl, scope: options.scope }
@@ -810,6 +814,14 @@ export class PullRequestService {
       sequence: read.sequence,
       generation: read.generation,
     });
+    if (saved.status === 'merged' && previous?.status !== 'merged')
+      this.merged.emit(undefined, {
+        repositoryUrl: saved.repositoryUrl,
+        url: saved.url,
+        baseRefName: saved.baseRefName,
+        headRefOid: saved.headRefOid,
+        observedAt: observation.fetchedAt,
+      });
     return saved;
   }
 

@@ -9,15 +9,60 @@ import { requestPriorities } from '@emdash/shared/requests';
 import { createStubLogger } from '@emdash/shared/testing';
 import type { ContractClient } from '@emdash/wire/rpc';
 import { snapshot } from '@emdash/wire/state';
+import { createTestWire } from '@emdash/wire/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GitPlatformAuthContract } from '../api';
+import { pullRequestsContract } from '../api/contract';
 import type { PullRequestError } from '../api/errors';
+import type { PullRequestMergedObservation } from '../api/schemas';
 import type { PullRequestEngine } from './engine';
 import { PullRequestService } from './pull-request-service';
 import { PullRequestStore, pullRequestSqliteStore } from './store';
+import { createPullRequestsWireController } from './wire-controller';
 
 const repositoryUrl = 'https://github.com/emdash/emdash';
 const scopes: Scope[] = [];
+
+it('publishes a merged fact only after accepted metadata is saved and does not repeat it', async () => {
+  const h = await harness();
+  const wire = createTestWire(
+    pullRequestsContract,
+    createPullRequestsWireController(h.service, h.scope)
+  );
+  h.scope.add(() => wire.dispose());
+  const changed = vi.fn((event: PullRequestMergedObservation) => {
+    expect(h.store.getPullRequestByUrl(event.url)?.status).toBe('merged');
+  });
+  h.scope.add(await wire.client.merged.subscribe(undefined, { onEvent: changed }));
+  const original = pullRequestFixture({
+    identifier: '#7',
+    url: `${repositoryUrl}/pull/7`,
+    status: 'open',
+  });
+  h.store.savePullRequest(original);
+  h.context.fetchPullRequest.mockResolvedValue(observed(original));
+  await h.service.mergePullRequest(
+    repositoryUrl,
+    7,
+    { strategy: 'merge' },
+    new AbortController().signal
+  );
+  expect(changed).not.toHaveBeenCalled();
+  h.context.fetchPullRequest.mockResolvedValue(observed({ ...original, status: 'merged' }));
+  expect(await h.service.refreshPullRequest({ repositoryUrl, number: 7, policy: 'force' })).toEqual(
+    ok()
+  );
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  expect(changed).toHaveBeenCalledWith(
+    expect.objectContaining({
+      repositoryUrl,
+      baseRefName: original.baseRefName,
+      headRefOid: original.headRefOid,
+    })
+  );
+  await h.service.refreshPullRequest({ repositoryUrl, number: 7, policy: 'force' });
+  expect(changed).toHaveBeenCalledOnce();
+});
 afterEach(async () => {
   for (const scope of scopes.splice(0).reverse()) await scope.dispose();
   vi.useRealTimers();

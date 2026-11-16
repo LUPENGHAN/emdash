@@ -1,6 +1,6 @@
 import { LOCAL_HOST_REF } from '@emdash/core/primitives/host/api';
 import { localBranchRefSchema } from '@emdash/core/runtimes/git/api';
-import { deferred } from '@emdash/shared/testing';
+import { deferred, waitFor } from '@emdash/shared/testing';
 import { expect, it, vi } from 'vitest';
 import type {
   ProjectBaselineRecord,
@@ -13,6 +13,47 @@ import { ProjectBaselineSyncService, type BaselineSyncDependencies } from './bas
 const firstOid = 'a'.repeat(40);
 const nextOid = 'b'.repeat(40);
 const fingerprint = 'c'.repeat(64);
+
+it('performs a following fetch when a merge is observed during a running manual check', async () => {
+  const t = setup();
+  const gate = deferred<ProjectBaselineObservation>();
+  vi.mocked(t.deps.synchronize)
+    .mockImplementationOnce(() => gate.promise)
+    .mockImplementationOnce(async () => {
+      t.local(nextOid);
+      return { ...t.observation, oid: nextOid, upstreamOid: nextOid };
+    });
+  const service = t.service();
+  const manual = service.synchronize('sdk', 'manual');
+  await waitFor(() => vi.mocked(t.deps.synchronize).mock.calls.length === 1);
+  const merged = service.synchronize('sdk', 'pr-merged', { afterCurrent: true });
+  const repeated = service.synchronize('sdk', 'pr-merged', { afterCurrent: true });
+  gate.resolve(t.observation);
+  expect((await manual).proof?.oid).toBe(firstOid);
+  expect((await merged).proof?.oid).toBe(nextOid);
+  expect((await repeated).proof?.oid).toBe(nextOid);
+  expect(t.deps.synchronize).toHaveBeenCalledTimes(2);
+  expect((await service.get('sdk')).attempts.at(-1)?.trigger).toBe('pr-merged');
+});
+
+it('does not approve a delegation from the earlier fetch of a running background check', async () => {
+  const t = setup();
+  const gate = deferred<ProjectBaselineObservation>();
+  vi.mocked(t.deps.synchronize)
+    .mockImplementationOnce(() => gate.promise)
+    .mockImplementationOnce(async () => {
+      t.local(nextOid);
+      return { ...t.observation, oid: nextOid, upstreamOid: nextOid };
+    });
+  const service = t.service();
+  const attached = service.synchronize('sdk', 'attach');
+  await waitFor(() => vi.mocked(t.deps.synchronize).mock.calls.length === 1);
+  const delegated = service.prepareDelegation('sdk');
+  gate.resolve(t.observation);
+  expect((await attached).proof?.oid).toBe(firstOid);
+  expect((await delegated).oid).toBe(nextOid);
+  expect(t.deps.synchronize).toHaveBeenCalledTimes(2);
+});
 function setup() {
   const records = new Map<string, ProjectBaselineRecord>();
   let localOid: string | null = firstOid;
@@ -243,8 +284,18 @@ it('preserves Git blockers instead of promoting an earlier successful proof', as
     kind: 'blocked',
     reason: 'upstream-rewritten',
   });
-  await expect(service.prepareDelegation('sdk')).rejects.toThrow('safely');
+  await expect(service.prepareDelegation('sdk')).rejects.toThrow('upstream history was rewritten');
   expect((await service.get('sdk')).status).toBe('blocked');
+});
+
+it.each([
+  ['checkout-dirty', 'Commit or stash'],
+  ['diverged', 'diverged'],
+  ['checked-out-elsewhere', 'another worktree'],
+])('reports an actionable reason for %s to delegation callers', async (reason, expected) => {
+  const t = setup();
+  vi.mocked(t.deps.synchronize).mockResolvedValue({ ...t.observation, kind: 'blocked', reason });
+  await expect(t.service().prepareDelegation('sdk')).rejects.toThrow(expected);
 });
 
 it('coalesces concurrent events for one Project and serializes different Projects sharing a repository', async () => {

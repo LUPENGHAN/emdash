@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { gitContract } from '@emdash/core/runtimes/git/api';
 import { KeyedMutex } from '@emdash/shared/concurrency';
 import { redactSecrets } from '@emdash/shared/logger';
+import type { JobResult } from '@emdash/wire/rpc';
 import {
   baselineOidSchema,
   baselineVerificationSchema,
@@ -37,6 +39,43 @@ export type BaselineSyncDependencies = {
   now?(): number;
   id?(): string;
 };
+
+type GitBlocker = Extract<
+  JobResult<typeof gitContract.checkout.syncBaseline>,
+  { kind: 'blocked' }
+>['reason'];
+const gitBlockerMessages: Record<GitBlocker, string> = {
+  'management-branch': 'Select a code baseline instead of a management branch.',
+  'remote-changed':
+    'The upstream remote changed during synchronization. Check its settings before retrying.',
+  'symbolic-baseline':
+    'The configured local baseline is a symbolic ref and cannot be updated safely.',
+  'symbolic-checkpoint':
+    'The saved upstream observation is a symbolic ref and cannot be updated safely.',
+  'upstream-rewritten':
+    'The upstream history was rewritten. Inspect the upstream before retrying; the local baseline was preserved.',
+  'history-unavailable':
+    'Git cannot establish the required ancestry. Restore the missing history before retrying.',
+  'checked-out-elsewhere':
+    'The code baseline is checked out in another worktree. Release that checkout before synchronizing.',
+  'checkout-unavailable': 'The baseline checkout is unavailable. Restore it before retrying.',
+  'checkout-busy':
+    'The baseline checkout has a Git operation in progress. Finish it before retrying.',
+  'checkout-dirty':
+    'The baseline checkout has local changes. Commit or stash them before synchronizing.',
+  'local-ahead':
+    'The local baseline has unpublished commits. Resolve them explicitly before synchronizing.',
+  diverged:
+    'The local baseline and upstream have diverged. Resolve their histories explicitly before synchronizing.',
+  'local-changed':
+    'The local baseline changed during synchronization. Check its state before retrying.',
+};
+
+function gitBlockerMessage(reason: string | undefined): string {
+  return reason && Object.hasOwn(gitBlockerMessages, reason)
+    ? gitBlockerMessages[reason as GitBlocker]
+    : 'Git could not safely update the baseline.';
+}
 
 function targetKey(target: ProjectBaselineTarget) {
   return createHash('sha256')
@@ -147,11 +186,17 @@ export class ProjectBaselineSyncService {
   }
   async synchronize(
     projectId: string,
-    trigger: ProjectBaselineTrigger
+    trigger: ProjectBaselineTrigger,
+    options: { afterCurrent?: boolean } = {}
   ): Promise<ProjectBaselineSnapshot> {
     await this.deps.authorize(projectId, 'control');
     const pending = this.active.get(projectId);
-    if (pending) return pending;
+    if (pending) {
+      if (!options.afterCurrent) return pending;
+      // A later observation needs a fetch after the running attempt has settled.
+      await pending.catch(() => undefined);
+      return this.synchronize(projectId, trigger);
+    }
     const work = this.run(projectId, trigger);
     this.active.set(projectId, work);
     try {
@@ -352,7 +397,7 @@ export class ProjectBaselineSyncService {
             projectId,
             attempt,
             observation.reason ?? 'git-blocked',
-            observation.message ?? 'Git could not safely update the baseline.'
+            observation.message ?? gitBlockerMessage(observation.reason)
           );
         if (!observation.oid)
           return await this.fail(
@@ -432,7 +477,7 @@ export class ProjectBaselineSyncService {
     });
   }
   async prepareDelegation(projectId: string) {
-    const state = await this.synchronize(projectId, 'delegation');
+    const state = await this.synchronize(projectId, 'delegation', { afterCurrent: true });
     const attempt = state.attempts.at(-1);
     if (!state.canDelegate || !attempt?.observation?.oid)
       throw new Error(
