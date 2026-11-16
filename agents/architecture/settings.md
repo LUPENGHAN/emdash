@@ -33,6 +33,16 @@ committed and shared.
 
 ## Domain Boundaries
 
+- Project baseline verification policy belongs to the Project domain's versioned
+  `project-baselines` KV state (`features/projects/node/baseline-sync-service.ts`), separate
+  from Git identity and registry lifecycle settings. It stores command configuration with an
+  optimistic revision, attempts, verification receipts, approval/denial evidence and last upstream
+  contact. Commands remain opaque. The backend factory uses the existing effective Git-settings
+  resolver and operation credential leases; it introduces no additional model/provider settings.
+  The policy and delegation callback are implemented; production verification execution,
+  bootstrap/event/Wire wiring and the settings UI are still pending. Do not treat the Host Git job
+  alone as enabled automatic baseline synchronization.
+
 - `ProjectSettingsProvider` exposes stored Git identity, stored integration account choices, stored placement, placement context, and
   resolver-backed tmux. Its only current-settings write is `setWorktreeRoot()`, which validates the
   directory on the owning Host. `DesktopProjectSettingsAuthority` owns patches to Git identity,
