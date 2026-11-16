@@ -23,6 +23,7 @@ import {
   type Family,
   type Readable,
 } from '@emdash/wire/state';
+import { isManagementBranch } from '@core/primitives/workspaces/api/management-branch';
 import {
   normalizeRepositoryUrl,
   type CreatePullRequestInput,
@@ -588,6 +589,13 @@ export class PullRequestService {
     input: CreatePullRequestInput,
     signal: AbortSignal
   ): Promise<Result<{ url: string; number: number }, PullRequestError>> {
+    const source = input.head.slice(input.head.lastIndexOf(':') + 1).trim();
+    if (isManagementBranch(source))
+      return err({
+        type: 'management_branch',
+        branch: source,
+        message: 'Management documents cannot be used as a code pull request source.',
+      });
     const repositoryUrl = normalizeRepositoryUrl(input.repositoryUrl);
     if (!repositoryUrl) {
       return err({ type: 'invalid_repository', input: input.repositoryUrl });

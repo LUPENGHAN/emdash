@@ -18,7 +18,7 @@ import {
   pullErrorSchema,
   pushErrorSchema,
 } from '#runtimes/git/api/errors';
-import { gitBranchRefSchema } from '#runtimes/git/api/repository/states/refs';
+import { gitBranchRefSchema, localBranchRefSchema } from '#runtimes/git/api/repository/states/refs';
 import { transferProgressSchema } from '#runtimes/git/api/schemas';
 import { checkoutSelectorSchema } from '#runtimes/git/api/selectors';
 import { gitFileContentKeySchema } from './file-content-key';
@@ -70,6 +70,16 @@ export const gitCheckoutContract = defineContract({
         input: z.object({ includeUntracked: z.boolean().default(true) }),
         data: z.void(),
         error: gitCommandErrorSchema,
+      }),
+      commitFiles: mutation({
+        input: z.object({
+          paths: z.array(gitFilePathSchema).min(1).max(100),
+          message: z.string().trim().min(1).max(2000),
+          expectedHead: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/),
+          expectedBranch: localBranchRefSchema,
+        }),
+        data: z.object({ hash: z.string() }),
+        error: commitErrorSchema,
       }),
       commit: mutation({
         input: z.object({ message: z.string(), options: commitOptionsSchema.optional() }),

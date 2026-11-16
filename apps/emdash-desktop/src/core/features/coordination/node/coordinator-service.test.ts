@@ -1117,3 +1117,23 @@ it('reads document location and creates a file without reactivating an initializ
   expect(resources.activate).not.toHaveBeenCalled();
   expect(resources.start).not.toHaveBeenCalled();
 });
+
+it('requires an initialized main workspace for commits without recursively allocating resources', async () => {
+  const { deps, resources } = setup();
+  const commit = vi.fn(async () => ({ hash: 'a'.repeat(40) }));
+  const service = new CoordinatorService({
+    ...deps,
+    documents: { read: vi.fn(), create: vi.fn(), describe: vi.fn(), commit },
+  });
+  const record = await service.ensureProject('project');
+  const input = { paths: ['plan.md'], message: 'Save plan', expectedRevision: 'b'.repeat(40) };
+  await expect(service.commitDocuments(record.id, input)).rejects.toThrow('Open the main agent');
+  expect(resources.prepare).not.toHaveBeenCalled();
+  const opened = await service.open(record.id);
+  vi.mocked(resources.activate).mockClear();
+  await expect(service.commitDocuments(record.id, input)).resolves.toEqual({
+    hash: 'a'.repeat(40),
+  });
+  expect(commit).toHaveBeenCalledWith(opened, input);
+  expect(resources.activate).not.toHaveBeenCalled();
+});

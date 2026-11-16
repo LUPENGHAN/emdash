@@ -7,6 +7,7 @@ import {
   documentReferencesSchema,
   type ManagementDocumentReference,
   type ManagementDocument,
+  type DocumentCommit,
 } from '../api/documents';
 import {
   taskResultSchema,
@@ -25,7 +26,8 @@ import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordin
 import type { CoordinatorDocuments } from './coordinator-documents';
 
 type Dependencies = {
-  documents?: Pick<CoordinatorDocuments, 'describe' | 'create' | 'read'>;
+  documents?: Pick<CoordinatorDocuments, 'describe' | 'create' | 'read'> &
+    Partial<Pick<CoordinatorDocuments, 'commit'>>;
   store: {
     getOrThrow(id: string): Promise<Coordinator | null>;
     setOrThrow(id: string, value: Coordinator): Promise<void>;
@@ -267,6 +269,17 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   }
   async createDocument(id: string, path: string) {
     return this.documentService().create(await this.documentRecord(id), path);
+  }
+  async commitDocuments(id: string, input: DocumentCommit) {
+    return this.locks.runExclusive(id, async () => {
+      const documents = this.documentService();
+      if (!documents.commit) throw new Error('Management document commits are unavailable.');
+      const record = await this.get(id);
+      await this.deps.assertProjectAvailable(record.projectId);
+      if (!record.params)
+        throw new Error('Open the main agent document workspace before committing.');
+      return documents.commit(record, input);
+    });
   }
   async readDocument(id: string, path: string, revision?: string, caller?: AgentCaller) {
     if (caller) {

@@ -901,3 +901,19 @@ function fakeGitHubAuth(): ContractClient<GitPlatformAuthContract> {
       }),
   };
 }
+
+it.each([
+  'emdash/manage/id',
+  'refs/heads/emdash/manage/id',
+  'refs/remotes/fork/emdash/manage/id',
+  'owner:emdash/manage/id',
+  'owner:refs/heads/emdash/manage/id',
+])('rejects management PR source %s before contacting the provider', async (head) => {
+  const h = await harness();
+  const result = await h.service.createPullRequest(
+    { repositoryUrl, title: 'Must not create', head, base: 'main', draft: false },
+    new AbortController().signal
+  );
+  expect(result).toMatchObject({ success: false, error: { type: 'management_branch' } });
+  expect(h.engine.createPullRequest).not.toHaveBeenCalled();
+});

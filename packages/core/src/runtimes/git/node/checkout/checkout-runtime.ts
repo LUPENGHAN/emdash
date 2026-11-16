@@ -59,6 +59,8 @@ export class GitCheckoutRuntime {
             this.run(context.key, (resource) => resource.unstageAll(context)),
           revert: (context) => this.run(context.key, (resource) => resource.revert(context)),
           revertAll: (context) => this.run(context.key, (resource) => resource.revertAll(context)),
+          commitFiles: (context) =>
+            this.run(context.key, (resource) => resource.commitFiles(context)),
           commit: (context) => this.run(context.key, (resource) => resource.commit(context)),
           switchBranch: (context) =>
             this.run(context.key, (resource) => resource.switchBranch(context)),

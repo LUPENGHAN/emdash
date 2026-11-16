@@ -90,6 +90,19 @@ Each resource method receives its exact contract input. There is no untyped enve
 switch, or Git-side input cast. Mutation-free file-diff models use the same host without a fake
 mutation implementation.
 
+## Selected file commits
+
+`checkout.model.commitFiles` commits explicit file paths from the working tree while preserving
+unrelated staged changes. It requires the observed full branch ref and commit ID, validates them
+inside the repository-family lane, and rejects checkout operations, conflicts and directories before
+staging. Literal pathspecs preserve filenames containing Git pattern characters. The operation uses
+intent-to-add for untracked files followed by `commit --only`; normal commit hooks still run.
+
+This is a separate mutation from `commit`, so a Host without it rejects the request instead of
+ignoring selection options and committing the whole index. Desktop management-document operations
+validate the management checkout and document paths before calling it. Ordinary staged commits keep
+their original interface.
+
 ## Reconciliation
 
 Reconciliation is local to the operation that changes external Git state:

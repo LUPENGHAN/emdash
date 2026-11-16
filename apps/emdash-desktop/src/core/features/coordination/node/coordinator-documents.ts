@@ -7,8 +7,11 @@ import {
   portableRelativePathParts,
   type HostFileRef,
 } from '@emdash/core/primitives/path/api';
+import { localBranchRefSchema } from '@emdash/core/runtimes/git/api';
 import type { HostRuntimesClient } from '@emdash/core/services/runtime-broker/api';
 import {
+  documentCommitSchema,
+  type DocumentCommit,
   documentPathSchema,
   documentRevisionSchema,
   type DocumentWorkspace,
@@ -77,6 +80,37 @@ export class CoordinatorDocuments {
       branch: storage.branch,
       revision: storage.revision,
     };
+  }
+  async commit(record: Coordinator, input: DocumentCommit): Promise<{ hash: string }> {
+    const selected = documentCommitSchema.parse(input);
+    const storage = await this.storage(record);
+    if (storage.revision.toLowerCase() !== selected.expectedRevision.toLowerCase())
+      throw new Error('The management branch changed. Refresh documents before committing.');
+    const paths = [];
+    for (const path of new Set(selected.paths)) {
+      const target = this.path(storage.root, path);
+      const stat = await storage.runtime.files.fs.stat({ path: target.path });
+      if (!stat.success && stat.error.type === 'not-found') {
+        await this.checkedPath(storage, target.path, true);
+        await this.read(record, path, storage.revision);
+      } else {
+        if (!stat.success) throw new Error(`Could not inspect document: ${stat.error.type}`);
+        await this.read(record, path);
+      }
+      paths.push(target.relative);
+    }
+    const committed = await storage.runtime.git.checkout.model.mutate('commitFiles', {
+      key: { checkout: storage.root.path },
+      input: {
+        paths,
+        message: selected.message,
+        expectedHead: selected.expectedRevision,
+        expectedBranch: localBranchRefSchema.parse(`refs/heads/${storage.branch}`),
+      },
+    });
+    if (!committed.success)
+      throw new Error(`Could not commit documents: ${committed.error.message}`);
+    return committed.data.data;
   }
   async read(
     record: Coordinator,

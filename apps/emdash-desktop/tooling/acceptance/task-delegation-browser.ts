@@ -182,3 +182,10 @@ export async function createTerminalMain(input: { projectId: string; taskId: str
   if (!result.success) throw new Error(JSON.stringify(result.error));
   return conversation;
 }
+
+export async function readCoordinatorDocument(taskId: string, path: string, revision?: string) {
+  const client = await getCoordinationClient();
+  const record = await client.getByTask({ taskId });
+  if (!record) throw new Error('Main agent is unavailable.');
+  return client.readDocument({ id: record.id, path, revision });
+}

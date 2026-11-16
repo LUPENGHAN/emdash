@@ -1,5 +1,14 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -174,4 +183,62 @@ describe('management documents over host Wire runtimes', () => {
     await git('switch', 'main');
     await expect(service.describe(record)).rejects.toThrow('Return the document workspace');
   });
+});
+
+it('commits selected management documents over Wire without including other staged files or the code baseline', async () => {
+  const { service, record, repo, git, code } = await setup();
+  const before = await service.describe(record);
+  await writeFile(join(repo, 'unrelated.md'), 'keep staged');
+  await git('add', 'unrelated.md');
+  await writeFile(join(repo, 'decision.md'), 'selected document');
+  const committed = await service.commit(record, {
+    paths: ['decision.md'],
+    message: 'Save decision',
+    expectedRevision: before.revision,
+  });
+  expect(committed.hash).toBe(await git('rev-parse', 'HEAD'));
+  expect(await git('show', 'HEAD:decision.md')).toBe('selected document');
+  expect(await git('diff', '--cached', '--name-only')).toBe('unrelated.md');
+  expect(await git('rev-parse', 'main')).toBe(code);
+  await expect(service.read(record, 'decision.md', committed.hash)).resolves.toMatchObject({
+    content: 'selected document',
+  });
+  await expect(
+    service.commit(record, {
+      paths: ['decision.md'],
+      message: 'Stale retry',
+      expectedRevision: before.revision,
+    })
+  ).rejects.toThrow('changed');
+  await unlink(join(repo, 'decision.md'));
+  const removed = await service.commit(record, {
+    paths: ['decision.md'],
+    message: 'Remove decision',
+    expectedRevision: committed.hash,
+  });
+  expect(removed.hash).not.toBe(committed.hash);
+  expect(await git('ls-tree', '--name-only', 'HEAD')).not.toContain('decision.md');
+  expect(await git('diff', '--cached', '--name-only')).toBe('unrelated.md');
+});
+it('refuses unsafe document selections before making a commit', async () => {
+  const { service, record, repo, dir, git } = await setup();
+  const before = await service.describe(record);
+  await writeFile(join(dir, 'outside.md'), 'outside');
+  await symlink(join(dir, 'outside.md'), join(repo, 'linked.md'));
+  await expect(
+    service.commit(record, {
+      paths: ['linked.md'],
+      message: 'Unsafe',
+      expectedRevision: before.revision,
+    })
+  ).rejects.toThrow('inside');
+  await expect(
+    service.commit(record, {
+      paths: ['.git/config'],
+      message: 'Unsafe',
+      expectedRevision: before.revision,
+    })
+  ).rejects.toThrow();
+  expect(await git('rev-parse', 'HEAD')).toBe(before.revision);
+  expect(await git('diff', '--cached', '--name-only')).toBe('');
 });

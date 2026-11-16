@@ -51,3 +51,10 @@ export const documentReferenceSchema = z.object({
 });
 export type ManagementDocumentReference = z.infer<typeof documentReferenceSchema>;
 export const documentReferencesSchema = z.array(documentReferenceSchema).max(16);
+
+export const documentCommitSchema = z.object({
+  paths: z.array(documentPathSchema).min(1).max(100),
+  message: z.string().trim().min(1).max(2000),
+  expectedRevision: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/),
+});
+export type DocumentCommit = z.infer<typeof documentCommitSchema>;

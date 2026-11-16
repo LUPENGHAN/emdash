@@ -33,6 +33,7 @@ import { ConfirmButton } from '@core/primitives/keybindings/browser/confirm-butt
 import { log } from '@core/primitives/logging/browser/logger';
 import { defineModal } from '@core/primitives/modals/react';
 import type { ProviderAccountSummary } from '@core/primitives/provider-accounts/api';
+import { isManagementBranch } from '@core/primitives/workspaces/api/management-branch';
 import { pullRequestErrorMessage } from '@core/services/pull-requests/api';
 import { getPullRequestsRuntimeClient } from '@core/services/pull-requests/api/client';
 import { resolveInitialBaseBranch } from './base-branch';
@@ -56,6 +57,7 @@ export const CreatePrModal = observer(function CreatePrModal({
   workspaceId,
 }: CreatePrModalArgs) {
   const { complete } = useModalController('createPrModal');
+  const managementBranch = isManagementBranch(branchName);
   const openIntegrationSetup = useOpenModal('integrationSetupModal');
   const [title, setTitle] = useState(branchName);
   const [description, setDescription] = useState('');
@@ -149,6 +151,10 @@ export const CreatePrModal = observer(function CreatePrModal({
   };
 
   const doCreate = async (push: boolean) => {
+    if (managementBranch) {
+      setError('Management documents cannot be used as a code pull request source.');
+      return;
+    }
     if (identityBlocked || accountSaveInFlight.current || isCreating) return;
     if (!selectedBase?.branch) {
       setError(`Select a base branch before creating the ${noun}.`);
@@ -212,6 +218,9 @@ export const CreatePrModal = observer(function CreatePrModal({
         </Dialog.Title>
       </Dialog.Header>
       <Dialog.Body className="space-y-4">
+        {managementBranch && (
+          <p role="alert">Management documents cannot be used as a code pull request source.</p>
+        )}
         {!hasProviderRemote && (
           <p className="text-muted-foreground text-sm">
             No {providerName} remote detected. Configure a {providerName} remote to create {noun}s.
@@ -335,7 +344,11 @@ export const CreatePrModal = observer(function CreatePrModal({
             loading={isCreating}
             loadingLabel="Creating..."
             disabled={
-              !hasProviderRemote || !selectedBase?.branch || !title.trim() || identityBlocked
+              managementBranch ||
+              !hasProviderRemote ||
+              !selectedBase?.branch ||
+              !title.trim() ||
+              identityBlocked
             }
             options={[
               {
@@ -359,6 +372,7 @@ export const CreatePrModal = observer(function CreatePrModal({
             size="sm"
             onClick={() => void doCreate(false)}
             disabled={
+              managementBranch ||
               !hasProviderRemote ||
               !selectedBase?.branch ||
               !title.trim() ||

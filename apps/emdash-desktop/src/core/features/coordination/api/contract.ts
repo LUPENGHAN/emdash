@@ -1,6 +1,7 @@
 import { defineContract, eventStream, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
 import {
+  documentCommitSchema,
   documentPathSchema,
   documentRevisionSchema,
   documentWorkspaceSchema,
@@ -17,6 +18,10 @@ import {
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  commitDocuments: procedure({
+    input: documentCommitSchema.extend({ id: z.string() }),
+    output: z.object({ hash: z.string() }),
+  }),
   documentWorkspace: procedure({
     input: z.object({ id: z.string() }),
     output: documentWorkspaceSchema,

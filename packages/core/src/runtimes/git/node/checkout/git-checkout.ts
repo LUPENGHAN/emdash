@@ -178,6 +178,65 @@ export class GitCheckout {
 
   // -- Commit / history-changing operations -----------------------------------
 
+  async commitFiles(input: {
+    paths: string[];
+    message: string;
+    expectedHead: string;
+    expectedBranch: string;
+  }): Promise<Result<{ hash: string }, CommitError>> {
+    if (!input.paths.length) return gitErr.commandFailed('Select at least one file to commit.');
+    if (!input.message.trim()) return gitErr.emptyMessage('Enter a commit message.');
+    try {
+      const paths = [...new Set(this.toRelativePaths(input.paths))];
+      const head = await this.getHead();
+      if (
+        head.kind !== 'branch' ||
+        head.ref !== input.expectedBranch ||
+        head.oid.toLowerCase() !== input.expectedHead.toLowerCase()
+      )
+        return gitErr.staleRefUpdate(
+          'The checkout branch or commit changed. Refresh before committing selected files.'
+        );
+      const status = await this.getStatus();
+      if (status.kind !== 'ok' || status.operation !== 'none' || status.summary.conflicted)
+        return gitErr.commandFailed(
+          'Resolve the checkout operation and conflicts before committing selected files.'
+        );
+      for (const file of paths) {
+        try {
+          if ((await lstat(path.join(this.identity.checkoutRoot, file))).isDirectory())
+            return gitErr.commandFailed('Select individual files instead of directories.');
+        } catch (error) {
+          if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
+            return gitErr.commandFailed('Could not inspect a selected file.');
+        }
+      }
+      // Intent-to-add makes untracked selections known to Git without staging other paths.
+      await this.exec.exec([
+        '--literal-pathspecs',
+        'add',
+        '--intent-to-add',
+        '--all',
+        '--',
+        ...paths,
+      ]);
+      await this.exec.exec([
+        '--literal-pathspecs',
+        'commit',
+        '--only',
+        '-m',
+        input.message.trim(),
+        '--',
+        ...paths,
+      ]);
+      const { stdout } = await this.exec.exec(['rev-parse', 'HEAD']);
+      return ok({ hash: stdout.trim() });
+    } catch (error) {
+      if (error instanceof InvalidCheckoutPathError) return gitErr.commandFailed(error.message);
+      return checkoutFailures.commit(error);
+    }
+  }
+
   async commit(
     message: string,
     options: CommitOptions = {}

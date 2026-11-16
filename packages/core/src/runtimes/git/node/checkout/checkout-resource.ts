@@ -196,6 +196,12 @@ export class CheckoutResource {
     return result;
   }
 
+  async commitFiles(context: CheckoutMutationContext<'commitFiles'>) {
+    const result = await this.execute(() => this.commands.commitFiles(context.input));
+    this.historyChanged(result.success);
+    return result;
+  }
+
   async commit(context: CheckoutMutationContext<'commit'>) {
     const result = await this.execute(() =>
       this.commands.commit(context.input.message, context.input.options)

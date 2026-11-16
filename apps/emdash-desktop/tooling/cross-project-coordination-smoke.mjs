@@ -23,6 +23,8 @@ await mkdir(capture);
 const git = async (...args) =>
   (await promisify(execFile)('git', args, { cwd: repository })).stdout.trim();
 await git('init', '-b', 'main');
+await git('config', 'user.name', 'Emdash test');
+await git('config', 'user.email', 'test@example.invalid');
 await writeFile(join(repository, 'README.md'), 'Isolated delegation acceptance\n');
 await git('add', 'README.md');
 await git(
@@ -1092,7 +1094,7 @@ try {
   await page.getByRole('button', { name: /^(Settings|设置)$/ }).waitFor();
   await page.addScriptTag({
     type: 'module',
-    content: `import { allCoordinatorSnapshots } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots });`,
+    content: `import { allCoordinatorSnapshots, readCoordinatorDocument } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument });`,
   });
   await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
   const restored = await page.evaluate(() => window.allCoordinatorSnapshots());
@@ -1130,6 +1132,34 @@ try {
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s');
   await waitForDocumentSave(join(main.cwd, 'plan.md'), 'After full restart.');
   await page.screenshot({ path: join(profile, 'management-document-restarted.png') });
+  const documentGit = async (...args) =>
+    (await promisify(execFile)('git', args, { cwd: main.cwd })).stdout.trim();
+  const documentParent = await documentGit('rev-parse', 'HEAD');
+  await writeFile(
+    join(main.cwd, 'unrelated.md'),
+    'Keep this staged, outside the selected document commit.\n'
+  );
+  await documentGit('add', '--', 'unrelated.md');
+  await restoredDocuments
+    .getByRole('textbox', { name: 'Document commit message' })
+    .fill('Save accepted coordination document');
+  await restoredDocuments
+    .getByRole('button', { name: 'Commit open document', exact: true })
+    .click();
+  await restoredDocuments.getByTestId('coordinator-document-commit').waitFor();
+  const documentCommit = await documentGit('rev-parse', 'HEAD');
+  assert.notEqual(documentCommit, documentParent);
+  assert.equal(await documentGit('rev-parse', 'HEAD^'), documentParent);
+  assert.equal(await documentGit('show', '--format=', '--name-only', 'HEAD'), 'plan.md');
+  assert.equal(await documentGit('diff', '--cached', '--name-only'), 'unrelated.md');
+  const committedDocument = await page.evaluate(
+    (input) => window.readCoordinatorDocument(input.taskId, 'plan.md', input.revision),
+    { taskId: coordinator.taskId, revision: documentCommit }
+  );
+  assert.equal(committedDocument.revision, documentCommit);
+  assert.ok(committedDocument.content.includes('After full restart.'));
+  await page.screenshot({ path: join(profile, 'management-document-committed.png') });
+
   assert.equal(await git('rev-parse', 'HEAD'), baseline);
 
   await writeFile(
@@ -1146,6 +1176,8 @@ try {
           'document context stayed frozen through a source edit, dependency waiting and duplicate delegation',
           'complete Electron exit and restart preserved main bindings, task states and frozen document snapshots',
           'management document reopened and edited through Monaco after the full restart',
+          'document committed through the UI as a child of its management history and read by exact commit ID',
+          'selected document commit preserved unrelated staged files and the code baseline',
           'task worktree contained no copied management documents',
           'real ACP protocol with a simulated OpenCode executable',
           'authenticated main and worker MCP identities',

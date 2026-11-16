@@ -1074,3 +1074,102 @@ describe('GitCheckout.switchBranch', () => {
     }
   });
 });
+
+describe('selected file commits', () => {
+  it('commits literal selected paths while preserving unrelated staged changes and supports deletion', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    const git = async (...args: string[]) =>
+      (await execFileAsync('git', args, { cwd: repo })).stdout.trim();
+    try {
+      const initial = await git('rev-parse', 'HEAD');
+      await writeFile(path.join(repo, 'tracked.txt'), 'unrelated staged change\n');
+      await checkout.stage(['tracked.txt']);
+      await writeFile(path.join(repo, 'plan[1].md'), 'selected plan\n');
+      await writeFile(path.join(repo, 'plan1.md'), 'unselected plan\n');
+      const committed = await checkout.commitFiles({
+        paths: ['plan[1].md'],
+        message: 'Save selected plan',
+        expectedHead: initial,
+        expectedBranch: 'refs/heads/main',
+      });
+      expect(committed.success).toBe(true);
+      if (!committed.success) throw new Error('Selected commit failed');
+      expect(await git('show', 'HEAD:plan[1].md')).toBe('selected plan');
+      expect(await git('show', 'HEAD:tracked.txt')).toBe('before');
+      expect(await git('diff', '--cached', '--name-only')).toBe('tracked.txt');
+      expect(await git('ls-tree', '--name-only', 'HEAD')).not.toContain('plan1.md');
+      await unlink(path.join(repo, 'plan[1].md'));
+      const deleted = await checkout.commitFiles({
+        paths: ['plan[1].md'],
+        message: 'Delete selected plan',
+        expectedHead: committed.data.hash,
+        expectedBranch: 'refs/heads/main',
+      });
+      expect(deleted.success).toBe(true);
+      expect(await git('ls-tree', '--name-only', 'HEAD')).not.toContain('plan[1].md');
+      expect(await git('diff', '--cached', '--name-only')).toBe('tracked.txt');
+    } finally {
+      await cleanup();
+    }
+  });
+  it('refuses stale branches, stale commits and directories before staging selected files', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    const git = async (...args: string[]) =>
+      (await execFileAsync('git', args, { cwd: repo })).stdout.trim();
+    try {
+      const initial = await git('rev-parse', 'HEAD');
+      await writeFile(path.join(repo, 'plan.md'), 'selected plan\n');
+      const input = {
+        paths: ['plan.md'],
+        message: 'Save plan',
+        expectedHead: initial,
+        expectedBranch: 'refs/heads/main',
+      };
+      await expect(
+        checkout.commitFiles({ ...input, expectedHead: 'a'.repeat(40) })
+      ).resolves.toMatchObject({ success: false, error: { code: 'stale_ref_update' } });
+      await expect(
+        checkout.commitFiles({ ...input, expectedBranch: 'refs/heads/other' })
+      ).resolves.toMatchObject({ success: false, error: { code: 'stale_ref_update' } });
+      await expect(checkout.commitFiles({ ...input, paths: ['.git'] })).resolves.toMatchObject({
+        success: false,
+      });
+      await expect(
+        checkout.commitFiles({ ...input, paths: ['../plan.md'] })
+      ).resolves.toMatchObject({ success: false });
+      expect(await git('rev-parse', 'HEAD')).toBe(initial);
+      expect(await git('diff', '--cached', '--name-only')).toBe('');
+    } finally {
+      await cleanup();
+    }
+  });
+  it('keeps normal commit hooks and leaves unrelated staging intact after hook rejection', async () => {
+    if (process.platform === 'win32') return;
+    const { repo, checkout, cleanup } = await makeCheckout();
+    const git = async (...args: string[]) =>
+      (await execFileAsync('git', args, { cwd: repo })).stdout.trim();
+    try {
+      const initial = await git('rev-parse', 'HEAD');
+      await writeFile(path.join(repo, 'tracked.txt'), 'unrelated staged change\n');
+      await checkout.stage(['tracked.txt']);
+      await writeFile(path.join(repo, 'plan.md'), 'selected plan\n');
+      await writeFile(
+        path.join(repo, '.git/hooks/pre-commit'),
+        '#!/bin/sh\necho "hook rejected" >&2\nexit 1\n',
+        { mode: 0o755 }
+      );
+      await expect(
+        checkout.commitFiles({
+          paths: ['plan.md'],
+          message: 'Save plan',
+          expectedHead: initial,
+          expectedBranch: 'refs/heads/main',
+        })
+      ).resolves.toMatchObject({ success: false });
+      expect(await git('rev-parse', 'HEAD')).toBe(initial);
+      expect(await git('diff', '--cached', '--name-only')).toBe('tracked.txt');
+    } finally {
+      await cleanup();
+    }
+  });
+});
