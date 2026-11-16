@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ExecError } from '#services/exec/api';
-import { commandFailed, gitFailure, isMissingObject, pushFailed } from './errors';
+import { commandFailed, gitFailure, isMissingObject, isNetworkFailure, pushFailed } from './errors';
 
 // Shaped like a GitHub token without being one.
 const GITHUB_TOKEN = `ghp_${'a'.repeat(36)}`;
@@ -10,6 +10,20 @@ function execError(stderr: string, exitCode = 128, stdout = ''): ExecError {
 }
 
 describe('Git execution errors', () => {
+  it.each([
+    "fatal: unable to access 'http://127.0.0.1:51276/org/sdk.git/': Failed to connect to 127.0.0.1 port 51276 after 1 ms: Couldn't connect to server",
+    "fatal: unable to access 'https://example.invalid/repo.git/': Couldn't connect to server",
+  ])('recognizes native HTTP transport connection failures: %s', (message) => {
+    expect(isNetworkFailure(gitFailure(execError(message)))).toBe(true);
+  });
+
+  it.each([
+    "fatal: unable to access 'https://example.invalid/repo.git/': SSL certificate problem: certificate has expired",
+    "fatal: unable to access 'https://example.invalid/repo.git/': The requested URL returned error: 404",
+    'remote: pre-receive hook declined: failed to connect to deployment service',
+  ])('does not classify certificate, repository and hook failures as offline: %s', (message) => {
+    expect(isNetworkFailure(gitFailure(execError(message)))).toBe(false);
+  });
   it('normalizes only process failures', () => {
     expect(gitFailure(execError('fatal: failed', 1, 'fallback'))).toEqual({
       exitCode: 1,

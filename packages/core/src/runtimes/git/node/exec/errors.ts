@@ -93,6 +93,9 @@ export function isNetworkFailure(failure: GitFailure): boolean {
     message.includes('temporary failure in name resolution') ||
     message.includes('name or service not known') ||
     message.includes('ssh: connect to host') ||
+    /^fatal: unable to access '[^\r\n]*': (?:failed to connect to\b|couldn't connect to server\b)/m.test(
+      message
+    ) ||
     message.includes('unable to connect')
   );
 }

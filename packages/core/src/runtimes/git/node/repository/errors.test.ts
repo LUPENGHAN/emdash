@@ -8,6 +8,14 @@ function execError(stderr: string, exitCode = 128): ExecError {
 }
 
 describe('repository failures', () => {
+  it('retains authentication failure precedence over a connection diagnostic', () => {
+    const stderr =
+      "fatal: unable to access 'https://example.invalid/repo.git/': Failed to connect to example.invalid port 443\nfatal: Authentication failed";
+    expect(repositoryFailures.fetch(execError(stderr), 'origin')).toMatchObject({
+      success: false,
+      error: { type: 'auth_required' },
+    });
+  });
   it('maps repository operation failures to their declared variants', () => {
     expect(
       repositoryFailures.clone(

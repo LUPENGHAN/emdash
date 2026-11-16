@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -34,6 +35,38 @@ function identity(repo: string): CheckoutIdentity {
     objectStoreDir: path.join(gitDir, 'objects'),
   } as CheckoutIdentity;
 }
+
+it('returns an HTTP network failure with the actual approved local commit observation', async () => {
+  const t = await setup();
+  const server = createServer();
+  cleanups.push(async () => {
+    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Missing fixture TCP address');
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await t.git(t.repo, 'config', 'http.proxy', '');
+  await t.git(
+    t.repo,
+    'remote',
+    'set-url',
+    'upstream',
+    `http://127.0.0.1:${address.port}/org/sdk.git`
+  );
+  expect(await t.run()).toMatchObject({
+    success: false,
+    error: {
+      type: 'network_error',
+      observation: {
+        beforeOid: t.before,
+        afterOid: t.before,
+        upstreamOid: null,
+        remoteFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    },
+  });
+});
 
 async function setup() {
   const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'emdash-baseline-sync-')));
