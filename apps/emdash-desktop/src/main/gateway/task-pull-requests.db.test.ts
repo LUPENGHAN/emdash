@@ -8,10 +8,13 @@ import { gitContract } from '@emdash/core/runtimes/git/api';
 import { createGitController, GitRuntime } from '@emdash/core/runtimes/git/node';
 import type { HostRuntimesClient } from '@emdash/core/services/runtime-broker/api';
 import { ok } from '@emdash/shared';
+import { createScope } from '@emdash/shared/concurrency';
 import { client, connect, memoryTransportPair, serve } from '@emdash/wire/rpc';
+import { cell } from '@emdash/wire/state';
 import { openFixture } from '@tooling/utils/db';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { AgentCaller } from '@core/features/agent-control/api';
+import type { ProjectAttachmentState } from '@core/features/projects/api/attachments';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
 import type { ProjectProvider } from '@core/features/projects/api/node/project-provider';
 import { createBackendTaskPullRequests } from '@core/features/source-control/node/backend-task-pull-requests';
@@ -27,6 +30,8 @@ afterEach(async () => {
 });
 
 async function setup() {
+  const scope = createScope({ label: 'task-pr-test' });
+  cleanups.push(() => scope.dispose());
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'emdash-task-pr-')));
   cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const fixture = await openFixture('baseline');
@@ -168,9 +173,15 @@ process.exit(result.status ?? 1);
   );
   const release = vi.fn();
   const credentials = vi.fn(async () => ({ credentials: undefined, release }));
+  const attachment = cell<ProjectAttachmentState>({ kind: 'absent' });
+  const track = vi.fn((_projectId: string) => {
+    attachment.set({ kind: 'attached', establishedHostGeneration: 1 });
+    return attachment;
+  });
   const deps: Parameters<typeof createBackendTaskPullRequests>[0] = {
     db: fixture.db,
-    projects: { requireAttached: () => ok(provider) } as unknown as ProjectAttachmentManager,
+    scope,
+    projects: { track, requireAttached: () => ok(provider) } as unknown as ProjectAttachmentManager,
     workspaceIdentity: {
       resolve: async (id) =>
         id === 'pr-workspace'
@@ -216,6 +227,8 @@ process.exit(result.status ?? 1);
     credentials,
     release,
     transfers,
+    attachment,
+    track,
     fixture,
     owner: (id: string) => {
       owner = id;
@@ -268,6 +281,20 @@ it('pushes exactly the frozen task commit, targets the configured organization b
   );
   expect(t.credentials).toHaveBeenCalledTimes(3);
   expect(t.release).toHaveBeenCalledTimes(3);
+});
+
+it('retains a background project attachment for prepare and restores it for saved-request execution', async () => {
+  const t = await setup();
+  const service = t.service();
+  expect(t.track).not.toHaveBeenCalled();
+  await service.prepare(t.input, t.caller);
+  expect(t.track).toHaveBeenCalledOnce();
+  expect(t.track.mock.calls[0]?.[0]).toBe(t.caller.projectId);
+  t.attachment.set({ kind: 'absent' });
+  const restored = t.service();
+  expect((await restored.run(t.input.taskId, t.input.requestId, t.caller)).phase).toBe('complete');
+  expect(t.track).toHaveBeenCalledTimes(2);
+  expect(t.ensure).toHaveBeenCalledOnce();
 });
 
 it('creates from the pinned remote commit without publishing local commits, including later local work', async () => {

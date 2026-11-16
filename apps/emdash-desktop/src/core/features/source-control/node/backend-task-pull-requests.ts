@@ -1,9 +1,11 @@
 import { parseRepositoryRef } from '@emdash/core/primitives/repository/api';
 import { gitContract, localBranchRefSchema } from '@emdash/core/runtimes/git/api';
+import type { Scope } from '@emdash/shared/concurrency';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { AgentCaller } from '@core/features/agent-control/api';
 import type { BackgroundAgentAccess } from '@core/features/agent-control/api/node/background-access';
 import type { GitCredentialsService } from '@core/features/github/api/node/services/git-credentials-service';
+import { createBackgroundProjectAccess } from '@core/features/projects/api/node/attached-project';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
 import { resolveProjectEffectiveSettings } from '@core/features/projects/api/node/settings/effective-settings';
 import { workspaceRegistryTable as workspaces } from '@core/features/workspaces/api/node/registry';
@@ -23,6 +25,7 @@ import { TaskPullRequestService, TaskPullRequestFailure } from './task-pull-requ
 
 type Dependencies = {
   db: AppDb;
+  scope: Scope;
   projects: ProjectAttachmentManager;
   workspaceIdentity: SourceControlWorkspaceIdentityResolver;
   runtimes: SourceControlRuntimeBroker;
@@ -43,6 +46,7 @@ function hostedRepository(input: string) {
 }
 
 export function createBackendTaskPullRequests(deps: Dependencies) {
+  const projectFor = createBackgroundProjectAccess(deps.projects, deps.scope);
   const task = async (taskId: string) => {
     const [row] = await deps.db
       .select()
@@ -72,6 +76,7 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
     const current = await task(plan.taskId);
     if (current.projectId !== plan.projectId || current.workspaceId !== plan.workspaceId)
       throw new Error('The task workspace changed. Prepare a separate PR request.');
+    await projectFor(plan.projectId);
     const identity = await deps.workspaceIdentity.resolve(plan.workspaceId);
     if (!identity || identity.projectId !== plan.projectId)
       throw new Error('The PR workspace host is unavailable.');
@@ -170,17 +175,16 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
       const target = await task(input.taskId);
       if (input.workspaceId && input.workspaceId !== target.workspaceId)
         throw new Error('The task workspace changed. Reopen the PR dialog before preparing it.');
-      const project = deps.projects.requireAttached(target.projectId);
-      if (!project.success) throw new Error('Attach the target project before preparing its PR.');
+      const project = await projectFor(target.projectId);
       const host = await runtime({ ...target, taskId: target.id });
       const [effective, head, remotes] = await Promise.all([
         resolveProjectEffectiveSettings({
-          settings: project.data.settings,
-          repoFacts: project.data.repoFacts,
+          settings: project.settings,
+          repoFacts: project.repoFacts,
           projectId: target.projectId,
         }),
         host.git.checkout.model.state({ checkout: host.checkout }, 'head').snapshot(),
-        project.data.git.repository.model.state(project.data.repository, 'remotes').snapshot(),
+        project.git.repository.model.state(project.repository, 'remotes').snapshot(),
       ]);
       if (head.data.kind !== 'branch' || isManagementBranch(head.data.ref))
         throw new Error('Choose a committed code task branch for this PR.');

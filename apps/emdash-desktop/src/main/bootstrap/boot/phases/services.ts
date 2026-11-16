@@ -1838,6 +1838,7 @@ export async function bootServices(
   const issueProviders = createIssueProviderRegistry({ resolveProjectIntegrationAccount });
   const taskPullRequests = createBackendTaskPullRequests({
     db,
+    scope: appScope,
     projects: projectManager,
     workspaceIdentity,
     runtimes,

@@ -1,13 +1,11 @@
 import type { HostRef } from '@emdash/core/primitives/host/api';
 import { asAgentProviderId } from '@emdash/plugins/agents/types';
 import type { Scope } from '@emdash/shared/concurrency';
-import { observe, type Readable } from '@emdash/wire/state';
 import { and, eq } from 'drizzle-orm';
 import { getPlugin } from '@core/features/agents/api/node/plugin-registry';
 import { assertModelEffort } from '@core/features/model-providers/api/model-effort';
-import type { ProjectAttachmentState } from '@core/features/projects/api/attachments';
+import { createBackgroundProjectAccess } from '@core/features/projects/api/node/attached-project';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
-import type { ProjectProvider } from '@core/features/projects/api/node/project-provider';
 import { resolveProjectEffectiveSettings } from '@core/features/projects/api/node/settings/effective-settings';
 import type { TaskService } from '@core/features/tasks/api/node/task-service';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
@@ -55,43 +53,7 @@ type Dependencies = {
 
 /** Retains project attachment while background tasks need their runtime. */
 export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationService {
-  const leases = new Map<string, { scope: Scope; state: Readable<ProjectAttachmentState> }>();
-  const projectFor = async (projectId: string): Promise<ProjectProvider> => {
-    let held = leases.get(projectId);
-    if (!held) {
-      const scope = deps.scope.child(`delegation-project:${projectId}`);
-      held = { scope, state: deps.projects.track(projectId, scope) };
-      leases.set(projectId, held);
-    }
-    const lease = held;
-    const wait = lease.scope.child('await-attachment');
-    try {
-      return await new Promise<ProjectProvider>((resolve, reject) => {
-        const timeout = setTimeout(
-          () => reject(new Error('The target project did not attach in time.')),
-          30000
-        );
-        wait.add(() => {
-          clearTimeout(timeout);
-          reject(new Error('Project attachment was released.'));
-        });
-        observe(
-          lease.state,
-          ({ value }) => {
-            if (value.kind === 'attached') {
-              const attached = deps.projects.requireAttached(projectId);
-              if (attached.success) resolve(attached.data);
-            } else if (value.kind === 'absent' && value.lastFailure) {
-              reject(new Error(`The target project is unavailable: ${value.lastFailure.type}`));
-            }
-          },
-          { scope: wait, immediate: true }
-        );
-      });
-    } finally {
-      await wait.dispose();
-    }
-  };
+  const projectFor = createBackgroundProjectAccess(deps.projects, deps.scope);
   return new TaskDelegationService({
     store: new AppDbKeyValueStore<Record<string, DelegationRecord>>(deps.db, 'agent-delegations'),
     authorize: deps.authorize,
