@@ -887,6 +887,29 @@ it('preserves a legacy main checkout until its separate document migration runs'
   expect(test.resources.create).not.toHaveBeenCalled();
 });
 
+it('preserves a directory main workspace and its conversation across opening and service recovery', async () => {
+  const test = setup();
+  const record = await test.service.ensureProject('directory');
+  const params = await test.resources.prepare(
+    caller(record),
+    { kind: 'create_task', name: record.name, projectId: record.projectId },
+    { taskId: record.taskId, conversationId: record.conversationId, role: 'coordination' }
+  );
+  params.workspaceConfig = {
+    version: '2',
+    git: { kind: 'none' },
+    workspace: { kind: 'repository-instance', workspaceId: 'directory-root' },
+  };
+  vi.mocked(test.resources.prepare).mockResolvedValue(params);
+  const first = await test.service.open(record.id);
+  const restored = await new CoordinatorService(test.deps).open(record.id);
+  expect(first.params?.workspaceConfig).toEqual(params.workspaceConfig);
+  expect(restored).toEqual(first);
+  expect(first.params?.taskConfig.initialConversation?.initialQueue).toBeUndefined();
+  expect(test.resources.create).toHaveBeenCalledOnce();
+  expect(test.resources.start).not.toHaveBeenCalled();
+});
+
 describe('management document authorization', () => {
   it('checks worker grants before reading and keeps them bounded by the responsible main scope', async () => {
     const { records, deps } = setup();

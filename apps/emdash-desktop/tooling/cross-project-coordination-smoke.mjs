@@ -1120,7 +1120,7 @@ try {
   await page.getByRole('button', { name: /^(Settings|设置)$/ }).waitFor();
   await page.addScriptTag({
     type: 'module',
-    content: `import { allCoordinatorSnapshots, readCoordinatorDocument } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument });`,
+    content: `import { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator });`,
   });
   await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
   const restored = await page.evaluate(() => window.allCoordinatorSnapshots());
@@ -1144,6 +1144,9 @@ try {
   await page
     .locator(`[data-testid="project-main-agent"][data-project-id="${coordinator.projectId}"]`)
     .click();
+  await page
+    .locator(`[data-testid="coordinator-panel"][data-task-id="${coordinator.taskId}"]`)
+    .waitFor();
   await page.getByTestId('coordinator-documents-tab').click();
   const restoredDocuments = page.getByTestId('coordinator-documents-panel');
   await restoredDocuments.getByText('plan.md', { exact: true }).last().dblclick();
@@ -1231,6 +1234,74 @@ try {
 
   assert.equal(await git('rev-parse', 'HEAD'), baseline);
 
+  for (const directory of [true, false]) {
+    const root = join(profile, directory ? 'directory-project' : 'empty-repository');
+    await mkdir(root);
+    await writeFile(join(root, 'notes.txt'), 'Keep this project file.\n');
+    if (!directory) await promisify(execFile)('git', ['init', '-b', 'main', root]);
+    const special = await page.evaluate((input) => window.prepareCoordinator(input), {
+      wrapper,
+      mainWrapper,
+      repository: root,
+      worktreeRoot: join(profile, 'special-worktrees'),
+      name: directory ? 'Directory coordination' : 'Empty repository coordination',
+      directory,
+    });
+    await page
+      .locator(`[data-testid="project-main-agent"][data-project-id="${special.projectId}"]`)
+      .click();
+    await page
+      .locator(`[data-testid="coordinator-panel"][data-task-id="${special.taskId}"]`)
+      .waitFor();
+    await page.getByTestId('coordinator-tasks-tab').waitFor();
+    assert.ok(!(await readdir(capture)).includes(special.conversationId + '.json'));
+    await page.getByTestId('coordinator-documents-tab').click();
+    if (directory) {
+      await page.getByTestId('coordinator-documents-no-git').waitFor();
+      await assert.rejects(readFile(join(root, '.git')), { code: 'ENOENT' });
+    } else {
+      const emptyDocuments = page.getByTestId('coordinator-documents-panel');
+      await emptyDocuments.getByRole('textbox', { name: 'Document path' }).fill('empty-plan.md');
+      await emptyDocuments.getByRole('button', { name: 'Create document', exact: true }).click();
+      await emptyDocuments.getByText('empty-plan.md', { exact: true }).first().waitFor();
+      const refs = (
+        await promisify(execFile)('git', ['for-each-ref', '--format=%(refname)'], { cwd: root })
+      ).stdout.trim();
+      assert.equal(refs, `refs/heads/emdash/manage/${special.taskId}`);
+    }
+    await page.getByTestId('coordinator-conversation-tab').click();
+    const prompt = directory ? 'Coordinate this directory.' : 'Coordinate an empty repository.';
+    await page.locator('[contenteditable="true"]').first().fill(prompt);
+    await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
+    const specialCapture = await waitForCapture(special.conversationId);
+    await waitForPrompt(prompt, specialCapture.sessionId);
+    const specialClient = new Client({ name: 'special-project-acceptance', version: '1' });
+    try {
+      await specialClient.connect(
+        new StreamableHTTPClientTransport(new URL(specialCapture.mcpUrl))
+      );
+      const denied = await specialClient.callTool({
+        name: 'create_task',
+        arguments: { name: 'No code baseline', project_id: special.projectId },
+      });
+      assert.equal(denied.isError, true, 'Code delegation used an unavailable baseline');
+      assert.match(
+        JSON.stringify(denied.content),
+        directory ? /needs a Git repository/ : /code baseline/
+      );
+    } finally {
+      await specialClient.close();
+    }
+    assert.equal(await readFile(join(root, 'notes.txt'), 'utf8'), 'Keep this project file.\n');
+    if (directory) await assert.rejects(readFile(join(root, '.git')), { code: 'ENOENT' });
+    await page.screenshot({
+      path: join(
+        profile,
+        directory ? 'directory-main-conversation.png' : 'empty-main-conversation.png'
+      ),
+    });
+  }
+
   await writeFile(
     join(profile, 'result.json'),
     JSON.stringify(
@@ -1250,6 +1321,8 @@ try {
           'document remote saved before restart without starting a model or publishing refs and restored afterward',
           'explicit document push published only its pinned management branch to a local personal-fork fixture',
           'fork code baseline and local annotated tags stayed outside the management push',
+          'directory main opened and exchanged an ACP turn without initializing Git or allowing code delegation',
+          'empty repository main created management documents without inventing a code baseline',
           'task worktree contained no copied management documents',
           'real ACP protocol with a simulated OpenCode executable',
           'authenticated main and worker MCP identities',

@@ -107,38 +107,32 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
       } as typeof request;
       const projectId = request.projectId ?? caller.projectId;
       const project = await projectFor(projectId);
-      if (!project.hasRepository) throw new Error('A code task needs a Git repository.');
-      const effective = await resolveProjectEffectiveSettings({
-        settings: project.settings,
-        repoFacts: project.repoFacts,
-        projectId,
-      });
-      const remotes = (
-        await project.git.repository.model.state(project.repository, 'remotes').snapshot()
-      ).data.remotes;
-      let base = effective.defaultBranch.value;
-      if (request.baseBranch) {
-        const remote = remotes.find((entry) => request.baseBranch!.startsWith(entry.name + '/'));
-        base = remote
-          ? { remote: remote.name, branch: request.baseBranch.slice(remote.name.length + 1) }
-          : { remote: null, branch: request.baseBranch };
-      }
-      const branchDefaults = await deps.getBranchDefaults();
-      const slug =
-        request.name
-          .toLowerCase()
-          .replace(/[^a-z0-9._-]+/g, '-')
-          .replace(/^-+|-+$/g, '') || 'task';
-      const branchName = resolveTaskBranchName({
-        rawBranch: slug,
-        branchPrefix: branchDefaults.branchPrefix ?? '',
-        suffix: ids.taskId.slice(0, 8),
-        appendRandomSuffix: branchDefaults.appendRandomBranchSuffix ?? true,
-      });
       let git: WorkspaceConfig['git'];
-      if (ids.role === 'coordination')
+      let workspace: WorkspaceConfig['workspace'] = { kind: 'new-worktree' };
+      if (!project.hasRepository) {
+        if (ids.role !== 'coordination') throw new Error('A code task needs a Git repository.');
+        const workspaceId = project.project.repositoryWorkspaceId;
+        if (!workspaceId) throw new Error('The directory project workspace is unavailable.');
+        git = { kind: 'none' };
+        workspace = { kind: 'repository-instance', workspaceId };
+      } else if (ids.role === 'coordination')
         git = { kind: 'management', branchName: `emdash/manage/${ids.taskId}` };
       else {
+        const effective = await resolveProjectEffectiveSettings({
+          settings: project.settings,
+          repoFacts: project.repoFacts,
+          projectId,
+        });
+        const remotes = (
+          await project.git.repository.model.state(project.repository, 'remotes').snapshot()
+        ).data.remotes;
+        let base = effective.defaultBranch.value;
+        if (request.baseBranch) {
+          const remote = remotes.find((entry) => request.baseBranch!.startsWith(entry.name + '/'));
+          base = remote
+            ? { remote: remote.name, branch: request.baseBranch.slice(remote.name.length + 1) }
+            : { remote: null, branch: request.baseBranch };
+        }
         if (!base) throw new Error('Configure the target project code baseline before delegating.');
         if (isManagementBranch(base.branch))
           throw new Error('Management branches cannot be code task baselines.');
@@ -146,6 +140,18 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
           ? remotes.find((entry) => entry.name === base.remote)
           : undefined;
         if (base.remote && !baseRemote) throw new Error('The code baseline remote is unavailable.');
+        const branchDefaults = await deps.getBranchDefaults();
+        const slug =
+          request.name
+            .toLowerCase()
+            .replace(/[^a-z0-9._-]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'task';
+        const branchName = resolveTaskBranchName({
+          rawBranch: slug,
+          branchPrefix: branchDefaults.branchPrefix ?? '',
+          suffix: ids.taskId.slice(0, 8),
+          appendRandomSuffix: branchDefaults.appendRandomBranchSuffix ?? true,
+        });
         git = {
           kind: 'create-branch',
           branchName,
@@ -226,7 +232,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
         workspaceConfig: {
           version: '2',
           git,
-          workspace: { kind: 'new-worktree' },
+          workspace,
         },
       };
     },

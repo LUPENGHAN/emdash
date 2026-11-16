@@ -22,13 +22,14 @@ afterEach(async () => {
   fixture.close();
 });
 
-async function setup() {
+async function setup(options: { directory?: boolean } = {}) {
   const [projectRow] = await fixture.db.select().from(projects).limit(1);
   const state = cell<ProjectAttachmentState>({ kind: 'attached', establishedHostGeneration: 1 });
   const provider = {
     projectId: projectRow.id,
+    project: projectRow,
     host: LOCAL_HOST_REF,
-    hasRepository: true,
+    hasRepository: !options.directory,
     settings: {
       getStoredGitSettings: async () => ({ defaultBranch: { remote: null, branch: 'develop' } }),
       getPlacementContext: async () => ({
@@ -229,4 +230,39 @@ it('prepares a management workspace without a code baseline while refusing code 
     })
   ).rejects.toThrow('code baseline');
   expect(test.createTask).not.toHaveBeenCalled();
+});
+
+it('opens a directory main on its registered workspace without Git reads or allowing code delegation', async () => {
+  const test = await setup({ directory: true });
+  const attached = test.dependencies.projects.requireAttached(test.caller.projectId);
+  if (!attached.success) throw new Error('Project unavailable');
+  const facts = vi.spyOn(attached.data.repoFacts, 'get');
+  const remotes = vi.spyOn(attached.data.git.repository.model, 'state');
+  const service = createBackendTaskDelegation(test.dependencies);
+  const request = {
+    kind: 'create_task' as const,
+    name: 'Directory main',
+    prompt: 'Coordinate',
+    connection: 'official' as const,
+    ui: 'chat' as const,
+  };
+  const params = await service.resources.prepare(test.caller, request, {
+    taskId: 'main',
+    conversationId: 'main-conversation',
+    role: 'coordination',
+  });
+  expect(params.workspaceConfig).toEqual({
+    version: '2',
+    git: { kind: 'none' },
+    workspace: {
+      kind: 'repository-instance',
+      workspaceId: attached.data.project.repositoryWorkspaceId,
+    },
+  });
+  expect(params.taskConfig.initialConversation?.provider).toBe('claude');
+  expect(facts).not.toHaveBeenCalled();
+  expect(remotes).not.toHaveBeenCalled();
+  await expect(service.dispatch(test.caller, request)).rejects.toThrow('needs a Git repository');
+  expect(test.createTask).not.toHaveBeenCalled();
+  expect(test.dependencies.startConversation).not.toHaveBeenCalled();
 });

@@ -27,11 +27,13 @@ export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsP
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState('');
   const [lastCommit, setLastCommit] = useState<string>();
+  const directoryProject = record.params?.workspaceConfig.git.kind === 'none';
   const activeFile =
     composition.paneLayout.focusedPane.activeResourceOfKind<FileTabResource>('file');
   const workspace = useQuery({
     queryKey: ['coordinator-documents', record.id],
     queryFn: async () => (await getCoordinationClient()).documentWorkspace({ id: record.id }),
+    enabled: !directoryProject,
   });
   const create = async () => {
     if (saving) return;
@@ -93,6 +95,16 @@ export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsP
       setSaving(false);
     }
   };
+  if (directoryProject)
+    return (
+      <div className="space-y-2 p-4" data-testid="coordinator-documents-no-git">
+        <p>This directory project has no Git repository.</p>
+        <p className="text-sm text-foreground-muted">
+          Main agent conversations are available. Management branches, document pushes and code
+          baseline synchronization do not apply to this directory.
+        </p>
+      </div>
+    );
   if (workspace.error)
     return (
       <div className="space-y-3 p-4" role="alert">

@@ -240,12 +240,17 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
           { taskId: record.taskId, conversationId: record.conversationId, role: 'coordination' }
         );
         params.taskConfig.role = 'coordination';
-        if (params.workspaceConfig.workspace.kind !== 'new-worktree')
-          throw new Error('A main agent needs an isolated workspace.');
-        params.workspaceConfig.git = {
-          kind: 'management',
-          branchName: `emdash/manage/${record.taskId}`,
-        };
+        if (params.workspaceConfig.git.kind === 'none') {
+          if (params.workspaceConfig.workspace.kind !== 'repository-instance')
+            throw new Error('A directory main agent needs its project workspace.');
+        } else {
+          if (params.workspaceConfig.workspace.kind !== 'new-worktree')
+            throw new Error('A Git main agent needs an isolated management workspace.');
+          params.workspaceConfig.git = {
+            kind: 'management',
+            branchName: `emdash/manage/${record.taskId}`,
+          };
+        }
         // The first turn is user initiated. Instructions are delivered as hidden context on that turn.
         if (params.taskConfig.initialConversation) {
           params.taskConfig.initialConversation.initialQueue = undefined;

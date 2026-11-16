@@ -29,6 +29,10 @@ export class CoordinatorDocuments {
   constructor(private readonly resolve: (record: Coordinator) => Promise<DocumentRuntime>) {}
   private async storage(record: Coordinator) {
     const config = record.params?.workspaceConfig.git;
+    if (config?.kind === 'none')
+      throw new Error(
+        'Management document Git history is not applicable to this directory project.'
+      );
     if (config?.kind !== 'management')
       throw new Error(
         'This main agent needs document migration before using management documents. Its original workspace is preserved.'

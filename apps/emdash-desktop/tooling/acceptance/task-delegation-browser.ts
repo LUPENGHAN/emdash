@@ -63,6 +63,7 @@ async function prepareProject(input: {
   worktreeRoot: string;
   name?: string;
   baselineBranch?: string;
+  directory?: boolean;
 }) {
   const agents = await getAgentsClient();
   const selected = await agents.setUsedInstallation({
@@ -86,9 +87,11 @@ async function prepareProject(input: {
     projectId: project.id,
     patch: {
       placement: { stored: { worktreeRoot: input.worktreeRoot } },
-      gitIdentity: {
-        stored: { defaultBranch: { remote: null, branch: input.baselineBranch ?? 'main' } },
-      },
+      ...(!input.directory && {
+        gitIdentity: {
+          stored: { defaultBranch: { remote: null, branch: input.baselineBranch ?? 'main' } },
+        },
+      }),
     },
   });
   if (!saved.success) throw new Error(JSON.stringify(saved.error));
@@ -103,6 +106,8 @@ export async function prepareCoordinator(input: {
   mainWrapper: string;
   repository: string;
   worktreeRoot: string;
+  name?: string;
+  directory?: boolean;
 }) {
   const { project } = await prepareProject(input);
   const agents = await getAgentsClient();
