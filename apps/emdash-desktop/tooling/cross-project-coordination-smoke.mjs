@@ -666,13 +666,83 @@ try {
   await page.getByTestId('coordinator-tasks-tab').click();
   await page.getByText('Independent coordination result', { exact: true }).waitFor();
   await page.screenshot({ path: join(profile, 'independent-main-result.png') });
+  const beforeTransferHead = (
+    await promisify(execFile)('git', ['rev-parse', 'HEAD'], { cwd: cross.path })
+  ).stdout.trim();
+  const foreignMessage = await independentClient.callTool({
+    name: 'send_message',
+    arguments: {
+      conversation_id: cross.conversation_id,
+      text: 'Before takeover',
+      request_id: 'foreign-before-takeover',
+    },
+  });
+  assert.equal(foreignMessage.isError, true);
+  const transferResult = JSON.parse(
+    await call(crossWorkerClient, 'submit_task_result', {
+      task_id: cross.task_id,
+      request_id: 'pending-transfer-result',
+      result: {
+        summary: 'Result pending while ownership changes',
+        commits: [beforeTransferHead],
+        checks: [],
+        unresolved: [],
+        prUrls: [],
+      },
+    })
+  );
+  await page.getByTestId('takeover-task-id').fill(cross.task_id);
+  await page.getByTestId('inspect-task-takeover').click();
+  await page.getByTestId('confirm-task-takeover').click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="takeover-task-id"]').value === ''
+  );
+  await page.getByText('Result pending while ownership changes', { exact: true }).waitFor();
+  const previousOwner = await page.evaluate(
+    (id) => window.coordinatorSnapshot(id),
+    coordinator.taskId
+  );
+  assert.equal(previousOwner.tasks[cross.task_id], undefined);
+  const takeoverRetry = JSON.parse(
+    await call(independentClient, 'take_over_task', {
+      task_id: cross.task_id,
+      expected_owner: owner.id,
+    })
+  );
+  assert.equal(takeoverRetry.assignment.ownershipHistory.length, 1);
+  const afterTransferHead = (
+    await promisify(execFile)('git', ['rev-parse', 'HEAD'], { cwd: cross.path })
+  ).stdout.trim();
+  assert.equal(afterTransferHead, beforeTransferHead);
+  await waitForPrompt(transferResult.eventId, independentCapture.sessionId);
+  const oldOwnerAck = await replacementClient.callTool({
+    name: 'acknowledge_task_results',
+    arguments: { event_ids: [transferResult.eventId] },
+  });
+  assert.equal(oldOwnerAck.isError, true);
+  const oldOwnerReview = await replacementClient.callTool({
+    name: 'review_task_result',
+    arguments: { task_id: cross.task_id, result_version: 2, accepted: true, note: 'Stale owner' },
+  });
+  assert.equal(oldOwnerReview.isError, true);
+  await call(independentClient, 'acknowledge_task_results', {
+    event_ids: [transferResult.eventId],
+  });
+  await call(independentClient, 'review_task_result', {
+    task_id: cross.task_id,
+    result_version: 2,
+    accepted: true,
+    note: 'New owner inspected transferred result',
+  });
+  await page.getByText('Result pending while ownership changes', { exact: true }).waitFor();
+  await page.screenshot({ path: join(profile, 'takeover-result.png') });
   await page.close();
   const backgroundList = JSON.parse(
     await call(replacementClient, 'list_tasks', { project_id: relatedProjectId })
   );
   assert.ok(backgroundList.some((task) => task.id === cross.task_id));
   const backgroundMessage = JSON.parse(
-    await call(replacementClient, 'send_message', {
+    await call(independentClient, 'send_message', {
       conversation_id: cross.conversation_id,
       request_id: 'after-renderer-close',
       text: 'Follow-up with no renderer',
@@ -703,6 +773,8 @@ try {
           'both repositories returned results to one main agent',
           'renderer closed before cross-project task reads and a new ACP follow-up',
           'independent cross-project main created and opened through the sidebar',
+          'task explicitly taken over through the UI without changing its branch or worker',
+          'pending result moved to the new owner and old owner could not acknowledge or review it',
           'independent main requires an explicit code target project',
           'explicit worker grant allowed cross-repository delegation and capped child grants',
           'main conversation switched through the UI without losing task history',

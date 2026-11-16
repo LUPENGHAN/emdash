@@ -6,10 +6,19 @@ import {
   type Coordinator,
   type CoordinationEvent,
   type ResolvedAgentSelection,
+  type TakeoverPreview,
 } from './types';
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  inspectTask: procedure({
+    input: z.object({ id: z.string(), taskId: z.string() }),
+    output: z.custom<TakeoverPreview>(),
+  }),
+  takeOverTask: procedure({
+    input: z.object({ id: z.string(), taskId: z.string(), expectedOwner: z.string().nullable() }),
+    output: z.custom<Coordinator>(),
+  }),
   createCrossProject: procedure({
     input: z.object({
       id: z.uuid(),

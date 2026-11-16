@@ -136,6 +136,7 @@ export async function executeAgentAction(
 
     case 'list_projects':
     case 'get_task_status':
+    case 'take_over_task':
     case 'submit_task_result':
     case 'acknowledge_task_results':
     case 'review_task_result':

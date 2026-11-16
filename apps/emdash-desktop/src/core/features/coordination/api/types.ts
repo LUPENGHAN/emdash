@@ -41,6 +41,7 @@ export type AssignedTask = {
   submissions: Record<string, { version: number; fingerprint: string }>;
   review?: { note: string; accepted: boolean; at: number };
   grantedProjectIds?: string[];
+  ownershipHistory?: { from: string | null; to: string; at: number }[];
 };
 export type ResultEvent = {
   id: string;
@@ -51,7 +52,7 @@ export type ResultEvent = {
   error?: string;
 };
 export type Coordinator = {
-  version: '2';
+  version: '3';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -68,6 +69,13 @@ export type Coordinator = {
   creationFingerprint?: string;
 };
 export type CoordinationEvent = { coordinatorId: string; projectId: string };
+export type TakeoverPreview = {
+  taskId: string;
+  projectId: string;
+  name: string;
+  ownerId: string | null;
+  ownerName: string | null;
+};
 
 const coordinatorV1 = z.object({
   version: z.literal('1'),
@@ -118,4 +126,19 @@ export const coordinatorRecord = defineVersionedSchema()
     ...record,
     version: '2' as const,
   }))
+  .version(
+    '3',
+    coordinatorV1.extend({
+      version: z.literal('3'),
+      tasks: z.record(
+        z.string(),
+        coordinatorV1.shape.tasks.valueType.extend({
+          ownershipHistory: z
+            .array(z.object({ from: z.string().nullable(), to: z.string(), at: z.number() }))
+            .optional(),
+        })
+      ),
+    }),
+    (record) => ({ ...record, version: '3' as const })
+  )
   .build();

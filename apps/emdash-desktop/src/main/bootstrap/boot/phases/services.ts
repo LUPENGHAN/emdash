@@ -735,11 +735,32 @@ export async function bootServices(
         return coordinationRuntime.background.dispatch(caller, action);
       }
       if (
-        ['submit_task_result', 'acknowledge_task_results', 'review_task_result'].includes(
-          action.kind
-        )
+        [
+          'submit_task_result',
+          'acknowledge_task_results',
+          'review_task_result',
+          'take_over_task',
+        ].includes(action.kind)
       )
         await assertActiveAgentCaller(caller);
+      if (action.kind === 'take_over_task') {
+        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        const main = await coordinationRuntime.service.getByTask(caller.taskId);
+        if (!main) throw new Error('Only a main agent can take over a task.');
+        const record = await coordinationRuntime.service.takeOverTask(
+          main.id,
+          action.taskId,
+          action.expectedOwner,
+          caller
+        );
+        return {
+          text: JSON.stringify({
+            task_id: action.taskId,
+            coordinator_id: record.id,
+            assignment: record.tasks[action.taskId],
+          }),
+        };
+      }
       if (action.kind === 'submit_task_result') {
         if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
         const receipt = await coordinationRuntime.service.submit(
@@ -1173,6 +1194,14 @@ export async function bootServices(
       return taskDelegation.service.resources;
     },
     defaultAgent: () => appSettingsService.get('defaultAgent'),
+    getTask: async (id) => {
+      const [row] = await db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.id, id), isNull(tasks.deletedAt)))
+        .limit(1);
+      return row ? mapTaskRowToTask(row) : null;
+    },
     getConversation: async (id) => {
       const row = createConversationRegistry(db).getLive(id);
       if (!row?.taskId || !row.projectId || !row.provider || row.deletionTombstone) return null;

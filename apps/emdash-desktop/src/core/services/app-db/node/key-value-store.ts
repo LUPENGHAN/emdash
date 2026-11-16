@@ -50,6 +50,27 @@ export class AppDbKeyValueStore<TSchema extends Record<string, unknown>> {
     await this.write(key, value);
   }
 
+  /** Commits related records together; a failed write rolls back the entire batch. */
+  async setManyOrThrow<K extends keyof TSchema & string>(
+    entries: { key: K; value: TSchema[K] }[]
+  ): Promise<void> {
+    const rows = entries.map(({ key, value }) => ({
+      key: this.prefixed(key),
+      value: JSON.stringify(value),
+      updatedAt: Date.now(),
+    }));
+    this.db.transaction((tx) => {
+      for (const row of rows)
+        tx.insert(kv)
+          .values(row)
+          .onConflictDoUpdate({
+            target: kv.key,
+            set: { value: row.value, updatedAt: row.updatedAt },
+          })
+          .run();
+    });
+  }
+
   async del<K extends keyof TSchema & string>(key: K): Promise<void> {
     try {
       await this.delOrThrow(key);

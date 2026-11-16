@@ -455,6 +455,21 @@ describe('registerAgentControlTools task tools', () => {
     });
   });
 
+  it('requires the expected owner for an explicit task takeover', async () => {
+    const { tool, dispatch } = registeredTools();
+    await tool('take_over_task')?.handler({ task_id: 'worker', expected_owner: 'previous-main' });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'take_over_task',
+      taskId: 'worker',
+      expectedOwner: 'previous-main',
+    });
+    const schema = z.object(
+      tool('take_over_task')!.config.inputSchema as Record<string, z.ZodType>
+    );
+    expect(schema.safeParse({ task_id: 'worker' }).success).toBe(false);
+    expect(schema.safeParse({ task_id: 'worker', expected_owner: null }).success).toBe(true);
+  });
+
   it('validates and dispatches result submission, acknowledgment and versioned review', async () => {
     const { tool, dispatch } = registeredTools();
     const result = {

@@ -45,10 +45,18 @@ function setup() {
       getOrThrow: async (id: string) =>
         records.has(id) ? structuredClone(records.get(id)!) : null,
       getAll: async () => structuredClone(Object.fromEntries(records)),
+      setManyOrThrow: vi.fn(async (entries: { key: string; value: Coordinator }[]) => {
+        for (const entry of entries) records.set(entry.key, structuredClone(entry.value));
+      }),
       setOrThrow: async (id: string, value: Coordinator) => {
         records.set(id, structuredClone(value));
       },
     },
+    getTask: vi.fn<ConstructorParameters<typeof CoordinatorService>[0]['getTask']>(async (id) => {
+      const record = [...records.values()].find((record) => record.tasks[id]);
+      const task = record?.tasks[id];
+      return task ? { id, projectId: task.projectId, name: task.name, type: 'task' } : null;
+    }),
     resources: () => resources,
     defaultAgent: async () => 'claude',
     resolveSelection: createSelectionResolver({
@@ -421,11 +429,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('2');
+    expect((await test.service.ensureProject('project')).version).toBe('3');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('2');
+    expect(test.records.get(record.id)?.version).toBe('3');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -459,6 +467,165 @@ describe('main agent coordination', () => {
       'different main agent parameters'
     );
     expect((await new CoordinatorService(test.deps).createCrossProject(input)).id).toBe(one.id);
+  });
+
+  it('transfers one owner atomically, preserves result history and redirects unconfirmed events', async () => {
+    const test = setup();
+    const source = await assigned(test);
+    const destination = await test.service.ensureProject('other');
+    const receipt = await test.service.submit(
+      caller(source, 'worker-task'),
+      'worker-task',
+      'first',
+      result
+    );
+    await test.service.deliverPending(source.id);
+    const switched = await test.service.takeOverTask(
+      destination.id,
+      'worker-task',
+      source.id,
+      caller(destination)
+    );
+    await test.service.deliverPending(destination.id);
+    expect((await test.service.getByTask(source.taskId))?.tasks['worker-task']).toBeUndefined();
+    expect(switched.tasks['worker-task'].result).toEqual(result);
+    expect(switched.tasks['worker-task'].ownershipHistory).toEqual([
+      { from: source.id, to: destination.id, at: expect.any(Number) },
+    ]);
+    expect((await test.service.getByTask(source.taskId))?.events).toEqual([]);
+    expect(test.deps.store.setManyOrThrow).toHaveBeenCalledOnce();
+    expect(test.deps.deliver.mock.calls.at(-1)?.[0].id).toBe(destination.id);
+    await expect(test.service.acknowledge(caller(source), [receipt.eventId])).rejects.toThrow(
+      'Unknown result'
+    );
+    await test.service.acknowledge(caller(destination), [receipt.eventId]);
+    await expect(
+      test.service.review(source.id, 'worker-task', true, 'Old owner', 1, caller(source))
+    ).rejects.toThrow('no submitted result');
+    await test.service.review(
+      destination.id,
+      'worker-task',
+      true,
+      'Checked',
+      1,
+      caller(destination)
+    );
+    expect(
+      (await test.service.takeOverTask(destination.id, 'worker-task', source.id)).tasks[
+        'worker-task'
+      ].ownershipHistory
+    ).toHaveLength(1);
+  });
+
+  it('allows only one concurrent destination to acquire a task with the expected owner', async () => {
+    const test = setup();
+    const source = await assigned(test);
+    const one = await test.service.ensureProject('one');
+    const two = await test.service.ensureProject('two');
+    const outcomes = await Promise.allSettled([
+      test.service.takeOverTask(one.id, 'worker-task', source.id),
+      test.service.takeOverTask(two.id, 'worker-task', source.id),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      (await test.service.list()).filter((record) => record.tasks['worker-task'])
+    ).toHaveLength(1);
+  });
+
+  it('leaves the source owner untouched when the atomic commit fails', async () => {
+    const test = setup();
+    const source = await assigned(test);
+    const destination = await test.service.ensureProject('other');
+    test.deps.store.setManyOrThrow.mockRejectedValueOnce(new Error('Commit failed'));
+    await expect(
+      test.service.takeOverTask(destination.id, 'worker-task', source.id)
+    ).rejects.toThrow('Commit failed');
+    expect((await test.service.getByTask(source.taskId))?.tasks['worker-task']).toBeDefined();
+    expect(
+      (await test.service.getByTask(destination.taskId))?.tasks['worker-task']
+    ).toBeUndefined();
+  });
+
+  it('rejects stale owners, foreign callers, unavailable tasks and disallowed projects', async () => {
+    const test = setup();
+    const source = await assigned(test);
+    const destination = await test.service.ensureProject('other');
+    await expect(test.service.takeOverTask(destination.id, 'worker-task', null)).rejects.toThrow(
+      'owner changed'
+    );
+    await expect(
+      test.service.takeOverTask(destination.id, 'worker-task', source.id, caller(source))
+    ).rejects.toThrow('designated main');
+    await expect(test.service.takeOverTask(destination.id, 'missing', null)).rejects.toThrow(
+      'unavailable'
+    );
+    await test.service.update(destination.id, {
+      projectAccess: { mode: 'selected', projectIds: [] },
+    });
+    await expect(
+      test.service.takeOverTask(destination.id, 'worker-task', source.id)
+    ).rejects.toThrow('permission denied');
+    test.deps.getTask.mockResolvedValueOnce({
+      id: 'automation',
+      projectId: 'project',
+      name: 'Run',
+      type: 'automation-run',
+    });
+    await expect(test.service.takeOverTask(destination.id, 'automation', null)).rejects.toThrow(
+      'automation runs'
+    );
+  });
+
+  it('never treats an unreadable main or task owner as an ordinary unscoped caller', async () => {
+    const test = setup();
+    const source = await assigned(test);
+    test.records.set(source.id, {
+      ...test.records.get(source.id)!,
+      version: '99',
+    } as unknown as Coordinator);
+    await expect(
+      test.service.mayAccessProject(caller(source), 'project', 'delegate')
+    ).rejects.toThrow('future-version');
+    const ordinary = { ...caller(source), taskId: 'ordinary' };
+    await expect(
+      test.service.mayAccessTask(ordinary, { id: 'worker-task', projectId: 'project' }, 'control')
+    ).rejects.toThrow('future-version');
+  });
+
+  it('adopts an unowned code task without creating a workspace or restarting its agent', async () => {
+    const test = setup();
+    const destination = await test.service.ensureProject('project');
+    test.deps.getTask.mockResolvedValue({
+      id: 'unowned',
+      projectId: 'project',
+      name: 'Existing code task',
+      type: 'task',
+    });
+    const adopted = await test.service.takeOverTask(destination.id, 'unowned', null);
+    expect(adopted.tasks.unowned.name).toBe('Existing code task');
+    expect(adopted.tasks.unowned.ownershipHistory?.[0].from).toBeNull();
+    expect(test.resources.create).not.toHaveBeenCalled();
+    expect(test.resources.start).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the target project when a prepared worker delegation is registered after its grants change', async () => {
+    const test = setup();
+    const record = await assigned(test);
+    const stored = test.records.get(record.id)!;
+    stored.tasks['worker-task'].grantedProjectIds = [];
+    await expect(
+      test.service.registerDelegation(caller(record, 'worker-task'), {
+        id: 'late-child',
+        projectId: 'other',
+        taskConfig: { version: '1', name: 'Late child' },
+        workspaceConfig: {
+          version: '2',
+          git: { kind: 'none' },
+          workspace: { kind: 'new-worktree' },
+        },
+      })
+    ).rejects.toThrow('permission denied');
+    expect((await test.service.getByTask(record.taskId))?.tasks['late-child']).toBeUndefined();
   });
 
   it('uses the configured default worker agent independently of the primary agent', async () => {

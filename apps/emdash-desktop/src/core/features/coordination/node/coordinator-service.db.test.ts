@@ -19,6 +19,7 @@ it('restores coordinator identity, defaults, result snapshots and acknowledgment
   const service = (): CoordinatorService =>
     new CoordinatorService({
       store: new AppDbKeyValueStore<Record<string, Coordinator>>(fixture.db, 'coordinators'),
+      getTask: async () => null,
       getConversation: async (id) =>
         id === 'replacement-main'
           ? {
@@ -102,4 +103,74 @@ it('restores coordinator identity, defaults, result snapshots and acknowledgment
   expect(switched?.conversationId).toBe('replacement-main');
   expect(switched?.tasks.worker.result?.summary).toBe('Implemented');
   expect(switched?.events[0].state).toBe('acknowledged');
+});
+
+it('rolls back both owners on a SQLite write failure and transfers results after retry', async () => {
+  const store = new AppDbKeyValueStore<Record<string, Coordinator>>(fixture.db, 'coordinators');
+  const make = () =>
+    new CoordinatorService({
+      store,
+      resources: () => {
+        throw new Error('No runtime should be allocated');
+      },
+      getTask: async (id) =>
+        id === 'worker' ? { id, projectId: 'source', name: 'Worker', type: 'task' } : null,
+      getConversation: async () => null,
+      defaultAgent: async () => 'claude',
+      resolveSelection: createSelectionResolver({
+        defaultAgent: async () => 'claude',
+        getAgentSettings: async () => undefined,
+        getProviders: async () => [],
+        getModels: async () => [],
+      }),
+      assertProjectAvailable: async () => {},
+      setTaskStatus: async () => {},
+      emit: () => {},
+      deliver: async () => {
+        throw new Error('Receiver offline');
+      },
+    });
+  const service = make();
+  const source = await service.ensureProject('source');
+  const target = await service.ensureProject('target');
+  const caller: AgentCaller = {
+    taskId: source.taskId,
+    conversationId: source.conversationId,
+    projectId: source.projectId,
+    providerId: 'claude',
+    title: 'Main',
+    cwd: null,
+  };
+  await service.registerDelegation(caller, {
+    id: 'worker',
+    projectId: 'source',
+    taskConfig: { version: '1', name: 'Worker' },
+    workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+  });
+  const receipt = await service.submit({ ...caller, taskId: 'worker' }, 'worker', 'result', {
+    summary: 'Ready for review',
+    commits: ['abc'],
+    checks: [],
+    unresolved: [],
+    prUrls: [],
+  });
+  await service.deliverPending(source.id);
+  fixture.sqlite.exec(
+    "CREATE TRIGGER reject_transfer BEFORE UPDATE ON kv WHEN NEW.key = 'coordinators:project:target' BEGIN SELECT RAISE(ABORT, 'transfer write failed'); END"
+  );
+  await expect(service.takeOverTask(target.id, 'worker', source.id)).rejects.toThrow(
+    'transfer write failed'
+  );
+  expect((await make().getByTask(source.taskId))?.tasks.worker.result?.summary).toBe(
+    'Ready for review'
+  );
+  expect((await make().getByTask(target.taskId))?.tasks.worker).toBeUndefined();
+  fixture.sqlite.exec('DROP TRIGGER reject_transfer');
+  await service.takeOverTask(target.id, 'worker', source.id);
+  await service.deliverPending(target.id);
+  const restarted = make();
+  expect((await restarted.getTaskCoordination('worker'))?.coordinatorId).toBe(target.id);
+  expect((await restarted.getByTask(source.taskId))?.events).toEqual([]);
+  expect((await restarted.getByTask(target.taskId))?.events[0].id).toBe(receipt.eventId);
+  expect((await restarted.getByTask(target.taskId))?.tasks.worker.resultVersion).toBe(1);
 });

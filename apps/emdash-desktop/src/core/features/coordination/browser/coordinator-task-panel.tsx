@@ -16,6 +16,7 @@ import { useNavigate } from '@core/primitives/navigation/browser/navigation-hook
 import { getCoordinationClient } from '../api/browser/client';
 import type { AgentSelection, AssignedTask, Coordinator, ProjectAccess } from '../api/types';
 import { CreateCrossProjectMainAgent } from './cross-project-main-agents';
+import { TakeOverTaskForm } from './take-over-task-form';
 
 export const CoordinatorTaskPanel = observer(function CoordinatorTaskPanel({
   children,
@@ -107,6 +108,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
             </div>
           ) : (
             <>
+              <TakeOverTaskForm record={record} />
               {Object.values(record.tasks).length === 0 && (
                 <p>No tasks assigned yet. Describe your goal in the main agent conversation.</p>
               )}

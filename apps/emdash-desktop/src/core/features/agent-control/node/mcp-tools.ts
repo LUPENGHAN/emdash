@@ -349,6 +349,17 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
   );
 
   server.registerTool(
+    'take_over_task',
+    {
+      description:
+        'Main agent: explicitly adopt an unowned code task or take it over from another main agent. Read get_task_status first and pass its coordinatorId as expected_owner, or null when unowned. The branch and running worker are preserved.',
+      inputSchema: { task_id: z.string().min(1), expected_owner: z.string().nullable() },
+    },
+    ({ task_id, expected_owner }) =>
+      dispatch({ kind: 'take_over_task', taskId: task_id, expectedOwner: expected_owner })
+  );
+
+  server.registerTool(
     'submit_task_result',
     {
       description:
