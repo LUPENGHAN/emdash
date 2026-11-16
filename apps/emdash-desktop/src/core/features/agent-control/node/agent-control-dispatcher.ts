@@ -5,6 +5,7 @@ import type {
   AgentControlRequest,
   AgentControlResult,
 } from '../api';
+import type { PendingAgentMessages } from '../api/pending-messages';
 
 /** A window that has not checked in for this long is gone (closed, asleep, disconnected). */
 export const RENDERER_STALE_MS = 90_000;
@@ -21,6 +22,7 @@ type Pending = {
 export type AgentControlDispatcherDeps = {
   emit: (request: AgentControlRequest) => void;
   now?: () => number;
+  messages?: PendingAgentMessages;
   backend?: (
     caller: AgentCaller,
     action: AgentControlAction
@@ -50,6 +52,14 @@ export function createAgentControlDispatcher(deps: AgentControlDispatcherDeps) {
   };
 
   return {
+    pendingMessages(taskId: string) {
+      if (!deps.messages) throw new Error('Agent messages are still starting.');
+      return deps.messages.list(taskId);
+    },
+    resolvePendingMessage(taskId: string, id: string, resolution: 'handled' | 'dismissed') {
+      if (!deps.messages) throw new Error('Agent messages are still starting.');
+      return deps.messages.resolve(taskId, id, resolution);
+    },
     register(rendererId: string, focused: boolean): void {
       const existing = renderers.get(rendererId);
       renderers.set(rendererId, {

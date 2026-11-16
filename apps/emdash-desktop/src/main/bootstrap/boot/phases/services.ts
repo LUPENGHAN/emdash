@@ -31,7 +31,10 @@ import {
   type AgentMessageRecord,
   type AgentTaskSnapshot,
 } from '@core/features/agent-control/node/background-agent-control';
-import { agentControlEvents } from '@core/features/agent-control/node/event-host';
+import {
+  agentControlEvents,
+  agentMessageEvents,
+} from '@core/features/agent-control/node/event-host';
 import { resolveAgentCaller } from '@core/features/agent-control/node/resolve-caller';
 import type { TaskDelegationService } from '@core/features/agent-control/node/task-delegation-service';
 import type { LaunchMcpServer } from '@core/features/agent-library/api';
@@ -719,6 +722,39 @@ export async function bootServices(
       throw new Error('The calling conversation or task is no longer active.');
   };
   const agentControl = createAgentControlDispatcher({
+    messages: {
+      list: async (taskId) => {
+        if (!coordinationRuntime.background) throw new Error('Agent messages are still starting.');
+        const messages = await coordinationRuntime.background.pendingMessages(taskId);
+        const main = await coordinationRuntime.service?.getByTask(taskId);
+        for (const event of main?.events ?? []) {
+          if (event.state !== 'pending' || !event.error || !main) continue;
+          messages.push({
+            id: `result:${event.id}`,
+            promptId: event.id,
+            conversationId: main.conversationId,
+            title: `Task result: ${main.tasks[event.taskId]?.name ?? event.taskId}`,
+            text: `Task ${event.taskId}, result version ${event.version}, event ${event.id}\n${event.result.summary}\nCommits: ${event.result.commits.join(', ')}\nChecks:\n${event.result.checks.map((check) => `${check.passed ? 'Passed' : 'Failed'}: ${check.command}${check.output ? `\n${check.output}` : ''}`).join('\n')}\nUnresolved: ${event.result.unresolved.join('; ')}\nPRs: ${event.result.prUrls.join(', ')}`,
+            status: 'pending',
+            reason: event.error,
+          });
+        }
+        return messages;
+      },
+      resolve: async (taskId, id, resolution) => {
+        if (!coordinationRuntime.background) throw new Error('Agent messages are still starting.');
+        if (id.startsWith('result:')) {
+          const main = await coordinationRuntime.service?.getByTask(taskId);
+          if (!main || !coordinationRuntime.service)
+            throw new Error('The responsible main agent is unavailable.');
+          return coordinationRuntime.service.resolveResultEventForUser(
+            main.id,
+            id.slice('result:'.length)
+          );
+        }
+        return coordinationRuntime.background.resolvePendingMessage(taskId, id, resolution);
+      },
+    },
     backend: async (caller, action) => {
       if (
         [
@@ -1301,7 +1337,10 @@ export async function bootServices(
     },
     setTaskStatus: (taskId, status) =>
       taskService.updateTaskStatus(taskId, status, telemetryService),
-    emit: (event) => coordinationEvents.emit(undefined, event),
+    emit: (event) => {
+      coordinationEvents.emit(undefined, event);
+      if (event.taskId) agentMessageEvents.emit(undefined, { taskId: event.taskId });
+    },
     reportError: (error, id) =>
       log.warn('Could not restore main agent state', { id, error: String(error) }),
     deliver: async (record, eventId, text, hiddenContext) => {
@@ -1364,6 +1403,9 @@ export async function bootServices(
       };
     });
   coordinationRuntime.background = new BackgroundAgentControl({
+    emitMessagesChanged: (taskId) => agentMessageEvents.emit(undefined, { taskId }),
+    reportError: (error, id) =>
+      log.warn('Could not read stored agent message', { id, error: String(error) }),
     access: coordinatorService,
     assertCaller: assertActiveAgentCaller,
     projects: async () =>

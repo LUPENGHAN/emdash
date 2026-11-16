@@ -180,7 +180,11 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
   }
   private async save(record: Coordinator): Promise<void> {
     await this.deps.store.setOrThrow(record.id, coordinatorRecord.schema.parse(record));
-    this.deps.emit({ coordinatorId: record.id, projectId: record.projectId });
+    this.deps.emit({
+      coordinatorId: record.id,
+      projectId: record.projectId,
+      taskId: record.taskId,
+    });
   }
   async openProject(projectId: string): Promise<Coordinator> {
     await this.deps.assertProjectAvailable(projectId);
@@ -697,7 +701,11 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
             }))
           );
           for (const entry of changed)
-            this.deps.emit({ coordinatorId: entry.id, projectId: entry.projectId });
+            this.deps.emit({
+              coordinatorId: entry.id,
+              projectId: entry.projectId,
+              taskId: entry.taskId,
+            });
           return next;
         })
       )
@@ -851,6 +859,19 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
         this.deps.reportError?.(error, record.id);
       }
     }
+  }
+  async resolveResultEventForUser(id: string, eventId: string): Promise<void> {
+    await this.deliveries.runExclusive(id, () =>
+      this.locks.runExclusive(id, async () => {
+        const record = await this.get(id);
+        const event = record.events.find((entry) => entry.id === eventId);
+        if (!event) throw new Error('This result event is no longer assigned to this main agent.');
+        if (event.state === 'acknowledged') return;
+        event.state = 'acknowledged';
+        event.error = undefined;
+        await this.save(record);
+      })
+    );
   }
   async deliverPending(id: string): Promise<void> {
     await this.deliveries.runExclusive(id, async () => {

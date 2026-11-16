@@ -1,4 +1,5 @@
 import { asAgentProviderId } from '@emdash/plugins/agents/types';
+import { deferred } from '@emdash/shared/testing';
 import { describe, expect, it, vi } from 'vitest';
 import type { Conversation } from '@core/primitives/conversations/api';
 import type { Task } from '@core/primitives/tasks/api';
@@ -67,6 +68,8 @@ function setup() {
       getTaskCoordination: vi.fn(async () => ({ coordinatorId: 'owner', resultVersion: 2 })),
     },
     assertCaller: vi.fn(async () => {}),
+    emitMessagesChanged: vi.fn(),
+    reportError: vi.fn(),
     projects: async () => projects,
     assertProject: vi.fn(async () => {}),
     tasks: async (projectId: string) => tasks.filter((task) => task.projectId === projectId),
@@ -76,6 +79,7 @@ function setup() {
     conversation: async (id: string) =>
       conversations.find((conversation) => conversation.id === id) ?? null,
     messages: {
+      getAll: async () => structuredClone(Object.fromEntries(records)),
       getOrThrow: async (id: string) => structuredClone(records.get(id) ?? null),
       setOrThrow: async (id: string, value: AgentMessageRecord) => {
         records.set(id, structuredClone(value));
@@ -211,4 +215,93 @@ describe('background agent discovery and messaging', () => {
       'Caller was deleted'
     );
   });
+});
+
+describe('pending message handling', () => {
+  const action = {
+    kind: 'send_message' as const,
+    conversationId: 'target',
+    text: 'Please inspect this change',
+    requestId: 'pending-request',
+  };
+  it('lists known-unsent messages and durably handles them without injecting input or replaying the request', async () => {
+    const test = setup();
+    test.deps.deliver.mockResolvedValue({
+      status: 'pending',
+      reason: 'Terminal requires explicit delivery',
+    });
+    await test.service.dispatch(caller, action);
+    const [pending] = await test.service.pendingMessages('worker');
+    expect(pending).toMatchObject({ text: action.text, status: 'pending', title: 'target' });
+    expect(await test.service.pendingMessages('main')).toEqual([]);
+    await expect(test.service.resolvePendingMessage('main', pending.id, 'handled')).rejects.toThrow(
+      'target is unavailable'
+    );
+    await test.service.resolvePendingMessage('worker', pending.id, 'handled');
+    const restored = new BackgroundAgentControl(test.deps);
+    expect(await restored.pendingMessages('worker')).toEqual([]);
+    expect(JSON.parse((await restored.dispatch(caller, action))!.text).status).toBe('handled');
+    await restored.resolvePendingMessage('worker', pending.id, 'handled');
+    expect(test.deps.deliver).toHaveBeenCalledOnce();
+    expect(test.deps.emitMessagesChanged).toHaveBeenLastCalledWith('worker');
+  });
+  it('shows ambiguous acceptance after recovery and allows explicit dismissal without replay', async () => {
+    const test = setup();
+    test.deps.deliver.mockRejectedValue(new Error('Lost reply'));
+    await test.service.dispatch(caller, action);
+    const restored = new BackgroundAgentControl(test.deps);
+    const [pending] = await restored.pendingMessages('worker');
+    expect(pending).toMatchObject({ status: 'delivery_unknown', reason: 'Lost reply' });
+    await restored.resolvePendingMessage('worker', pending.id, 'dismissed');
+    expect(await new BackgroundAgentControl(test.deps).pendingMessages('worker')).toEqual([]);
+    expect(JSON.parse((await restored.dispatch(caller, action))!.text).status).toBe('dismissed');
+    expect(test.deps.deliver).toHaveBeenCalledOnce();
+  });
+  it('does not present an in-flight delivery as an unknown result', async () => {
+    const test = setup();
+    const reply = deferred<{ status: 'pending'; reason: string }>();
+    test.deps.deliver.mockReturnValue(reply.promise);
+    const sending = test.service.dispatch(caller, action);
+    await vi.waitFor(() => expect(test.deps.deliver).toHaveBeenCalledOnce());
+    expect(await test.service.pendingMessages('worker')).toEqual([]);
+    reply.resolve({ status: 'pending', reason: 'Not delivered' });
+    await sending;
+    expect(await test.service.pendingMessages('worker')).toHaveLength(1);
+  });
+  it('reads historical messages and refuses to overwrite unknown future message records', async () => {
+    const test = setup();
+    test.deps.deliver.mockResolvedValue({ status: 'pending', reason: 'Not delivered' });
+    await test.service.dispatch(caller, action);
+    const [key, record] = [...test.records.entries()][0];
+    test.records.set(key, { ...record, version: '1' } as unknown as AgentMessageRecord);
+    const [pending] = await test.service.pendingMessages('worker');
+    await test.service.resolvePendingMessage('worker', pending.id, 'handled');
+    expect(test.records.get(key)?.version).toBe('2');
+    test.records.set(key, { ...record, version: '99' } as unknown as AgentMessageRecord);
+    await expect(
+      test.service.resolvePendingMessage('worker', pending.id, 'handled')
+    ).rejects.toThrow('future-version');
+    expect((test.records.get(key) as unknown as { version: string }).version).toBe('99');
+  });
+});
+
+it('isolates unreadable messages for other tasks and surfaces an error for the affected task', async () => {
+  const test = setup();
+  test.deps.deliver.mockResolvedValue({ status: 'pending', reason: 'Terminal' });
+  await test.service.dispatch(caller, {
+    kind: 'send_message',
+    conversationId: 'target',
+    text: 'Pending',
+    requestId: 'request',
+  });
+  const record = [...test.records.values()][0];
+  test.conversations.push(conversation('foreign-conversation', 'b', 'archived'));
+  test.records.set('foreign', {
+    ...record,
+    version: '99',
+    conversationId: 'foreign-conversation',
+  } as unknown as AgentMessageRecord);
+  expect(await test.service.pendingMessages('worker')).toHaveLength(1);
+  await expect(test.service.pendingMessages('archived')).rejects.toThrow('future-version');
+  expect(test.deps.reportError).toHaveBeenCalled();
 });

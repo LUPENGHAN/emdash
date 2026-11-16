@@ -156,3 +156,29 @@ export async function prepareAdditionalProject(input: {
 export async function allCoordinatorSnapshots() {
   return (await getCoordinationClient()).list();
 }
+
+export async function createTerminalMain(input: { projectId: string; taskId: string }) {
+  const manager = getConversationsForTask(input.taskId);
+  if (!manager) throw new Error('Main agent conversations are unavailable.');
+  const conversation = await manager.createConversation({
+    id: crypto.randomUUID(),
+    projectId: input.projectId,
+    taskId: input.taskId,
+    provider: asAgentProviderId('claude'),
+    title: 'Terminal main',
+    type: 'pty',
+    modelSource: null,
+    effort: 'high',
+    initialSize: { cols: 120, rows: 36 },
+  });
+  const result = await (
+    await getConversationsClient()
+  ).hydrateConversation({
+    projectId: input.projectId,
+    taskId: input.taskId,
+    conversationId: conversation.id,
+    initialSize: { cols: 120, rows: 36 },
+  });
+  if (!result.success) throw new Error(JSON.stringify(result.error));
+  return conversation;
+}

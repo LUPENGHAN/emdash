@@ -52,6 +52,7 @@ fs.writeFileSync(path.join(${JSON.stringify(capture)}, session + '.json'), JSON.
   cliEffort: args[args.indexOf('--effort') + 1],
   mcpUrl: mcp ? JSON.parse(mcp.slice('--mcp-config='.length)).mcpServers?.emdash?.url : undefined,
 }));
+process.stdin.on('data', (data) => fs.appendFileSync(path.join(${JSON.stringify(capture)}, session + '-input.txt'), data));
 process.stdout.write('Isolated simulated agent is running\\n');
 setInterval(() => {}, 1000);
 `,
@@ -235,8 +236,8 @@ try {
 
   await page.addScriptTag({
     type: 'module',
-    content: `import { prepareCoordinator, coordinatorSnapshot, createReplacementMain, prepareAdditionalProject, allCoordinatorSnapshots } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
-      Object.assign(window, { prepareCoordinator, coordinatorSnapshot, createReplacementMain, prepareAdditionalProject, allCoordinatorSnapshots });`,
+    content: `import { prepareCoordinator, coordinatorSnapshot, createReplacementMain, prepareAdditionalProject, allCoordinatorSnapshots, createTerminalMain } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
+      Object.assign(window, { prepareCoordinator, coordinatorSnapshot, createReplacementMain, prepareAdditionalProject, allCoordinatorSnapshots, createTerminalMain });`,
   });
   await page.waitForFunction(() => typeof window.prepareCoordinator === 'function');
   const coordinator = await page.evaluate((input) => window.prepareCoordinator(input), {
@@ -307,6 +308,31 @@ try {
   assert.ok(spawned.mcpUrl);
   workerClient = new Client({ name: 'isolated-worker-agent', version: '1' });
   await workerClient.connect(new StreamableHTTPClientTransport(new URL(spawned.mcpUrl)));
+  const terminalMessageArgs = {
+    conversation_id: created.conversation_id,
+    text: 'Manually inspect the terminal task',
+    request_id: 'pty-pending-ui',
+  };
+  const terminalMessage = JSON.parse(await call(client, 'send_message', terminalMessageArgs));
+  assert.equal(terminalMessage.status, 'pending');
+  await page
+    .getByRole('button', { name: /^(打开任务|Open task) Coordinated implementation$/ })
+    .click();
+  const pendingPanel = page.getByTestId('pending-agent-messages');
+  await pendingPanel.getByRole('button', { name: 'Pending messages (1)', exact: true }).click();
+  await pendingPanel.getByText(terminalMessageArgs.text, { exact: true }).waitFor();
+  await page.screenshot({ path: join(profile, 'pending-terminal-message.png') });
+  await pendingPanel.getByRole('button', { name: 'Mark handled', exact: true }).click();
+  await pendingPanel.waitFor({ state: 'hidden' });
+  assert.equal(
+    JSON.parse(await call(client, 'send_message', terminalMessageArgs)).status,
+    'handled'
+  );
+  assert.ok(
+    !(await readdir(capture)).includes(created.conversation_id + '-input.txt'),
+    'Background terminal message injected input'
+  );
+  await page.getByRole('button', { name: /main agent/i }).click();
   const submission = {
     task_id: created.task_id,
     request_id: 'result-1',
@@ -867,6 +893,60 @@ try {
   });
   await page.getByText('Result pending while ownership changes', { exact: true }).waitFor();
   await page.screenshot({ path: join(profile, 'takeover-result.png') });
+  const terminalMain = await page.evaluate((input) => window.createTerminalMain(input), {
+    projectId: independent.projectId,
+    taskId: independent.taskId,
+  });
+  const terminalMainCapture = await waitForCapture(terminalMain.id);
+  await page.getByTestId('coordinator-settings-tab').click();
+  await page.getByTestId('coordinator-main-conversation').click();
+  await page.getByRole('option', { name: /Terminal main|终端 main/ }).click();
+  await page.getByTestId('coordinator-bind-main').click();
+  await page.getByText('Main conversation updated', { exact: true }).waitFor();
+  const terminalBinding = await page.evaluate(async () =>
+    (await window.allCoordinatorSnapshots()).find((entry) => entry.kind === 'cross-project')
+  );
+  assert.equal(terminalBinding.conversationId, terminalMain.id);
+  await independentClient.close();
+  independentClient = new Client({ name: 'terminal-main-with-pending-results', version: '1' });
+  await independentClient.connect(
+    new StreamableHTTPClientTransport(new URL(terminalMainCapture.mcpUrl))
+  );
+  const terminalResult = JSON.parse(
+    await call(crossWorkerClient, 'submit_task_result', {
+      task_id: cross.task_id,
+      request_id: 'terminal-main-result',
+      result: {
+        summary: 'Result waiting for terminal main',
+        commits: [beforeTransferHead],
+        checks: [],
+        unresolved: [],
+        prUrls: [],
+      },
+    })
+  );
+  const resultInbox = page.getByTestId('pending-agent-messages');
+  await resultInbox.getByRole('button', { name: 'Pending messages (1)', exact: true }).click();
+  await resultInbox.getByText(/Result waiting for terminal main/).waitFor();
+  await page.screenshot({ path: join(profile, 'pending-terminal-result.png') });
+  await resultInbox.getByRole('button', { name: 'Mark handled', exact: true }).click();
+  await resultInbox.waitFor({ state: 'hidden' });
+  const afterManualResult = await page.evaluate(async () =>
+    (await window.allCoordinatorSnapshots()).find((entry) => entry.kind === 'cross-project')
+  );
+  assert.equal(
+    afterManualResult.events.find((event) => event.id === terminalResult.eventId).state,
+    'acknowledged'
+  );
+  assert.equal(
+    afterManualResult.tasks[cross.task_id].state,
+    'review',
+    'Handling a notification incorrectly completed its task'
+  );
+  assert.ok(
+    !(await readdir(capture)).includes(terminalMain.id + '-input.txt'),
+    'Result notification injected input into the main terminal'
+  );
   await page.close();
   const backgroundList = JSON.parse(
     await call(replacementClient, 'list_tasks', { project_id: relatedProjectId })
@@ -896,6 +976,8 @@ try {
           'idempotent delegation and result submission',
           'result delivered through ACP and explicitly acknowledged',
           'active user turn uninterrupted and queued UI follow-up executed before background result',
+          'pending PTY message visible and manually handled through the task UI without injected input',
+          'undelivered result for a terminal main handled in the same inbox while task stayed in review',
           'human-readable result notice kept internal coordination instructions in hidden context',
           'changes requested and versioned result accepted',
           'one main agent dispatched into two independent repositories',

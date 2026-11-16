@@ -838,3 +838,27 @@ it('does not admit a planned dependency after the main agent project scope narro
   expect(await test.service.dependencyGate('dependent')).toBeNull();
   await expect(test.service.cancelPendingTask(other.id, 'dependent')).rejects.toThrow('admitted');
 });
+
+it('allows explicit user handling of an undelivered result without completing or replaying the task', async () => {
+  const test = setup();
+  const main = await assigned(test);
+  test.deps.deliver.mockRejectedValue(new Error('Terminal main requires manual delivery'));
+  const receipt = await test.service.submit(
+    caller(main, 'worker-task'),
+    'worker-task',
+    'result',
+    result
+  );
+  await test.service.deliverPending(main.id);
+  await test.service.resolveResultEventForUser(main.id, receipt.eventId);
+  await test.service.resolveResultEventForUser(main.id, receipt.eventId);
+  test.deps.deliver.mockClear();
+  await new CoordinatorService(test.deps).recover();
+  const restored = await test.service.getByTask(main.taskId);
+  expect(restored?.tasks['worker-task'].state).toBe('review');
+  expect(restored?.events[0]).toMatchObject({ state: 'acknowledged', error: undefined });
+  expect(test.deps.deliver).not.toHaveBeenCalled();
+  await expect(test.service.resolveResultEventForUser(main.id, 'foreign-event')).rejects.toThrow(
+    'no longer assigned'
+  );
+});

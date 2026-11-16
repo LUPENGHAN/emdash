@@ -1,6 +1,7 @@
 import { defineContract, eventStream, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
 import type { TaskResult } from '@core/features/coordination/api/types';
+import { pendingAgentMessageSchema } from './pending-messages';
 
 /**
  * Agent control: an MCP server ("emdash") that every local agent gets, so agents can
@@ -142,6 +143,19 @@ export type AgentControlResult = {
 export const agentControlDomain = 'agentControl' as const;
 
 export const agentControlContract = defineContract({
+  pendingMessages: procedure({
+    input: z.object({ taskId: z.string().min(1) }),
+    output: z.array(pendingAgentMessageSchema),
+  }),
+  resolvePendingMessage: procedure({
+    input: z.object({
+      taskId: z.string().min(1),
+      id: z.string().min(1),
+      resolution: z.enum(['handled', 'dismissed']),
+    }),
+    output: z.void(),
+  }),
+  messagesChanged: eventStream({ key: z.void(), event: z.object({ taskId: z.string() }) }),
   requests: eventStream({ key: z.void(), event: z.custom<AgentControlRequest>() }),
   /** A window announces itself (and whether it has focus); repeat as a heartbeat. */
   register: procedure({

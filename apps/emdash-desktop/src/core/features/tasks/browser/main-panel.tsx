@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react';
 import { reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
+import { agentControlBrowserContributions } from '@core/features/agent-control/contributions/browser';
 import { coordinationBrowserContributions } from '@core/features/coordination/contributions/browser';
 import {
   getTaskManagerStore,
@@ -38,9 +39,11 @@ export const TaskMainPanel = observer(function TaskMainPanel() {
   const { projectId } = useTaskViewContext();
 
   return (
-    <projectAvailabilityUi.Boundary projectId={projectId}>
-      <TaskMainPanelContent />
-    </projectAvailabilityUi.Boundary>
+    <agentControlBrowserContributions.taskPanel>
+      <projectAvailabilityUi.Boundary projectId={projectId}>
+        <TaskMainPanelContent />
+      </projectAvailabilityUi.Boundary>
+    </agentControlBrowserContributions.taskPanel>
   );
 });
 

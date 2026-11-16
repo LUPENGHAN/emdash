@@ -73,7 +73,7 @@ export type Coordinator = {
   events: ResultEvent[];
   creationFingerprint?: string;
 };
-export type CoordinationEvent = { coordinatorId: string; projectId: string };
+export type CoordinationEvent = { coordinatorId: string; projectId: string; taskId?: string };
 export type TakeoverPreview = {
   taskId: string;
   projectId: string;
