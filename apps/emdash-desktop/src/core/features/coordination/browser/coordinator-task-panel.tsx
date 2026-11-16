@@ -2,6 +2,7 @@ import { Button, Input, Select, toast } from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useState, type ReactNode } from 'react';
+import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
 import { PROVIDER_CAPABLE_AGENTS } from '@core/features/model-providers/api';
 import { getProjectStore } from '@core/features/projects/api/browser/stores/project-selectors';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
@@ -79,6 +80,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
           Assigned tasks ({Object.keys(record?.tasks ?? {}).length})
         </Button>
         <Button
+          data-testid="coordinator-settings-tab"
           variant={tab === 'settings' ? 'secondary' : 'ghost'}
           onClick={() => setTab('settings')}
         >
@@ -92,7 +94,10 @@ const CoordinatorContent = observer(function CoordinatorContent({
           {!record ? (
             <p>Loading main agent…</p>
           ) : tab === 'settings' ? (
-            <DelegationDefaults record={record} />
+            <div className="space-y-6">
+              <MainConversationSettings record={record} />
+              <DelegationDefaults record={record} />
+            </div>
           ) : (
             <>
               {Object.values(record.tasks).length === 0 && (
@@ -163,6 +168,68 @@ const CoordinatorContent = observer(function CoordinatorContent({
           )}
         </div>
       )}
+    </div>
+  );
+});
+
+const MainConversationSettings = observer(function MainConversationSettings({
+  record,
+}: {
+  record: Coordinator;
+}) {
+  const [selected, setSelected] = useState(record.conversationId);
+  const [saving, setSaving] = useState(false);
+  const conversations = Array.from(
+    getConversationsForTask(record.taskId)?.conversations.values() ?? []
+  );
+  useEffect(() => {
+    setSelected(record.conversationId);
+  }, [record.conversationId]);
+  return (
+    <div className="max-w-lg space-y-3">
+      <p className="text-sm">Main conversation</p>
+      <p className="text-xs text-foreground-muted">
+        Create or configure a conversation in the conversation tabs, then choose it here to receive
+        task results. Assigned tasks and result history stay with this main agent.
+      </p>
+      <Select.Root
+        value={selected}
+        onValueChange={(value) => {
+          if (value) setSelected(value);
+        }}
+      >
+        <Select.Trigger data-testid="coordinator-main-conversation">
+          <Select.Value />
+        </Select.Trigger>
+        <Select.Content>
+          {!conversations.some(
+            (conversation) => conversation.data.id === record.conversationId
+          ) && (
+            <Select.Item value={record.conversationId}>Main conversation unavailable</Select.Item>
+          )}
+          {conversations.map(({ data }) => (
+            <Select.Item key={data.id} value={data.id}>
+              {data.title} · {data.providerId}
+            </Select.Item>
+          ))}
+        </Select.Content>
+      </Select.Root>
+      <Button
+        data-testid="coordinator-bind-main"
+        disabled={saving || selected === record.conversationId}
+        onClick={() => {
+          setSaving(true);
+          void getCoordinationClient()
+            .then((client) => client.bindConversation({ id: record.id, conversationId: selected }))
+            .then(() => toast.success('Main conversation updated'))
+            .catch((error) =>
+              toast.error('Could not change main conversation', { description: String(error) })
+            )
+            .finally(() => setSaving(false));
+        }}
+      >
+        Use as main conversation
+      </Button>
     </div>
   );
 });

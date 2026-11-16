@@ -16,9 +16,17 @@ afterEach(() => {
 
 it('restores coordinator identity, defaults, result snapshots and acknowledgment from SQLite', async () => {
   const deliver = vi.fn(async () => {});
-  const service = () =>
+  const service = (): CoordinatorService =>
     new CoordinatorService({
       store: new AppDbKeyValueStore<Record<string, Coordinator>>(fixture.db, 'coordinators'),
+      getConversation: async (id) =>
+        id === 'replacement-main'
+          ? {
+              taskId: record.taskId,
+              projectId: record.projectId,
+              selection: { agent: 'codex' },
+            }
+          : null,
       resources: () => {
         throw new Error('No runtime should be allocated');
       },
@@ -75,4 +83,9 @@ it('restores coordinator identity, defaults, result snapshots and acknowledgment
   await service().recover();
   expect(deliver).not.toHaveBeenCalled();
   expect((await service().ensureProject('project')).taskId).toBe(main.taskId);
+  await restarted.bindConversation(record.id, 'replacement-main');
+  const switched = await service().getByTask(record.taskId);
+  expect(switched?.conversationId).toBe('replacement-main');
+  expect(switched?.tasks.worker.result?.summary).toBe('Implemented');
+  expect(switched?.events[0].state).toBe('acknowledged');
 });

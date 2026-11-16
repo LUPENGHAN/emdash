@@ -22,6 +22,11 @@ type Dependencies = {
   resources(): DelegationResources;
   defaultAgent(): Promise<string>;
   resolveSelection(selection: AgentSelection): Promise<ResolvedAgentSelection>;
+  getConversation(id: string): Promise<{
+    taskId: string;
+    projectId: string;
+    selection: AgentSelection;
+  } | null>;
   assertProjectAvailable(projectId: string): Promise<void>;
   setTaskStatus(taskId: string, status: 'review' | 'done' | 'in_progress'): Promise<void>;
   deliver(coordinator: Coordinator, eventId: string, text: string): Promise<void>;
@@ -174,6 +179,33 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
     await this.deps.assertProjectAvailable(record.projectId);
     return this.deps.resolveSelection(selection);
   }
+  async bindConversation(id: string, conversationId: string): Promise<Coordinator> {
+    const record = await this.deliveries.runExclusive(id, () =>
+      this.locks.runExclusive(id, async () => {
+        const latest = await this.get(id);
+        await this.deps.assertProjectAvailable(latest.projectId);
+        const conversation = await this.deps.getConversation(conversationId);
+        if (
+          !conversation ||
+          conversation.taskId !== latest.taskId ||
+          conversation.projectId !== latest.projectId
+        )
+          throw new Error('Choose an available conversation belonging to this main agent.');
+        if (latest.conversationId === conversationId) return latest;
+        latest.conversationId = conversationId;
+        latest.primary = conversation.selection;
+        for (const event of latest.events)
+          if (event.state !== 'acknowledged') {
+            event.state = 'pending';
+            event.error = undefined;
+          }
+        await this.save(latest);
+        return latest;
+      })
+    );
+    void this.deliverPending(id).catch((error) => this.deps.reportError?.(error, id));
+    return record;
+  }
   async defaultsForCaller(caller: AgentCaller): Promise<AgentSelection> {
     const record = (await this.list()).find(
       (entry) => entry.taskId === caller.taskId || entry.tasks[caller.taskId]
@@ -211,12 +243,21 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
     input: TaskResult
   ): Promise<{ eventId: string; version: number }> {
     const record = (await this.list()).find((entry) => entry.tasks[taskId]);
-    if (!record || (caller.taskId !== taskId && caller.taskId !== record.taskId))
+    if (
+      !record ||
+      (caller.taskId !== taskId &&
+        (caller.taskId !== record.taskId || caller.conversationId !== record.conversationId))
+    )
       throw new Error('This task is not assigned to this caller.');
     const result = taskResultSchema.parse(input);
     const fingerprint = createHash('sha256').update(JSON.stringify(result)).digest('hex');
     const receipt = await this.locks.runExclusive(record.id, async () => {
       const latest = await this.get(record.id);
+      if (
+        caller.taskId !== taskId &&
+        (caller.taskId !== latest.taskId || caller.conversationId !== latest.conversationId)
+      )
+        throw new Error('Only the responsible main conversation can submit another task result.');
       const task = latest.tasks[taskId];
       const previous = task.submissions[requestId];
       if (previous && previous.fingerprint !== fingerprint)
@@ -247,9 +288,12 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
   }
   async acknowledge(caller: AgentCaller, eventIds: string[]): Promise<void> {
     const record = await this.getByTask(caller.taskId);
-    if (!record) throw new Error('Only the responsible main agent can acknowledge results.');
+    if (!record || record.conversationId !== caller.conversationId)
+      throw new Error('Only the responsible main conversation can acknowledge results.');
     await this.locks.runExclusive(record.id, async () => {
       const latest = await this.get(record.id);
+      if (latest.conversationId !== caller.conversationId)
+        throw new Error('Only the responsible main conversation can acknowledge results.');
       if (eventIds.some((id) => !latest.events.some((event) => event.id === id)))
         throw new Error('Unknown result event ID.');
       for (const event of latest.events)
@@ -262,10 +306,16 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
     taskId: string,
     accepted: boolean,
     note: string,
-    resultVersion: number
+    resultVersion: number,
+    caller?: AgentCaller
   ): Promise<Coordinator> {
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
+      if (
+        caller &&
+        (caller.taskId !== record.taskId || caller.conversationId !== record.conversationId)
+      )
+        throw new Error('Only the responsible main conversation can review this task.');
       const task = record.tasks[taskId];
       if (!task?.result) throw new Error('This task has no submitted result to review.');
       if (task.resultVersion !== resultVersion)

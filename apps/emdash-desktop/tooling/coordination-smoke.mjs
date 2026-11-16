@@ -67,7 +67,6 @@ const path = require('node:path');
 if (process.argv.includes('--version')) { console.log('1.4.0'); process.exit(0); }
 if (!process.argv.includes('acp')) { console.log('{}'); process.exit(0); }
 const readline = require('node:readline');
-const sessionId = 'ses_isolated_acceptance';
 const capture = ${JSON.stringify(capture)};
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   let request;
@@ -76,12 +75,15 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   let result = {};
   if (request.method === 'initialize') result = { protocolVersion: 1, agentInfo: { name: 'isolated-simulator', version: '1' }, agentCapabilities: { loadSession: false, mcpCapabilities: { http: true } }, authMethods: [] };
   else if (request.method === 'session/new') {
+    const sessionId = 'ses_' + require('node:crypto').randomUUID();
     const mcp = request.params.mcpServers.find((server) => server.name === 'emdash');
     fs.writeFileSync(path.join(capture, 'main-session.json'), JSON.stringify({ sessionId, mcpUrl: mcp?.url, cwd: request.params.cwd }));
+    const conversationId = new URL(mcp.url).pathname.split('/')[2];
+    fs.writeFileSync(path.join(capture, conversationId + '.json'), JSON.stringify({ sessionId, mcpUrl: mcp.url }));
     result = { sessionId, configOptions: [] };
   } else if (request.method === 'session/prompt') {
     fs.appendFileSync(path.join(capture, 'main-prompts.jsonl'), JSON.stringify(request.params) + '\n');
-    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Simulated main agent response.' } } } }) + '\n');
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: request.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Simulated main agent response.' } } } }) + '\n');
     result = { stopReason: 'end_turn' };
   }
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
@@ -124,6 +126,7 @@ let app;
 let page;
 let client;
 let workerClient;
+let replacementClient;
 const waitForCapture = async (id) => {
   const file = join(capture, id + '.json');
   if (!(await readdir(capture)).includes(id + '.json')) {
@@ -146,12 +149,22 @@ const waitForCapture = async (id) => {
   }
   return JSON.parse(await readFile(file, 'utf8'));
 };
-const waitForPrompt = (text) =>
+const waitForPrompt = (text, sessionId) =>
   new Promise((resolve, reject) => {
     const check = async () => {
       try {
         const prompts = await readFile(join(capture, 'main-prompts.jsonl'), 'utf8');
-        if (prompts.includes(text)) {
+        const observed = prompts
+          .split('\n')
+          .filter(Boolean)
+          .some((line) => {
+            const prompt = JSON.parse(line);
+            return (
+              (!sessionId || prompt.sessionId === sessionId) &&
+              JSON.stringify(prompt.prompt).includes(text)
+            );
+          });
+        if (observed) {
           cleanup();
           resolve();
         }
@@ -211,8 +224,8 @@ try {
 
   await page.addScriptTag({
     type: 'module',
-    content: `import { prepareCoordinator, coordinatorSnapshot } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
-      Object.assign(window, { prepareCoordinator, coordinatorSnapshot });`,
+    content: `import { prepareCoordinator, coordinatorSnapshot, createReplacementMain } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
+      Object.assign(window, { prepareCoordinator, coordinatorSnapshot, createReplacementMain });`,
   });
   await page.waitForFunction(() => typeof window.prepareCoordinator === 'function');
   const coordinator = await page.evaluate((input) => window.prepareCoordinator(input), {
@@ -332,6 +345,55 @@ try {
   assert.equal(final.tasks[created.task_id].state, 'done');
   assert.equal(final.events[0].state, 'acknowledged');
   assert.equal(final.events.length, 1);
+  const replacement = await page.evaluate((input) => window.createReplacementMain(input), {
+    projectId: coordinator.projectId,
+    taskId: coordinator.taskId,
+  });
+  const secondReceipt = JSON.parse(
+    await call(workerClient, 'submit_task_result', {
+      ...submission,
+      request_id: 'result-2',
+      result: { ...submission.result, summary: 'Updated result for replacement main' },
+    })
+  );
+  await page.getByTestId('coordinator-settings-tab').click();
+  await page.getByTestId('coordinator-main-conversation').click();
+  await page.getByRole('option', { name: /Replacement main/ }).click();
+  await page.getByTestId('coordinator-bind-main').click();
+  await page.waitForFunction(
+    async ({ taskId, conversationId }) =>
+      (await window.coordinatorSnapshot(taskId)).conversationId === conversationId,
+    { taskId: coordinator.taskId, conversationId: replacement.id }
+  );
+  const replacementCapture = await waitForCapture(replacement.id);
+  await waitForPrompt(secondReceipt.eventId, replacementCapture.sessionId);
+  assert.notEqual(replacementCapture.mcpUrl, main.mcpUrl);
+  const oldAcknowledgment = await client.callTool({
+    name: 'acknowledge_task_results',
+    arguments: { event_ids: [secondReceipt.eventId] },
+  });
+  assert.equal(
+    oldAcknowledgment.isError,
+    true,
+    'The replaced main conversation retained result consumption authority'
+  );
+  replacementClient = new Client({ name: 'replacement-main-agent', version: '1' });
+  await replacementClient.connect(
+    new StreamableHTTPClientTransport(new URL(replacementCapture.mcpUrl))
+  );
+  await call(replacementClient, 'acknowledge_task_results', { event_ids: [secondReceipt.eventId] });
+  await call(replacementClient, 'review_task_result', {
+    task_id: created.task_id,
+    result_version: 2,
+    accepted: true,
+    note: 'Replacement main inspected revision 2',
+  });
+  const switched = await page.evaluate((id) => window.coordinatorSnapshot(id), coordinator.taskId);
+  assert.equal(switched.taskId, coordinator.taskId);
+  assert.equal(switched.tasks[created.task_id].state, 'done');
+  assert.equal(switched.events.length, 2);
+  assert.ok(switched.events.every((event) => event.state === 'acknowledged'));
+  await page.getByTestId('coordinator-tasks-tab').click();
   await page.screenshot({ path: join(profile, 'coordinator-result.png') });
   await writeFile(
     join(profile, 'result.json'),
@@ -348,6 +410,8 @@ try {
           'idempotent delegation and result submission',
           'result delivered through ACP and explicitly acknowledged',
           'changes requested and versioned result accepted',
+          'main conversation switched through the UI without losing task history',
+          'unconfirmed result redirected and old main consumption authority revoked',
         ],
         workerCommit,
         taskId: created.task_id,
@@ -365,6 +429,7 @@ try {
   console.error(`Acceptance evidence: ${profile}`);
   throw error;
 } finally {
+  await replacementClient?.close().catch(() => {});
   await workerClient?.close().catch(() => {});
   await client?.close().catch(() => {});
   if (app) {

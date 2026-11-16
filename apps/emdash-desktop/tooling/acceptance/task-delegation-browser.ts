@@ -1,6 +1,8 @@
+import { asAgentProviderId } from '@emdash/plugins/agents/types';
 import { when } from 'mobx';
 import { getAgentsClient } from '@core/features/agents/api/browser/client';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
+import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
 import { getCoordinationClient } from '@core/features/coordination/api/browser/client';
 import { getProjectsWireClient } from '@core/features/projects/api/browser/client';
 import {
@@ -119,4 +121,19 @@ export async function prepareCoordinator(input: {
 
 export async function coordinatorSnapshot(taskId: string) {
   return (await getCoordinationClient()).getByTask({ taskId });
+}
+
+export async function createReplacementMain(input: { projectId: string; taskId: string }) {
+  const manager = getConversationsForTask(input.taskId);
+  if (!manager) throw new Error('Main agent conversations are unavailable.');
+  return manager.createConversation({
+    id: crypto.randomUUID(),
+    projectId: input.projectId,
+    taskId: input.taskId,
+    provider: asAgentProviderId('opencode'),
+    title: 'Replacement main',
+    type: 'acp',
+    modelSource: null,
+    effort: null,
+  });
 }

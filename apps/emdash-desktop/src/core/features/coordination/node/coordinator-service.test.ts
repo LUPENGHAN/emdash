@@ -1,3 +1,4 @@
+import { deferred } from '@emdash/shared/testing';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentCaller } from '@core/features/agent-control/api';
 import type { DelegationResources } from '@core/features/agent-control/api/node/delegation-resources';
@@ -57,6 +58,9 @@ function setup() {
       getModels: async () => [],
     }),
     assertProjectAvailable: vi.fn(async () => {}),
+    getConversation: vi.fn<ConstructorParameters<typeof CoordinatorService>[0]['getConversation']>(
+      async () => null
+    ),
     setTaskStatus: vi.fn(async () => {}),
     emit: vi.fn(),
     reportError: vi.fn(),
@@ -276,6 +280,101 @@ describe('main agent coordination', () => {
     await test.service.recover();
     expect(test.deps.reportError).toHaveBeenCalledWith(expect.anything(), 'broken');
     expect(await test.service.getByTask(record.taskId)).toEqual(record);
+  });
+
+  it('switches the result receiver without changing its identity, tasks or confirmed events', async () => {
+    const test = setup();
+    const record = await assigned(test);
+    const worker = caller(record, 'worker-task');
+    const first = await test.service.submit(worker, worker.taskId, 'first', result);
+    await test.service.deliverPending(record.id);
+    await test.service.acknowledge(caller(record), [first.eventId]);
+    const second = await test.service.submit(worker, worker.taskId, 'second', {
+      ...result,
+      summary: 'Updated',
+    });
+    await test.service.deliverPending(record.id);
+    test.deps.getConversation.mockResolvedValue({
+      taskId: record.taskId,
+      projectId: record.projectId,
+      selection: { agent: 'codex' },
+    });
+    test.deps.deliver.mockClear();
+    const switched = await test.service.bindConversation(record.id, 'replacement-main');
+    await test.service.deliverPending(record.id);
+    expect(switched.id).toBe(record.id);
+    expect(switched.taskId).toBe(record.taskId);
+    expect(switched.conversationId).toBe('replacement-main');
+    expect(switched.primary).toEqual({ agent: 'codex' });
+    expect(switched.tasks[worker.taskId].resultVersion).toBe(2);
+    expect(test.deps.deliver).toHaveBeenCalledOnce();
+    expect(test.deps.deliver.mock.calls[0][0].conversationId).toBe('replacement-main');
+    expect(test.deps.deliver.mock.calls[0][1]).toBe(second.eventId);
+    await expect(test.service.acknowledge(caller(record), [second.eventId])).rejects.toThrow(
+      'responsible main conversation'
+    );
+    await test.service.acknowledge({ ...caller(record), conversationId: 'replacement-main' }, [
+      second.eventId,
+    ]);
+    const saved = await new CoordinatorService(test.deps).getByTask(record.taskId);
+    expect(saved?.conversationId).toBe('replacement-main');
+    expect(saved?.events.every((event) => event.state === 'acknowledged')).toBe(true);
+  });
+
+  it('rechecks consumption authority inside the lock when switching races an acknowledgment', async () => {
+    const test = setup();
+    const record = await assigned(test);
+    const receipt = await test.service.submit(
+      caller(record, 'worker-task'),
+      'worker-task',
+      'first',
+      result
+    );
+    await test.service.deliverPending(record.id);
+    const entered = deferred<void>();
+    const resume = deferred<void>();
+    test.deps.getConversation.mockImplementation(async () => {
+      entered.resolve();
+      await resume.promise;
+      return { taskId: record.taskId, projectId: record.projectId, selection: { agent: 'claude' } };
+    });
+    const switching = test.service.bindConversation(record.id, 'replacement-main');
+    await entered.promise;
+    const read = deferred<void>();
+    vi.spyOn(test.deps.store, 'getAll').mockImplementationOnce(async () => {
+      const snapshot = structuredClone(Object.fromEntries(test.records));
+      read.resolve();
+      return snapshot;
+    });
+    const acknowledgment = test.service.acknowledge(caller(record), [receipt.eventId]);
+    const rejected = expect(acknowledgment).rejects.toThrow('responsible main conversation');
+    await read.promise;
+    resume.resolve();
+    await switching;
+    await rejected;
+    await expect(
+      test.service.review(record.id, 'worker-task', true, 'Stale main', 1, caller(record))
+    ).rejects.toThrow('responsible main conversation');
+    expect((await test.service.getByTask(record.taskId))?.events[0].state).not.toBe('acknowledged');
+  });
+
+  it('rejects missing and foreign main conversations without changing the receiver', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    await expect(test.service.bindConversation(record.id, 'missing')).rejects.toThrow(
+      'belonging to this main agent'
+    );
+    test.deps.getConversation.mockResolvedValue({
+      taskId: 'foreign',
+      projectId: record.projectId,
+      selection: { agent: 'claude' },
+    });
+    await expect(test.service.bindConversation(record.id, 'foreign')).rejects.toThrow(
+      'belonging to this main agent'
+    );
+    expect((await test.service.getByTask(record.taskId))?.conversationId).toBe(
+      record.conversationId
+    );
   });
 
   it('uses the configured default worker agent independently of the primary agent', async () => {

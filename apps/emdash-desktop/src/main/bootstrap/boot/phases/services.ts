@@ -50,6 +50,7 @@ import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registr
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
 import { conversationEvents } from '@core/features/conversations/api/node/conversation-events';
+import { createConversationRegistry } from '@core/features/conversations/api/node/registry';
 import { resolveConversationRuntimeTarget } from '@core/features/conversations/node/conversation-runtime-target';
 import { launchTuiConversation } from '@core/features/conversations/node/launch-tui-conversation';
 import { resumeLegacyCursorConversation } from '@core/features/conversations/node/legacy-cursor-sessions';
@@ -731,14 +732,19 @@ export async function bootServices(
       if (action.kind === 'review_task_result') {
         if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
         const record = await coordinationRuntime.service.getByTask(caller.taskId);
-        if (!record || !record.tasks[action.taskId])
+        if (
+          !record ||
+          record.conversationId !== caller.conversationId ||
+          !record.tasks[action.taskId]
+        )
           throw new Error('Only the responsible main agent can review this task.');
         await coordinationRuntime.service.review(
           record.id,
           action.taskId,
           action.accepted,
           action.note,
-          action.resultVersion
+          action.resultVersion,
+          caller
         );
         return { text: action.accepted ? 'Task result accepted.' : 'Changes requested.' };
       }
@@ -1131,6 +1137,27 @@ export async function bootServices(
       return taskDelegation.service.resources;
     },
     defaultAgent: () => appSettingsService.get('defaultAgent'),
+    getConversation: async (id) => {
+      const row = createConversationRegistry(db).getLive(id);
+      if (!row?.taskId || !row.projectId || !row.provider || row.deletionTombstone) return null;
+      return {
+        taskId: row.taskId,
+        projectId: row.projectId,
+        selection: {
+          agent: row.provider,
+          model:
+            row.config?.sourceModel ?? (row.config?.type === 'pty' ? row.config.model : undefined),
+          supplierId: row.config?.supplierId,
+          effort: row.config?.effort,
+          connection:
+            row.config?.modelSource === null
+              ? 'official'
+              : row.config?.modelSource
+                ? 'gateway'
+                : undefined,
+        },
+      };
+    },
     resolveSelection: createSelectionResolver({
       defaultAgent: () => appSettingsService.get('defaultAgent'),
       getAgentSettings: (agent) => providerOverrideSettings.getItem(agent),

@@ -9,6 +9,10 @@ import {
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  bindConversation: procedure({
+    input: z.object({ id: z.string(), conversationId: z.string().min(1) }),
+    output: z.custom<Coordinator>(),
+  }),
   selectionOptions: procedure({
     input: z.object({ id: z.string(), selection: agentSelectionSchema }),
     output: z.custom<ResolvedAgentSelection>(),
