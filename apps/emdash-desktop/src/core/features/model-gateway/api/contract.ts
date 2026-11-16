@@ -1,6 +1,7 @@
 import { defineContract, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
 import type { ModelProvider } from '@core/features/model-providers/api';
+import { gatewayModelSchema, type GatewayModel } from './model-catalog';
 
 export type GatewayAccount = {
   id: string;
@@ -12,6 +13,10 @@ export type GatewayAccount = {
   disabled: boolean;
 };
 export type GatewayUsage = {
+  upstreamModel?: string;
+  inboundProtocol?: string;
+  upstreamProtocol?: string;
+  routeRevision?: number;
   id: string;
   accountId: string;
   model: string;
@@ -24,6 +29,7 @@ export type GatewayUsage = {
   status: 'complete' | 'missing';
 };
 export type GatewayStatus = {
+  models?: GatewayModel[];
   state: 'stopped' | 'starting' | 'ready' | 'failed';
   error?: string;
   providers: ModelProvider[];
@@ -35,6 +41,15 @@ export const modelGatewayDomain = 'modelGateway' as const;
 const empty = z.void();
 export const modelGatewayContract = defineContract({
   status: procedure({ input: empty, output: z.custom<GatewayStatus>() }),
+  migrationPreview: procedure({ input: empty, output: z.array(gatewayModelSchema) }),
+  testModel: procedure({
+    input: z.object({ alias: z.string().min(1), agent: z.enum(['claude', 'codex']) }),
+    output: z.object({ ok: z.boolean(), status: z.number() }),
+  }),
+  saveModels: procedure({
+    input: z.object({ models: z.array(gatewayModelSchema) }),
+    output: empty,
+  }),
   start: procedure({ input: empty, output: z.custom<GatewayStatus>() }),
   stop: procedure({ input: empty, output: empty }),
   usage: procedure({
@@ -50,7 +65,12 @@ export const modelGatewayContract = defineContract({
         sourceId: z.string(),
         providerName: z.string(),
         model: z.string(),
+        upstreamModel: z.string().optional(),
+        inboundProtocol: z.string().optional(),
+        upstreamProtocol: z.string().optional(),
+        revision: z.number().optional(),
         pendingName: z.string().optional(),
+        restartReason: z.string().optional(),
       })
     ),
   }),
@@ -77,6 +97,8 @@ export const modelGatewayContract = defineContract({
       model: string;
       launchConfiguration?: string;
       pending?: { sourceId: string; model: string };
+      restartReason?: string;
+      requiresNewSession?: boolean;
     } | null>(),
   }),
   switchRoute: procedure({

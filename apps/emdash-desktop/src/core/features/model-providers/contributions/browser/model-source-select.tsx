@@ -1,136 +1,174 @@
-import { Field, Select } from '@emdash/ui/react/primitives';
+import { ComboboxPopover } from '@emdash/ui/react/components';
+import { Button, Field, Select } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
-import { useGatewayStatus } from '@core/features/model-gateway/api/browser/use-gateway';
+import {
+  catalogSourceId,
+  modelAvailableForAgent,
+  upstreamProtocol,
+} from '@core/features/model-gateway/api/model-catalog';
 import {
   defaultSourceLabel,
-  providerRoutingSources,
   isProviderCapableAgent,
-  providerSupportsAgent,
-  sourcesForAgent,
   type ModelSourceValue,
 } from '@core/features/model-providers/api';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
+import { useModelSource } from '../../api/browser/use-model-source';
 
-const AGENT_DEFAULT = '__agent_default__';
 const OWN_LOGIN = '__own_login__';
 
-/**
- * Per-conversation source picker. Hidden for agents that cannot run on a provider; with
- * no provider configured it only says where to add one.
- */
+/** Daily selection exposes access mode and a public model, independently of its provider. */
 export const ModelSourceSelect = observer(function ModelSourceSelect({
   agentId,
   value,
   onChange,
   remote = false,
+  showReset = true,
 }: {
   agentId: string | null | undefined;
   remote?: boolean;
+  showReset?: boolean;
   value: ModelSourceValue;
   onChange: (value: ModelSourceValue) => void;
 }) {
   const { value: settings } = useAppSettingsKey('modelProviders');
-  const gateway = useGatewayStatus();
-  const providers = remote
-    ? [...(settings?.providers ?? [])]
-    : providerRoutingSources(settings?.providers ?? [], gateway.data?.providers ?? []);
-  const direct = settings?.providers?.find(
-    (provider) => provider.id === value.modelSource && !provider.account
-  );
-  if (direct && !providers.some((p) => p.id === direct.id))
-    providers.push({ ...direct, name: `${direct.name} (direct)` });
-  if (!agentId || !isProviderCapableAgent(agentId)) return null;
-  if (providers.length === 0) {
+  const { value: catalog } = useAppSettingsKey('gatewayModels');
+  const effective = useModelSource(agentId, value, remote);
+  if (!agentId) return null;
+  if (!isProviderCapableAgent(agentId))
     return (
       <Field.Root>
-        <Field.Label>Source</Field.Label>
+        <Field.Label>Connection</Field.Label>
         <Field.Description>
-          The agent’s default source (Settings → Providers → Agent defaults). Add a provider there
-          to run this agent on another API.
+          This agent uses its own configuration. Gateway access is unavailable until its custom API
+          integration is supported.
         </Field.Description>
       </Field.Root>
     );
-  }
-
-  const selected =
-    value.modelSource === undefined
-      ? AGENT_DEFAULT
-      : value.modelSource === null
-        ? OWN_LOGIN
-        : value.modelSource;
-  const provider = providers.find((candidate) => candidate.id === value.modelSource);
+  const source = effective?.modelSource ?? null;
+  const model = effective?.sourceModel;
+  const official = remote
+    ? []
+    : (settings?.providers ?? []).filter((p) => p.account?.agent === agentId);
+  const legacy = source && source !== catalogSourceId && !official.some((p) => p.id === source);
+  const models = (catalog?.models ?? []).filter((m) =>
+    modelAvailableForAgent(
+      m,
+      settings?.providers.find((p) => p.id === m.providerId),
+      agentId
+    )
+  );
+  const selected = source === catalogSourceId ? catalogSourceId : legacy ? source : OWN_LOGIN;
   const label =
-    selected === AGENT_DEFAULT
-      ? 'Agent default'
-      : selected === OWN_LOGIN
-        ? defaultSourceLabel(agentId)
-        : (provider?.name ?? 'Missing provider');
-
+    source === catalogSourceId
+      ? 'Gateway'
+      : legacy
+        ? 'Saved provider configuration'
+        : defaultSourceLabel(agentId);
   return (
     <>
       <Field.Root>
-        <Field.Label>Source</Field.Label>
+        <Field.Label>Connection</Field.Label>
         <Select.Root
           value={selected}
           onValueChange={(next) =>
             onChange(
-              next === AGENT_DEFAULT
-                ? {}
-                : next === OWN_LOGIN
-                  ? { modelSource: null }
-                  : { modelSource: String(next) }
+              next === OWN_LOGIN
+                ? { modelSource: null }
+                : {
+                    modelSource: String(next),
+                    ...(next === catalogSourceId && {
+                      sourceModel:
+                        model && models.some((m) => m.alias === model) ? model : undefined,
+                    }),
+                  }
             )
           }
         >
           <Select.Trigger appearance="input" className="w-full">
-            <Select.Value placeholder="Agent default">{label}</Select.Value>
+            <Select.Value>{label}</Select.Value>
           </Select.Trigger>
           <Select.Content align="start" width="trigger">
-            <Select.Item value={AGENT_DEFAULT}>Agent default</Select.Item>
             <Select.Item value={OWN_LOGIN}>{defaultSourceLabel(agentId)}</Select.Item>
-            {typeof value.modelSource === 'string' && !provider ? (
-              <Select.Item value={value.modelSource}>Missing provider</Select.Item>
+            <Select.Item value={catalogSourceId} disabled={remote}>
+              Gateway{remote ? ' (local agents only)' : ''}
+            </Select.Item>
+            {legacy && source ? (
+              <Select.Item value={source}>Saved provider configuration</Select.Item>
             ) : null}
-            {sourcesForAgent(providers, agentId).map((candidate) => {
-              const support = providerSupportsAgent(candidate, agentId);
-              return (
-                <Select.Item key={candidate.id} value={candidate.id} disabled={!support.ok}>
-                  {candidate.name}
-                  {support.ok ? null : (
-                    <span className="ml-2 text-xs text-foreground-muted">({support.reason})</span>
-                  )}
-                </Select.Item>
-              );
-            })}
           </Select.Content>
         </Select.Root>
+        {value.modelSource === undefined ? (
+          <Field.Description>Following the agent default.</Field.Description>
+        ) : null}
+        {showReset ? (
+          <Button size="sm" variant="ghost" onClick={() => onChange({})}>
+            Restore agent default
+          </Button>
+        ) : null}
       </Field.Root>
-      {provider && provider.models.length > 0 ? (
+      {source !== catalogSourceId && !legacy && official.length > 0 ? (
         <Field.Root>
-          <Field.Label>Provider model</Field.Label>
+          <Field.Label>Official account</Field.Label>
           <Select.Root
-            value={value.sourceModel ?? ''}
-            onValueChange={(next) =>
-              onChange({ modelSource: provider.id, sourceModel: next ? String(next) : undefined })
-            }
+            value={source ?? ''}
+            onValueChange={(next) => onChange({ modelSource: next ? String(next) : null })}
           >
             <Select.Trigger appearance="input" className="w-full">
-              <Select.Value placeholder="Agent default">
-                {value.sourceModel || `First model (${provider.models[0]})`}
+              <Select.Value>
+                {official.find((p) => p.id === source)?.name ?? 'Default sign-in'}
               </Select.Value>
             </Select.Trigger>
-            <Select.Content align="start" width="trigger">
-              <Select.Item value="">First model ({provider.models[0]})</Select.Item>
-              {value.sourceModel && !provider.models.includes(value.sourceModel) ? (
-                <Select.Item value={value.sourceModel}>{value.sourceModel}</Select.Item>
-              ) : null}
-              {provider.models.map((id) => (
-                <Select.Item key={id} value={id}>
-                  {id}
+            <Select.Content width="trigger">
+              <Select.Item value="">Default sign-in</Select.Item>
+              {official.map((p) => (
+                <Select.Item key={p.id} value={p.id}>
+                  {p.name}
                 </Select.Item>
               ))}
             </Select.Content>
           </Select.Root>
+        </Field.Root>
+      ) : null}
+      {source === catalogSourceId ? (
+        <Field.Root>
+          <Field.Label>Gateway model</Field.Label>
+          <ComboboxPopover
+            items={models}
+            value={model}
+            itemToKey={(m) => m.alias}
+            itemToLabel={(m) => m.name}
+            filter={(m, query) =>
+              `${m.name} ${m.alias}`.toLowerCase().includes(query.toLowerCase())
+            }
+            onValueChange={(alias) =>
+              onChange({ modelSource: catalogSourceId, sourceModel: alias })
+            }
+            renderTrigger={(m) =>
+              m ? `${m.name} · ${m.alias}` : model ? `${model} (unavailable)` : 'Select a model'
+            }
+            renderItem={(m) => (
+              <span>
+                {m.name}
+                <span className="ml-2 text-xs text-foreground-muted">{m.alias}</span>
+              </span>
+            )}
+            searchPlaceholder="Search gateway models…"
+            appearance="input"
+            className="w-full"
+            disabled={remote}
+          />
+          <Field.Description>
+            {models.length
+              ? 'Protocols and upstream providers are managed in Settings → Providers → Gateway models.'
+              : 'Publish a compatible model in Settings → Providers → Gateway models.'}
+          </Field.Description>
+          {agentId === 'claude' &&
+          models.some((m) => upstreamProtocol(m, 'anthropic') !== 'anthropic') ? (
+            <Field.Description>
+              This catalog uses protocol conversion. Claude prompt caching and experimental tool
+              features are disabled for this session.
+            </Field.Description>
+          ) : null}
         </Field.Root>
       ) : null}
     </>

@@ -5,6 +5,9 @@ import type { ModelGatewayService } from './gateway-service';
 export function createModelGatewayWireController(service: ModelGatewayService): Controller {
   return createController(modelGatewayContract, {
     status: () => service.status(),
+    migrationPreview: () => service.migrationPreview(),
+    testModel: ({ alias, agent }) => service.testModel(alias, agent),
+    saveModels: ({ models }) => service.saveModels(models),
     start: () => service.start(),
     stop: () => service.stop(),
     usage: ({ limit }) => service.usage(limit),

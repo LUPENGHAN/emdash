@@ -15,6 +15,45 @@ import (
 	e "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestOpenCodeGoRetainsCodingClientAndConversationIdentity(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("User-Agent") != "claude-code/test" || r.Header.Get("x-opencode-session") != "conversation-one" {
+			return &http.Response{StatusCode: 400, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"MissingSessionID","message":"Request is missing x-opencode-session"}}`))}, nil
+		}
+		if r.Header.Get("Authorization") != "Bearer fake-key" {
+			t.Error("upstream did not receive its own credential")
+		}
+		if r.Header.Get("session_id") != "conversation-one" {
+			t.Error("native conversation identity was lost")
+		}
+		if r.Header.Get("Cookie") != "" || r.Header.Get("X-Emdash-Account") != "" {
+			t.Error("internal headers leaked upstream")
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":1}}`))}, nil
+	})}
+	incoming := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	incoming.Header.Set("User-Agent", "claude-code/test")
+	incoming.Header.Set("session_id", "conversation-one")
+	incoming.Header.Set("Cookie", "local-cookie")
+	incoming.Header.Set("X-Emdash-Account", "local-account")
+	c := &gin.Context{Request: incoming}
+	ctx := context.WithValue(context.Background(), "gin", c)
+	auth := &a.Auth{ID: "account", Attributes: map[string]string{
+		"base_url": "https://opencode.ai/inference/go/anthropic/v1",
+		"api_key":  "fake-key",
+	}}
+	_, err := (ResponsesExecutor{Client: client}).Execute(ctx, auth, e.Request{
+		Model: "test-model", Payload: []byte(`{"model":"test-model","messages":[]}`),
+	}, e.Options{Alt: "messages"})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSelectorRequiresAuthenticatedAccount(t *testing.T) {
 	ctx := context.WithValue(context.Background(), "gin", &gin.Context{Keys: map[string]any{"emdash.account": "a"}})
 	candidates := []*a.Auth{{ID: "a"}, {ID: "b"}}
@@ -31,6 +70,7 @@ func TestSelectorRequiresAuthenticatedAccount(t *testing.T) {
 }
 
 func TestResponsesStreamPreservesSplitUTF8AndPayload(t *testing.T) {
+	data := ": heartbeat\r\nevent: response.completed\r\ndata: {\"type\":\"response.completed\",\r\n" + "data: \"response\":{\"output\":\"你好\",\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\r\n\r\n: no final newline"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
 		if json.NewDecoder(r.Body).Decode(&payload) != nil {
@@ -43,7 +83,6 @@ func TestResponsesStreamPreservesSplitUTF8AndPayload(t *testing.T) {
 			t.Error("incorrect upstream authorization")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		data := "event: response.completed\ndata: {\"type\":\"response.completed\",\n" + "data: \"response\":{\"output\":\"你好\",\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\n\n"
 		for _, b := range []byte(data) {
 			_, _ = w.Write([]byte{b})
 			w.(http.Flusher).Flush()
@@ -63,7 +102,7 @@ func TestResponsesStreamPreservesSplitUTF8AndPayload(t *testing.T) {
 		}
 		output.Write(chunk.Payload)
 	}
-	if !strings.Contains(output.String(), "你好") || !strings.HasSuffix(output.String(), "\n\n") {
+	if output.String() != data {
 		t.Fatal("stream framing or UTF-8 was corrupted")
 	}
 }

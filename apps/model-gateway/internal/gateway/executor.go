@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -56,6 +55,7 @@ func (x ResponsesExecutor) HttpRequest(ctx context.Context, auth *a.Auth, req *h
 			req.Header.Set(k, v)
 		}
 	}
+	req.Header = forwardHeaders(req.Header, true)
 	key := auth.Attributes["api_key"]
 	protocol, _ := req.Context().Value(protocolKey{}).(string)
 	var keys map[string]string
@@ -74,12 +74,26 @@ func (x ResponsesExecutor) HttpRequest(ctx context.Context, auth *a.Auth, req *h
 	if strings.Contains(req.URL.Path, "/messages") && req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
-	return x.Client.Do(req)
+	// Neither redirects nor an idempotency header may replay a model request or
+	// send its credentials to another origin.
+	req.GetBody = nil
+	client := *x.Client
+	client.Jar = nil
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return client.Do(req)
 }
 
 type protocolKey struct{}
 
 func (x ResponsesExecutor) request(ctx context.Context, auth *a.Auth, req e.Request, alt string) (*http.Response, error) {
+	r, err := upstreamRequest(ctx, auth, req, alt)
+	if err != nil {
+		return nil, err
+	}
+	return x.HttpRequest(r.Context(), auth, r)
+}
+
+func upstreamRequest(ctx context.Context, auth *a.Auth, req e.Request, alt string) (*http.Request, error) {
 	protocol := "openai-responses"
 	if alt == "chat/completions" {
 		protocol = "openai-chat"
@@ -92,12 +106,34 @@ func (x ResponsesExecutor) request(ctx context.Context, auth *a.Auth, req e.Requ
 	var mapping map[string]string
 	_ = json.Unmarshal([]byte(auth.Attributes["emdash_models"]), &mapping)
 	if model := mapping[req.Model]; model != "" && model != req.Model {
+		encoding := ""
+		if c, ok := ctx.Value("gin").(*gin.Context); ok {
+			if hasRequestIntegrity(c.Request.Header) || hasRequestIntegrity(c.Request.Trailer) {
+				return nil, integrityRewriteError{}
+			}
+			encoding = c.GetHeader("Content-Encoding")
+		}
+		var configuredHeaders map[string]string
+		_ = json.Unmarshal([]byte(auth.Attributes["emdash_headers"]), &configuredHeaders)
+		for name := range configuredHeaders {
+			if hasRequestIntegrity(http.Header{name: nil}) {
+				return nil, integrityRewriteError{}
+			}
+		}
+		decoded, err := decodeRequestPayload(req.Payload, encoding)
+		if err != nil {
+			return nil, err
+		}
 		var payload map[string]json.RawMessage
-		if err := json.Unmarshal(req.Payload, &payload); err != nil {
+		if err := json.Unmarshal(decoded, &payload); err != nil {
 			return nil, err
 		}
 		payload["model"], _ = json.Marshal(model)
 		req.Payload, _ = json.Marshal(payload)
+		req.Payload, err = encodeRequestPayload(req.Payload, encoding)
+		if err != nil {
+			return nil, err
+		}
 	}
 	endpoint := "/responses"
 	switch alt {
@@ -128,14 +164,29 @@ func (x ResponsesExecutor) request(ctx context.Context, auth *a.Auth, req e.Requ
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "text/event-stream")
+	r.Header.Set("User-Agent", "Emdash-Model-Gateway/1")
 	if c, ok := ctx.Value("gin").(*gin.Context); ok {
-		for _, key := range []string{"anthropic-version", "anthropic-beta"} {
-			if value := c.GetHeader(key); value != "" {
-				r.Header.Set(key, value)
+		r.Header = forwardHeaders(c.Request.Header, true)
+		r.URL.RawQuery = c.Request.URL.RawQuery
+		r.Trailer = forwardHeaders(c.Request.Trailer, true)
+		if len(r.Trailer) > 0 {
+			r.ContentLength = -1
+		}
+		if r.Header.Get("Content-Type") == "" {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		if r.Header.Get("User-Agent") == "" {
+			r.Header.Set("User-Agent", "Emdash-Model-Gateway/1")
+		}
+		// The desktop supplies the authenticated conversation ID, independent of
+		// which agent protocol is used. OpenCode Go requires it for routing.
+		if strings.EqualFold(r.URL.Hostname(), "opencode.ai") {
+			if sessionID := c.GetHeader("session_id"); sessionID != "" {
+				r.Header.Set("x-opencode-session", sessionID)
 			}
 		}
 	}
-	return x.HttpRequest(ctx, auth, r)
+	return r, nil
 }
 
 type sessionContextKey struct{}
@@ -180,8 +231,24 @@ func usageRecord(ctx context.Context, auth *a.Auth, req e.Request, started time.
 		detail = u.Detail{InputTokens: v.Input, OutputTokens: v.Output, TotalTokens: v.Total, CachedTokens: v.Cached.Tokens}
 	}
 	sessionID, _ := ctx.Value(sessionContextKey{}).(string)
-	u.PublishRecord(ctx, u.Record{Provider: ResponsesProvider, Source: source, Model: req.Model, AuthID: auth.ID, SessionID: sessionID,
+	accountID := auth.ID
+	var route *ModelRoute
+	_ = json.Unmarshal([]byte(auth.Attributes["emdash_route"]), &route)
+	if route != nil {
+		accountID = route.ProviderID
+		var mapping map[string]string
+		_ = json.Unmarshal([]byte(auth.Attributes["emdash_models"]), &mapping)
+		ctx = context.WithValue(ctx, usageAttributionKey{}, map[string]any{"upstreamModel": mapping[req.Model], "inboundProtocol": auth.Attributes["emdash_inbound_protocol"], "upstreamProtocol": auth.Attributes["emdash_upstream_protocol"], "routeRevision": route.Revision})
+	}
+	u.PublishRecord(ctx, u.Record{Provider: ResponsesProvider, Source: source, Model: req.Model, AuthID: accountID, SessionID: sessionID,
 		RequestedAt: started, Latency: time.Since(started), Failed: failed, Detail: detail})
+}
+
+type usageAttributionKey struct{}
+
+func UsageAttribution(ctx context.Context) map[string]any {
+	value, _ := ctx.Value(usageAttributionKey{}).(map[string]any)
+	return value
 }
 
 func (x ResponsesExecutor) ExecuteStream(ctx context.Context, auth *a.Auth, req e.Request, opts e.Options) (*e.StreamResult, error) {
@@ -200,39 +267,28 @@ func (x ResponsesExecutor) ExecuteStream(ctx context.Context, auth *a.Auth, req 
 	ch := make(chan e.StreamChunk)
 	go func() {
 		defer close(ch)
-		defer res.Body.Close()
-		scanner := bufio.NewScanner(res.Body)
-		scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-		var data []byte
-		meter := streamMeter{}
-		defer func() { usageRecord(ctx, auth, req, started, meter.payload(), meter.failed || !meter.complete) }()
-		dispatch := func() { meter.observe(data, opts.Alt); data = nil }
-
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
-				dispatch()
-			} else if strings.HasPrefix(line, "data:") {
-				if len(data) > 0 {
-					data = append(data, '\n')
+		body := observeBody(res.Body, res.Header, res.Trailer, true, opts.Alt, func(payload []byte, failed bool) {
+			usageRecord(ctx, auth, req, started, payload, failed)
+		})
+		defer body.Close()
+		buffer := make([]byte, 32*1024)
+		for {
+			n, err := body.Read(buffer)
+			if n > 0 {
+				select {
+				case ch <- e.StreamChunk{Payload: append([]byte(nil), buffer[:n]...)}:
+				case <-ctx.Done():
+					return
 				}
-				data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")...)
 			}
-			payload := append([]byte(line), '\n')
-			select {
-			case ch <- e.StreamChunk{Payload: payload}:
-			case <-ctx.Done():
-				meter.failed = true
+			if err != nil {
+				if err != io.EOF && ctx.Err() == nil {
+					select {
+					case ch <- e.StreamChunk{Err: err}:
+					case <-ctx.Done():
+					}
+				}
 				return
-			}
-		}
-		if len(data) > 0 {
-			dispatch()
-		}
-		if err := scanner.Err(); err != nil && ctx.Err() == nil {
-			select {
-			case ch <- e.StreamChunk{Err: err}:
-			case <-ctx.Done():
 			}
 		}
 	}()

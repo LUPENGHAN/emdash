@@ -35,6 +35,7 @@ import {
 import { IntegrationIcon } from '@core/features/integrations/contributions/browser/integration-icon';
 import { usePromptLibrary } from '@core/features/library/api/browser/prompts/use-prompt-library';
 import { usesProviderSource, type ModelSourceValue } from '@core/features/model-providers/api';
+import { useModelSource } from '@core/features/model-providers/api/browser/use-model-source';
 import { ModelSourceSelect } from '@core/features/model-providers/contributions/browser/model-source-select';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 import { buildIssueContextText } from '@core/features/tasks/browser/context-bar/context-actions';
@@ -115,7 +116,8 @@ export function useInitialConversationState(
   );
   const [issueContextEditorOpen, setIssueContextEditorOpen] = useState(false);
   const [model, setModel] = useState<string | null>(null);
-  const [source, setSource] = useState<ModelSourceValue>({});
+  const [sourceOverride, setSource] = useState<ModelSourceValue>({});
+  const source = useModelSource(providerId, sourceOverride, Boolean(connectionId));
   const [draftOptions, setDraftOptions] = useState(options.initialOptions);
   const [issueMentionContexts, setIssueMentionContexts] = useState<Record<string, string>>({});
 

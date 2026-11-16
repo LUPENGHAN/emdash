@@ -3,6 +3,25 @@ import { createHash } from 'node:crypto';
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type Document = { [key: string]: Json };
 export type ApiProvider = {
+  route?: {
+    providerId: string;
+    revision: number;
+    protocolModels: Record<
+      string,
+      Partial<Record<'anthropic' | 'openai-chat' | 'openai-responses', string>>
+    >;
+    policy:
+      | {
+          mode: 'auto';
+          conversionTargets?: Partial<
+            Record<
+              'anthropic' | 'openai-chat' | 'openai-responses',
+              'anthropic' | 'openai-chat' | 'openai-responses'
+            >
+          >;
+        }
+      | { mode: 'fixed'; protocol: 'anthropic' | 'openai-chat' | 'openai-responses' };
+  };
   protocol?: 'anthropic' | 'openai-chat' | 'openai-responses' | 'all';
   endpoints?: Partial<Record<'anthropic' | 'openai-chat' | 'openai-responses', string>>;
   protocolKeys?: Partial<Record<'anthropic' | 'openai-chat' | 'openai-responses', string>>;

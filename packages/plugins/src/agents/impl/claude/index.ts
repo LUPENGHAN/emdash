@@ -14,6 +14,7 @@ import { claudeAdapter } from './adapter';
 import { claudeAuthStatus } from './auth';
 import { buildClaudeHookConfig } from './hooks';
 import { icon } from './icon';
+import { configureClaudeGateway } from './model-settings';
 import { buildClaudeTrustBehavior } from './trust';
 import { probeClaudeUsage } from './usage';
 
@@ -156,7 +157,7 @@ export const provider = registerPluginBehavior(plugin, {
       },
     }),
     connect: (io, toClient) => {
-      return connectStdioAcp(io, toClient);
+      return configureClaudeGateway(connectStdioAcp(io, toClient), io.env ?? {});
     },
     enrich: enrichClaudeUpdate,
   },

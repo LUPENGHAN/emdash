@@ -14,13 +14,18 @@ import { buildSourceLaunch, type ExtensionProviderAgent } from '../api/node/sour
 import { ACCOUNT_HOME_ENV } from './official-accounts';
 
 export type EffectiveAgentConfigDeps = {
+  nativeSourceAvailable?: (
+    agentId: string,
+    config: ProviderCustomConfig | undefined
+  ) => Promise<boolean>;
   getAgentConfig: (agentId: string) => Promise<ProviderCustomConfig | undefined>;
   getProviders: () => Promise<ModelProvider[]>;
   prepareGateway?: (
     sourceId: string,
     model: string | undefined,
-    conversationId?: string
-  ) => Promise<{ provider: ModelProvider; apiKey: string }>;
+    conversationId?: string,
+    agentId?: string
+  ) => Promise<{ provider: ModelProvider; apiKey: string; compatibility?: boolean }>;
   getApiKey: (providerId: string, protocol?: ProviderProtocol) => Promise<string | null>;
   prepareAgentProvider: (agent: ExtensionProviderAgent) => Promise<void>;
   ensureCodexAppServerWrapper?: () => Promise<void>;
@@ -45,6 +50,18 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
     const config = await deps.getAgentConfig(agentId);
     const sourceId =
       override?.modelSource !== undefined ? override.modelSource : config?.modelSource;
+    if (
+      override?.modelSource === null &&
+      ['claude', 'codex'].includes(agentId) &&
+      deps.nativeSourceAvailable &&
+      !(await deps.nativeSourceAvailable(agentId, config))
+    ) {
+      throw new ModelSourceUnavailableError(
+        'The agent’s own configuration points to a custom API. Select a separate official account or remove that override before choosing official login.'
+      );
+    }
+    if (sourceId === 'gateway:models' && !isProviderCapableAgent(agentId))
+      throw new ModelSourceUnavailableError('This agent has no gateway launch integration.');
     if (!sourceId || !isProviderCapableAgent(agentId)) return withCodexContext(agentId, config);
 
     // A chosen provider that cannot be used stops the launch: falling back to the
@@ -56,7 +73,8 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
       ? await deps.prepareGateway!(
           sourceId,
           override?.modelSource !== undefined ? override.sourceModel : config?.sourceModel,
-          override?.conversationId
+          override?.conversationId,
+          ...(sourceId === 'gateway:models' ? [agentId] : [])
         )
       : undefined;
     const provider =
@@ -96,7 +114,14 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
       : (override?.modelSource !== undefined ? override.sourceModel : config?.sourceModel) ||
         provider.models[0];
     const known = agentId === 'codex' ? await deps.readKnownCodexModels?.() : undefined;
-    const launch = buildSourceLaunch(agentId, provider, apiKey, model || undefined, known);
+    const launch = buildSourceLaunch(
+      agentId,
+      provider,
+      apiKey,
+      model || undefined,
+      known,
+      target?.compatibility
+    );
     if (!launch) {
       throw new ModelSourceUnavailableError(
         `The provider “${provider.name}” speaks a protocol this agent cannot use.`

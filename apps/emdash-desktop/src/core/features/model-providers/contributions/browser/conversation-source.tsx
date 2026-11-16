@@ -4,6 +4,7 @@ import { getAgentsClient, hostRefFromConnectionId } from '@core/features/agents/
 import { useAgentSettings } from '@core/features/agents/api/browser/use-agent-settings';
 import { getModelGatewayClient } from '@core/features/model-gateway/api/browser/client';
 import { useGatewayStatus } from '@core/features/model-gateway/api/browser/use-gateway';
+import { catalogProvider } from '@core/features/model-gateway/api/model-catalog';
 import { isProviderCapableAgent, providerRoutingSources } from '@core/features/model-providers/api';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
@@ -82,19 +83,24 @@ export function useConversationSource(
   if (!conversation) return null;
   if (onProvider) {
     const provider = [
+      catalogProvider(gateway.data?.models ?? [], agentId),
       ...providerRoutingSources(settings?.providers ?? [], gateway.data?.providers ?? []),
       ...(settings?.providers ?? []),
     ].find((candidate) => candidate.id === sourceId);
     const chosenModel =
-      route.data?.model ?? (isAgentDefault ? agentConfig?.sourceModel : conversation.sourceModel);
+      modelId ??
+      route.data?.model ??
+      (isAgentDefault ? agentConfig?.sourceModel : conversation.sourceModel);
     return {
       kind: 'provider',
       routed: sourceId.startsWith('gateway:'),
       name: provider?.name ?? 'Missing provider',
-      pending: route.data?.pending
-        ? (gateway.data?.providers.find((p) => p.id === route.data?.pending?.sourceId)?.name ??
-          'Selected gateway provider')
-        : undefined,
+      pending:
+        route.data?.restartReason ??
+        (route.data?.pending
+          ? (gateway.data?.providers.find((p) => p.id === route.data?.pending?.sourceId)?.name ??
+            'Selected gateway provider')
+          : undefined),
       account: Boolean(provider?.account),
       // No model picked runs on the provider's first one (see effectiveAgentConfig).
       model: chosenModel || provider?.models[0] || null,
@@ -151,10 +157,13 @@ export const ConversationSourceSuffix = observer(function ConversationSourceSuff
     );
   return (
     <span className="ml-1 text-xs text-foreground-muted">
-      {source.kind === 'provider' && source.routed ? (
+      {source.kind === 'provider' && source.routed && source.name !== 'Gateway' ? (
         <span translate="yes">Local router → </span>
       ) : null}
       {name}
+      {source.kind === 'provider' && source.name === 'Gateway' && source.model
+        ? ` · ${source.model}`
+        : null}
       {source.kind === 'provider' && source.pending ? (
         <span translate="yes"> → {source.pending} (after this turn)</span>
       ) : null}

@@ -3,9 +3,13 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"mime"
 	"net/http"
+	"net/http/httputil"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	a "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -27,6 +31,8 @@ func (x ResponsesExecutor) ServeAPI(c *gin.Context, auth *a.Auth) {
 		return
 	}
 	protocol := auth.Attributes["emdash_protocol"]
+	var route *ModelRoute
+	_ = json.Unmarshal([]byte(auth.Attributes["emdash_route"]), &route)
 	if protocol == "" {
 		protocol = "openai-responses"
 	}
@@ -44,18 +50,61 @@ func (x ResponsesExecutor) ServeAPI(c *gin.Context, auth *a.Auth) {
 		}
 		allowed = endpoints[selected] != ""
 	}
+	if route != nil {
+		allowed = true
+	}
 	if !allowed || c.Request.Method != "POST" || (path != "responses" && path != "responses/compact" && path != "messages" && path != "messages/count_tokens" && path != "chat/completions") {
 		c.JSON(400, gin.H{"error": "The selected provider does not support this protocol."})
 		return
 	}
-	raw, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 32*1024*1024))
+	raw, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBody))
+	if err != nil {
+		code := 400
+		var limit *http.MaxBytesError
+		if errors.As(err, &limit) {
+			code = 413
+		}
+		c.JSON(code, gin.H{"error": "Gateway request body is incomplete or exceeds its size limit."})
+		return
+	}
+	decoded, err := decodeRequestPayload(raw, c.GetHeader("Content-Encoding"))
+	if err != nil {
+		code := 400
+		if status, ok := err.(interface{ StatusCode() int }); ok {
+			code = status.StatusCode()
+		}
+		c.JSON(code, gin.H{"error": "Unsupported, invalid, or oversized encoded request body."})
+		return
+	}
 	var body struct {
 		Model  string `json:"model"`
 		Stream bool   `json:"stream"`
 	}
-	if err != nil || json.Unmarshal(raw, &body) != nil || models[body.Model] == "" {
+	if json.Unmarshal(decoded, &body) != nil || models[body.Model] == "" {
 		c.JSON(400, gin.H{"error": "Select a model configured on this provider."})
 		return
+	}
+	if route != nil {
+		inbound := inboundProtocol(path)
+		target, err := selectProtocol(*route, body.Model, inbound)
+		if err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		auth = auth.Clone()
+		models[body.Model] = route.ProtocolModels[body.Model][target]
+		mapping, _ := json.Marshal(models)
+		auth.Attributes["emdash_models"] = string(mapping)
+		auth.Attributes["emdash_inbound_protocol"] = inbound
+		auth.Attributes["emdash_upstream_protocol"] = target
+		if target != inbound {
+			if path == "responses/compact" || path == "messages/count_tokens" {
+				c.JSON(400, gin.H{"error": "This operation requires a native protocol endpoint."})
+				return
+			}
+			x.serveConverted(c, auth, e.Request{Model: body.Model, Payload: raw}, decoded, body.Stream, inbound, target)
+			return
+		}
 	}
 	ctx := context.WithValue(c.Request.Context(), "gin", c)
 	req := e.Request{Model: body.Model, Payload: raw}
@@ -63,7 +112,6 @@ func (x ResponsesExecutor) ServeAPI(c *gin.Context, auth *a.Auth) {
 	if alt == "responses" {
 		alt = ""
 	}
-	opts := e.Options{Alt: alt}
 	fail := func(err error) {
 		code := 502
 		if status, ok := err.(interface{ StatusCode() int }); ok {
@@ -71,48 +119,48 @@ func (x ResponsesExecutor) ServeAPI(c *gin.Context, auth *a.Auth) {
 		}
 		c.JSON(code, gin.H{"error": err.Error()})
 	}
-	copyHeaders := func(headers http.Header) {
-		for _, key := range []string{"Content-Type", "Request-Id", "X-Request-Id"} {
-			if value := headers.Get(key); value != "" {
-				c.Header(key, value)
-			}
-		}
-		c.Header("Cache-Control", "no-store")
-	}
-	if path == "messages/count_tokens" {
-		response, err := x.CountTokens(ctx, auth, req, opts)
-		if err != nil {
-			fail(err)
-			return
-		}
-		copyHeaders(response.Headers)
-		c.Data(200, "application/json", response.Payload)
-		return
-	}
-	if !body.Stream {
-		response, err := x.Execute(ctx, auth, req, opts)
-		if err != nil {
-			fail(err)
-			return
-		}
-		copyHeaders(response.Headers)
-		c.Data(200, "application/json", response.Payload)
-		return
-	}
-	response, err := x.ExecuteStream(ctx, auth, req, opts)
+	prepared, err := upstreamRequest(ctx, auth, req, alt)
 	if err != nil {
 		fail(err)
 		return
 	}
-	copyHeaders(response.Headers)
-	c.Header("Content-Type", "text/event-stream")
-	for chunk := range response.Chunks {
-		if chunk.Err != nil {
-			return
-		}
-		if _, err := c.Writer.Write(chunk.Payload); err != nil {
-			return
-		}
-		c.Writer.Flush()
+	ctx = snapshotSession(prepared.Context())
+	started := time.Now()
+	countTokens := path == "messages/count_tokens"
+	proxy := httputil.ReverseProxy{
+		Rewrite:       func(p *httputil.ProxyRequest) { p.Out = prepared.Clone(p.Out.Context()) },
+		Transport:     providerTransport{executor: x, auth: auth},
+		FlushInterval: -1,
+		ModifyResponse: func(response *http.Response) error {
+			response.Header = forwardHeaders(response.Header, false)
+			response.Header.Set("Cache-Control", "no-store")
+			stripHeaders(response.Trailer, false)
+			mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
+			response.Body = observeBody(response.Body, response.Header, response.Trailer,
+				strings.EqualFold(mediaType, "text/event-stream"), alt,
+				func(payload []byte, failed bool) {
+					stripHeaders(response.Trailer, false)
+					if !countTokens {
+						usageRecord(ctx, auth, req, started, payload, failed || response.StatusCode >= 300)
+					}
+				})
+			return nil
+		},
+		ErrorHandler: func(_ http.ResponseWriter, _ *http.Request, err error) {
+			if !countTokens {
+				usageRecord(ctx, auth, req, started, nil, true)
+			}
+			fail(err)
+		},
 	}
+	proxy.ServeHTTP(c.Writer, c.Request.WithContext(ctx))
+}
+
+type providerTransport struct {
+	executor ResponsesExecutor
+	auth     *a.Auth
+}
+
+func (t providerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.executor.HttpRequest(req.Context(), t.auth, req)
 }

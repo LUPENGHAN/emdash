@@ -96,6 +96,7 @@ export const modelProviderSchema = z.object({
   models: z.array(z.string()).default([]),
   /** Public model id to upstream model id, used by the local router. */
   modelAliases: z.record(z.string(), z.string()).optional(),
+  modelNames: z.record(z.string(), z.string()).optional(),
   /**
    * Context window in tokens, per model, where an agent would otherwise guess it.
    */

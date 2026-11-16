@@ -42,6 +42,8 @@ export type AcpSpawnResult = {
 export interface AcpProcessIo {
   stdin: Writable;
   stdout: Readable;
+  /** Resolved per-process configuration, for provider-owned session initialization. */
+  env?: Readonly<Record<string, string>>;
 }
 
 /**

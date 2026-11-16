@@ -23,6 +23,23 @@ hosts. HTTP sends API keys and request contents without transport encryption; us
 only over a trusted network. URLs with embedded credentials, query strings, fragments,
 or schemes other than HTTP/HTTPS are rejected.
 
+API routes preserve application headers (including repeated values), request query
+parameters, upstream status codes, error bodies, trailers, and original response bytes.
+Usage observation does not rewrite SSE framing or compressed responses. Gzip and
+deflate request bodies are validated without changing their bytes unless a configured
+model alias changes the model. The 32 MiB request limit also applies after decompression.
+Unsupported request encodings are rejected with HTTP 415. Credentials are replaced
+per provider; hop-by-hop fields, local cookies, forwarding metadata, and internal
+`x-emdash-*` fields do not cross the upstream boundary. Provider cookies are not set
+on the local gateway. Responses remain non-cacheable, and requests are never replayed
+or automatically redirected. Native OAuth accounts still use the SDK's own adapters.
+
+Each request may select any model configured on its provider; other protocol fields
+are retained. Model aliases change only the selected upstream model. Alias rewrites
+are rejected with HTTP 400 if the request or provider configuration carries digest or
+signature fields, including trailers; use the upstream model ID without an alias for
+those requests. Requests without alias rewrites retain their body and integrity fields.
+
 ## Build and verification
 
 Developers need Go 1.27.1 and the repository's pinned pnpm toolchain. End users receive

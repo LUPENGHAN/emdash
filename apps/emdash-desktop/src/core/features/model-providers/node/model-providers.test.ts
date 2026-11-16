@@ -716,6 +716,16 @@ describe('createEffectiveAgentConfig', () => {
   it('never routes official-only agents through a provider', async () => {
     expect(await resolver()('cursor')).toEqual({ extraArgs: '--verbose', modelSource: 'NewAPI' });
   });
+  it('refuses an explicit official login when the native configuration routes to another API', async () => {
+    await expect(
+      resolver({ nativeSourceAvailable: async () => false })('claude', { modelSource: null })
+    ).rejects.toThrow('custom API');
+  });
+  it('refuses a published gateway choice for an unsupported agent', async () => {
+    await expect(
+      resolver()('cursor', { modelSource: 'gateway:models', sourceModel: 'public' })
+    ).rejects.toThrow('no gateway launch integration');
+  });
 
   it('lets a conversation override the default, including back to the own login', async () => {
     const resolve = resolver();

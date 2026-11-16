@@ -7,6 +7,7 @@ import { useAgents } from '@core/features/agents/api/browser/use-agents';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import { getModelGatewayClient } from '@core/features/model-gateway/api/browser/client';
+import { catalogProvider, catalogSourceId } from '@core/features/model-gateway/api/model-catalog';
 import {
   isProviderCapableAgent,
   usesProviderSource,
@@ -81,11 +82,9 @@ export function currentChoice(conversation: Conversation): RestartChoice {
 }
 
 /**
- * Restarts a conversation's agent on another source (provider and model), or in the
- * other UI: the current conversation is removed first (killing its agent and waiting
- * for it to exit, so two processes never write one session), then a new one resumes
- * the same session. Provider session files are untouched, so a failure leaves it
- * resumable from History. `requireSession` refuses rather than start a new session.
+ * Validate the replacement, stop the agent, then create its replacement before removing
+ * the original record. A failed start leaves that record and its session recoverable.
+ * Provider-bound state changes start a new session; requireSession refuses those changes.
  */
 export async function restartConversation(
   current: Conversation,
@@ -95,19 +94,20 @@ export async function restartConversation(
   const conversation = await latestConversation(current);
   const manager = conversationRegistry.get(conversation.taskId);
   if (!manager) throw new Error('The task is not loaded');
-  // The old conversation goes first, so a source that cannot start must stop us here.
-  if (
-    conversation.providerId === 'codex' &&
-    resumableSessionId(conversation) &&
-    Boolean(conversation.modelSource?.startsWith('gateway:')) !==
-      Boolean(choice.modelSource?.startsWith('gateway:'))
-  ) {
-    throw new Error(
-      'Start a gateway conversation to switch gateway accounts. Existing native Codex sessions keep their original provider identity.'
-    );
-  }
+  const codexIdentityChange =
+    conversation.providerId === 'codex' && conversation.modelSource !== choice.modelSource;
   const problem = await sourceProblem(conversation.providerId, choice);
   if (problem) throw new Error(problem);
+  const savedGatewayRoute = conversation.modelSource?.startsWith('gateway:')
+    ? await (await getModelGatewayClient()).route({ conversationId: conversation.id })
+    : null;
+  const needsNewSession = Boolean(
+    codexIdentityChange ||
+    savedGatewayRoute?.requiresNewSession ||
+    (choice.modelSource === catalogSourceId && conversation.modelSource !== catalogSourceId) ||
+    (conversation.modelSource === catalogSourceId &&
+      (choice.modelSource !== catalogSourceId || choice.sourceModel !== savedGatewayRoute?.model))
+  );
   if (
     conversation.modelSource?.startsWith('gateway:') &&
     choice.modelSource?.startsWith('gateway:') &&
@@ -116,14 +116,25 @@ export async function restartConversation(
     const client = await getModelGatewayClient();
     const route = await client.route({ conversationId: conversation.id });
     const status = await client.status();
+    const catalog = catalogProvider(status.models ?? [], conversation.providerId);
+    if (choice.modelSource === catalogSourceId) status.providers.push(catalog);
     const model =
       choice.sourceModel || status.providers.find((p) => p.id === choice.modelSource)?.models[0];
+    if (
+      choice.modelSource === catalogSourceId &&
+      route?.sourceId === catalogSourceId &&
+      !route.restartReason &&
+      model === route.model
+    )
+      return conversation;
     const currentProvider = status.providers.find((p) => p.id === route?.sourceId);
     const nextProvider = status.providers.find((p) => p.id === choice.modelSource);
     const sameContext =
       model && currentProvider?.contextWindows?.[model] === nextProvider?.contextWindows?.[model];
     if (
       route &&
+      !route.restartReason &&
+      choice.modelSource !== catalogSourceId &&
       model === route.model &&
       sameContext &&
       currentProvider?.protocol === nextProvider?.protocol &&
@@ -140,12 +151,16 @@ export async function restartConversation(
       return conversation;
     }
   }
-  const sessionId = resumableSessionId(conversation);
+  if (needsNewSession && requireSession)
+    throw new Error(
+      'This route cannot safely resume the provider state. Start a new agent session.'
+    );
+  const sessionId = needsNewSession ? null : resumableSessionId(conversation);
   if (!sessionId && requireSession) throw new Error('The conversation has no session to resume');
   const currentType = conversation.type ?? 'pty';
   const nextType = type ?? currentType;
-  await manager.deleteConversation(conversation.id);
-  return manager.createConversation({
+  await manager.killSession(conversation.id);
+  const replacement = await manager.createConversation({
     id: crypto.randomUUID(),
     projectId: conversation.projectId,
     taskId: conversation.taskId,
@@ -161,6 +176,8 @@ export async function restartConversation(
     ...(choice.sourceModel && { sourceModel: choice.sourceModel }),
     ...(!usesProviderSource(choice) && choice.model && { model: choice.model }),
   });
+  await manager.deleteConversation(conversation.id);
+  return replacement;
 }
 
 const RestartConversationModal = observer(function RestartConversationModal({
@@ -208,6 +225,13 @@ const RestartConversationModal = observer(function RestartConversationModal({
   const gatewaySelection = Boolean(
     conversation.modelSource?.startsWith('gateway:') && source.modelSource?.startsWith('gateway:')
   );
+  const changesIdentity = Boolean(
+    gatewayRoute.data?.requiresNewSession ||
+    (conversation.providerId === 'codex' && source.modelSource !== conversation.modelSource) ||
+    ((source.modelSource === catalogSourceId || conversation.modelSource === catalogSourceId) &&
+      (source.modelSource !== conversation.modelSource ||
+        source.sourceModel !== conversation.sourceModel))
+  );
   const isTerminal = (conversation.type ?? 'pty') === 'pty';
 
   const restart = async () => {
@@ -236,12 +260,19 @@ const RestartConversationModal = observer(function RestartConversationModal({
       <Dialog.Body>
         <Field.Group>
           <p className="text-xs text-foreground-muted">
-            {gatewaySelection
-              ? 'Switching gateway accounts for the same model and context window keeps this session and applies after the current turn. Changing the model or context window restarts the agent.'
-              : resumes
-                ? 'The agent stops and the same session continues on the source below. A reply in progress is cut off.'
-                : 'This conversation has no session to resume yet, so a new one starts on the source below.'}
+            {changesIdentity
+              ? 'This change starts a new agent session so provider-bound history is not sent to an incompatible route. The original session remains in History.'
+              : gatewaySelection
+                ? 'Choose a gateway model or the agent’s own login. Route changes that affect protocol, model or capabilities require a restart.'
+                : resumes
+                  ? 'The agent stops and the same session continues on the source below. A reply in progress is cut off.'
+                  : 'This conversation has no session to resume yet, so a new one starts on the source below.'}
           </p>
+          {gatewayRoute.data?.restartReason ? (
+            <p role="status" className="text-xs text-foreground-muted">
+              {gatewayRoute.data.restartReason}
+            </p>
+          ) : null}
           <ModelSourceSelect
             remote={Boolean(connectionId)}
             agentId={conversation.providerId}
@@ -313,8 +344,8 @@ export function restartConversationCommands(conversation: Conversation | undefin
     {
       id: 'conversation:restart-source',
       label: conversation.modelSource?.startsWith('gateway:')
-        ? 'Switch gateway provider…'
-        : 'Restart with another provider…',
+        ? 'Change gateway model or connection…'
+        : 'Change model or connection…',
       group: 'handoff',
       run: () => {
         void (async () => {

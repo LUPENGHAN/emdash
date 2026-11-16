@@ -9,11 +9,12 @@ function agentSettingsQueryKey(id: string, host: HostRef) {
   return ['agents', 'settings', hostRefKey(host), id] as const;
 }
 
-export function useAgentSettings(id: string, host: HostRef) {
+export function useAgentSettings(id: string, host: HostRef, enabled = true) {
   const queryClient = useQueryClient();
   const queryKey = agentSettingsQueryKey(id, host);
 
   const query = useQuery<AgentSettings | null, RuntimeResolveError>({
+    enabled,
     queryKey,
     queryFn: async () => unwrapAgentsResult((await getAgentsClient()).getSettings({ host, id })),
     staleTime: 60_000,

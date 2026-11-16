@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import {
   createServer,
   request,
@@ -18,11 +18,31 @@ import {
   type GatewayStatus,
   type GatewayUsage,
 } from '../api/contract';
+import {
+  catalogProvider,
+  catalogSourceId,
+  gatewayModelsSettingsSchema,
+  upstreamProtocol,
+  type GatewayModel,
+  type GatewayModelsSettings,
+} from '../api/model-catalog';
 import type { ApiProvider } from './config';
 import { apiProviders, defaultConfig, type Document } from './config';
+import { gatewayHttpHeaders } from './http-headers';
+import {
+  catalogBindings,
+  fingerprint,
+  migrationPreview,
+  runtimeCatalog,
+  snapshotCatalog,
+  type CatalogSnapshot,
+} from './model-catalog';
 import { gatewayProviders, type ProviderCredential } from './provider-inventory';
 
 export type GatewayRoute = {
+  catalog?: CatalogSnapshot;
+  restartReason?: string;
+  requiresNewSession?: boolean;
   sourceId: string;
   model: string;
   launchConfiguration?: string;
@@ -43,6 +63,8 @@ type KeyStore<T> = {
   clear(): Promise<void>;
 };
 export type GatewayDependencies = {
+  getModels?(): Promise<GatewayModelsSettings>;
+  saveModels?(settings: GatewayModelsSettings): Promise<void>;
   secrets: SecretStore;
   routes: KeyStore<GatewayRoute>;
   ledger: KeyStore<GatewayUsage>;
@@ -90,12 +112,16 @@ export class ModelGatewayService {
   private definitions = new Map<string, ModelProvider>();
   private providerQueue: Promise<void> = Promise.resolve();
   private providerFingerprint?: string;
+  private catalogFingerprint?: string;
+  private modelsQueue: Promise<void> = Promise.resolve();
   private stopping = false;
   private drain?: () => void;
   private pendingTimer?: ReturnType<typeof setInterval>;
   private pending = new Set<string>();
+  private pendingCatalogs = new Set<string>();
   private switching = new Set<string>();
   private active = new Map<string, number>();
+  private activeCatalogs = new Map<string, { snapshot: CatalogSnapshot; requests: number }>();
   constructor(private readonly deps: GatewayDependencies) {}
 
   private async load(): Promise<Vault> {
@@ -170,6 +196,7 @@ export class ModelGatewayService {
     return (response.status === 204 ? undefined : await response.json()) as T;
   }
   private canonicalSource(sourceId: string): string {
+    if (sourceId === catalogSourceId) return sourceId;
     const id = sourceId.slice(gatewaySourcePrefix.length);
     return gatewaySourcePrefix + (this.vault?.sourceAliases?.[id] ?? id);
   }
@@ -196,7 +223,25 @@ export class ModelGatewayService {
     }
     const inventory = await this.deps.inventory();
     this.definitions = new Map(inventory.map(({ provider }) => [provider.id, provider]));
-    return gatewayProviders(inventory).map((p) => ({
+    const models = [
+      ...((await this.deps.getModels?.())?.models ?? []),
+      ...Object.values(await this.deps.routes.getAll()).flatMap((r) => r?.catalog?.models ?? []),
+      ...[...this.activeCatalogs.values()].flatMap((c) => c.snapshot.models),
+    ];
+    // Published models need not be in the provider's discovery suggestions.
+    const expanded = inventory.map((entry) => ({
+      ...entry,
+      provider: {
+        ...entry.provider,
+        models: [
+          ...new Set([
+            ...entry.provider.models,
+            ...models.filter((m) => m.providerId === entry.provider.id).map((m) => m.alias),
+          ]),
+        ],
+      },
+    }));
+    return gatewayProviders(expanded).map((p) => ({
       ...p,
       headers: vault.providerHeaders?.[p.id] ?? {},
     }));
@@ -204,10 +249,41 @@ export class ModelGatewayService {
   private async syncProviders(): Promise<void> {
     const work = this.providerQueue.then(async () => {
       const providers = await this.configuredProviders();
-      const fingerprint = createHash('sha256').update(JSON.stringify(providers)).digest('hex');
-      if (fingerprint !== this.providerFingerprint) {
-        await this.control('/emdash/providers', 'PUT', providers);
-        this.providerFingerprint = fingerprint;
+      const published = (await this.deps.getModels?.())?.models ?? [];
+      const snapshots = Object.entries(await this.deps.routes.getAll()).flatMap(([id, route]) =>
+        route?.catalog
+          ? [{ id: `${id}:${fingerprint(route.catalog)}`, snapshot: route.catalog }]
+          : []
+      );
+      for (const [id, active] of this.activeCatalogs)
+        if (!snapshots.some((s) => s.id === id)) snapshots.push({ id, snapshot: active.snapshot });
+      const runtime = snapshots.map(({ id, snapshot }) => ({
+        id,
+        ...runtimeCatalog(
+          {
+            ...snapshot,
+            models: snapshot.models.filter((m) =>
+              published.some((p) => p.id === m.id && p.enabled)
+            ),
+          },
+          [...this.definitions.values()],
+          providers
+        ),
+      }));
+      const allProviders = [
+        ...providers,
+        ...new Map(runtime.flatMap((c) => c.providers).map((p) => [p.id, p])).values(),
+      ];
+      const nextFingerprint = fingerprint(allProviders);
+      if (nextFingerprint !== this.providerFingerprint) {
+        await this.control('/emdash/providers', 'PUT', allProviders);
+        this.providerFingerprint = nextFingerprint;
+      }
+      const catalogs = runtime.map(({ id, models }) => ({ id, models }));
+      const nextCatalogFingerprint = fingerprint(catalogs);
+      if (nextCatalogFingerprint !== this.catalogFingerprint) {
+        await this.control('/emdash/model-routes', 'PUT', catalogs);
+        this.catalogFingerprint = nextCatalogFingerprint;
       }
       this.accounts = await this.control<GatewayAccount[]>('/emdash/catalog');
     });
@@ -232,6 +308,7 @@ export class ModelGatewayService {
       }
     }
     return {
+      models: (await this.deps.getModels?.())?.models ?? [],
       accountTypes: Object.fromEntries(
         this.accounts.map((account) => [
           gatewaySourcePrefix + account.id,
@@ -244,6 +321,7 @@ export class ModelGatewayService {
       providers: this.accounts
         .filter(
           (a) =>
+            !a.id.startsWith('model:') &&
             !a.disabled &&
             a.models.length &&
             ['emdash-responses', 'codex', 'claude'].includes(a.provider)
@@ -367,6 +445,7 @@ export class ModelGatewayService {
                 throw new Error('Incompatible gateway protocol.');
               this.backend = ready.address;
               this.providerFingerprint = undefined;
+              this.catalogFingerprint = undefined;
               await this.syncProviders();
               const pending = await this.control<GatewayUsage[]>('/emdash/outbox');
               for (const event of pending) await this.ingest(event);
@@ -414,10 +493,14 @@ export class ModelGatewayService {
           }) + '\n'
         );
       });
-      for (const [id, route] of Object.entries(await this.deps.routes.getAll()))
+      for (const [id, route] of Object.entries(await this.deps.routes.getAll())) {
         if (route?.pending) this.pending.add(id);
+        if (route?.catalog) this.pendingCatalogs.add(id);
+      }
       this.pendingTimer ??= setInterval(() => {
         for (const id of this.pending) void this.applyPending(id).catch(() => undefined);
+        for (const id of this.pendingCatalogs)
+          void this.refreshCatalogRoute(id).catch(() => undefined);
       }, 500);
       this.pendingTimer.unref();
       this.replayTimer ??= setInterval(() => {
@@ -439,6 +522,166 @@ export class ModelGatewayService {
       if (route?.pending) {
         await this.deps.routes.setOrThrow(id, { ...route.pending });
         this.pending.delete(id);
+      }
+    } finally {
+      this.switching.delete(id);
+    }
+  }
+  async migrationPreview(): Promise<GatewayModel[]> {
+    await this.load();
+    await this.configuredProviders();
+    return migrationPreview([...this.definitions.values()]);
+  }
+  async testModel(
+    alias: string,
+    agent: 'claude' | 'codex'
+  ): Promise<{ ok: boolean; status: number }> {
+    await this.prepareLaunch(catalogSourceId, alias, undefined, agent);
+    const models = (await this.deps.getModels?.())?.models ?? [];
+    const snapshot = snapshotCatalog(models, [...this.definitions.values()], agent);
+    const id = `diagnostic:${randomBytes(16).toString('hex')}`;
+    this.activeCatalogs.set(id, { snapshot, requests: 1 });
+    try {
+      await this.syncProviders();
+      const response = await fetch(
+        `${this.backend}/v1/${agent === 'claude' ? 'messages' : 'responses'}`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${this.token}`,
+            'content-type': 'application/json',
+            'x-emdash-account': `catalog:${id}`,
+            session_id: id,
+          },
+          body: JSON.stringify(
+            agent === 'claude'
+              ? { model: alias, max_tokens: 16, messages: [{ role: 'user', content: 'Reply OK.' }] }
+              : { model: alias, max_output_tokens: 16, store: false, input: 'Reply OK.' }
+          ),
+          signal: AbortSignal.timeout(20000),
+        }
+      );
+      const reader = response.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      if (reader) {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            bytes += value.byteLength;
+            if (bytes > 1024 * 1024) throw new Error('The test response exceeded its size limit.');
+            chunks.push(value);
+          }
+        } finally {
+          await reader.cancel();
+        }
+      }
+      let valid = false;
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as {
+          type?: string;
+          object?: string;
+        };
+        valid = agent === 'claude' ? body.type === 'message' : body.object === 'response';
+      } catch {
+        /* A successful HTTP status alone does not validate the protocol. */
+      }
+      return { ok: response.ok && valid, status: response.status };
+    } finally {
+      this.activeCatalogs.delete(id);
+    }
+  }
+  async saveModels(models: GatewayModel[]): Promise<void> {
+    const work = this.modelsQueue.then(async () => {
+      if (!this.deps.saveModels) throw new Error('Model settings are unavailable.');
+      const current = (await this.deps.getModels?.())?.models ?? [];
+      await this.configuredProviders();
+      const next = gatewayModelsSettingsSchema.parse({ version: 1, models });
+      for (const model of next.models) {
+        const previous = current.find((m) => m.id === model.id);
+        if (previous && previous.alias !== model.alias)
+          throw new Error('Create another alias instead of renaming a published model.');
+        if (previous && model.revision !== previous.revision)
+          throw new Error('Model settings changed. Reload before saving.');
+        const provider = this.definitions.get(model.providerId);
+        if (!provider || provider.account)
+          throw new Error('Select an API provider for this model.');
+        // A valid model can be available to another agent even when Claude cannot use it.
+        if (
+          !Object.keys(model.protocolModels).every((p) =>
+            provider.endpoints
+              ? provider.endpoints[p as keyof NonNullable<ModelProvider['endpoints']>] !== undefined
+              : !provider.protocol || provider.protocol === p
+          )
+        )
+          throw new Error('The provider does not expose a selected model protocol.');
+        model.revision = previous
+          ? previous.revision + (fingerprint(model) === fingerprint(previous) ? 0 : 1)
+          : 1;
+      }
+      await this.deps.saveModels(next);
+      for (const [id, route] of Object.entries(await this.deps.routes.getAll())) {
+        if (route?.catalog) {
+          this.pendingCatalogs.add(id);
+          await this.refreshCatalogRoute(id);
+        }
+      }
+    });
+    this.modelsQueue = work.catch(() => undefined);
+    await work;
+  }
+  private async refreshCatalogRoute(id: string): Promise<void> {
+    if (this.active.get(id) || this.switching.has(id)) return;
+    this.switching.add(id);
+    try {
+      const route = await this.deps.routes.getOrThrow(id);
+      if (!route?.catalog) {
+        this.pendingCatalogs.delete(id);
+        return;
+      }
+      const models = (await this.deps.getModels?.())?.models ?? [];
+      const next = snapshotCatalog(models, [...this.definitions.values()], route.catalog.agent);
+      if (fingerprint(next) === fingerprint(route.catalog) && !route.restartReason) {
+        this.pendingCatalogs.delete(id);
+        return;
+      }
+      const compatible = catalogBindings(next) === catalogBindings(route.catalog);
+      if (compatible && (await this.deps.conversationIdle(id))) {
+        await this.deps.routes.setOrThrow(id, {
+          ...route,
+          catalog: next,
+          restartReason: undefined,
+          requiresNewSession: undefined,
+        });
+        this.pendingCatalogs.delete(id);
+      } else if (!compatible) {
+        const binding = (snapshot: CatalogSnapshot) =>
+          fingerprint(
+            snapshot.models.map((model) => {
+              const provider = snapshot.providers.find((p) => p.id === model.providerId);
+              return {
+                alias: model.alias,
+                providerId: model.providerId,
+                protocols: model.protocolModels,
+                policy: model.protocolPolicy,
+                connection: provider && {
+                  protocol: provider.protocol,
+                  baseUrl: provider.baseUrl,
+                  endpoints: provider.endpoints,
+                },
+              };
+            })
+          );
+        const requiresNewSession = binding(next) !== binding(route.catalog);
+        await this.deps.routes.setOrThrow(id, {
+          ...route,
+          requiresNewSession,
+          restartReason: requiresNewSession
+            ? 'Provider or protocol binding changed. Start a new agent session to apply it safely.'
+            : 'Model routes or capabilities changed. Restart to apply the saved configuration.',
+        });
+        this.pendingCatalogs.delete(id);
       }
     } finally {
       this.switching.delete(id);
@@ -489,12 +732,69 @@ export class ModelGatewayService {
   async prepareLaunch(
     sourceId: string,
     model: string | undefined,
-    conversationId?: string
-  ): Promise<{ provider: ModelProvider; apiKey: string }> {
+    conversationId?: string,
+    agentId?: string
+  ): Promise<{ provider: ModelProvider; apiKey: string; compatibility?: boolean }> {
     if (conversationId && !(await this.deps.conversationLocal(conversationId)))
       throw new Error('The model gateway supports local conversations only.');
     await this.ensure();
     await this.syncProviders();
+    if (sourceId === catalogSourceId) {
+      if (!agentId) throw new Error('The gateway needs the agent protocol.');
+      const models = (await this.deps.getModels?.())?.models ?? [];
+      const saved = conversationId ? await this.deps.routes.getOrThrow(conversationId) : null;
+      const snapshot =
+        saved?.catalog ?? snapshotCatalog(models, [...this.definitions.values()], agentId);
+      const provider = catalogProvider(snapshot.models, agentId);
+      if (!model || !provider.models.includes(model))
+        throw new Error(
+          'Select an available gateway model in Settings → Providers → Gateway models.'
+        );
+      const selected = snapshot.models.find((m) => m.alias === model);
+      if (!models.some((m) => m.id === selected?.id && m.enabled))
+        throw new Error('This gateway model is disabled or unavailable.');
+      const runtime = runtimeCatalog(
+        snapshot,
+        [...this.definitions.values()],
+        await this.configuredProviders()
+      );
+      if (!runtime.models[model])
+        throw new Error(
+          'The model provider is missing credentials or its connection scope changed. Restore it or start a new session.'
+        );
+      const chosenProvider = runtime.providers.find((p) => p.id === runtime.models[model]);
+      const targetProtocol =
+        selected &&
+        upstreamProtocol(selected, agentId === 'claude' ? 'anthropic' : 'openai-responses');
+      if (
+        !chosenProvider ||
+        !targetProtocol ||
+        !(chosenProvider.protocolKeys?.[targetProtocol] || chosenProvider.apiKey)
+      )
+        throw new Error(
+          'The selected upstream protocol has no API key. Add it in Provider settings.'
+        );
+      if (saved?.catalog && saved.model !== model)
+        throw new Error('Restart the agent to change its saved gateway model.');
+      const id = conversationId ?? 'validation';
+      if (conversationId) {
+        await this.deps.routes.setOrThrow(id, { ...saved, sourceId, model, catalog: snapshot });
+        await this.syncProviders();
+      }
+      const inbound = agentId === 'claude' ? 'anthropic' : 'openai-responses';
+      return {
+        provider: {
+          ...provider,
+          protocol: inbound,
+          baseUrl: `${this.address}/sessions/${encodeURIComponent(id)}${inbound === 'anthropic' ? '' : '/v1'}`,
+          models: [model, ...provider.models.filter((m) => m !== model)],
+        },
+        apiKey: this.capability(id),
+        compatibility:
+          agentId === 'claude' &&
+          snapshot.models.some((m) => upstreamProtocol(m, 'anthropic') !== 'anthropic'),
+      };
+    }
     const saved = conversationId ? await this.deps.routes.getOrThrow(conversationId) : null;
     const chosen = this.canonicalSource(saved?.sourceId ?? sourceId);
     const account = this.accounts.find((a) => gatewaySourcePrefix + a.id === chosen && !a.disabled);
@@ -543,6 +843,7 @@ export class ModelGatewayService {
   }
   async route(id: string): Promise<GatewayRoute | null> {
     await this.load();
+    await this.refreshCatalogRoute(id);
     const route = await this.deps.routes.getOrThrow(id);
     return route
       ? {
@@ -556,6 +857,11 @@ export class ModelGatewayService {
   }
   async routes() {
     await this.load();
+    if (this.state === 'ready') {
+      await this.syncProviders();
+      for (const [id, route] of Object.entries(await this.deps.routes.getAll()))
+        if (route?.catalog) await this.refreshCatalogRoute(id);
+    }
     const rows = await this.deps.routes.getAll();
     const conversations = await this.deps.conversations?.();
     return Object.entries(rows).flatMap(([id, route]) => {
@@ -564,14 +870,28 @@ export class ModelGatewayService {
       if (conversations && !conversation) return [];
       const sourceId = this.canonicalSource(route.sourceId);
       const pendingId = route.pending ? this.canonicalSource(route.pending.sourceId) : undefined;
+      const binding = route.catalog?.models.find((m) => m.alias === route.model);
+      const inbound = route.catalog?.agent === 'claude' ? 'anthropic' : 'openai-responses';
+      const target = binding && upstreamProtocol(binding, inbound);
       return [
         {
           conversationId: id,
           title: conversation?.title || id,
           sourceId,
-          providerName:
-            this.accounts.find((a) => gatewaySourcePrefix + a.id === sourceId)?.name ?? sourceId,
+          providerName: binding
+            ? (route.catalog?.providers.find((p) => p.id === binding.providerId)?.name ??
+              binding.providerId)
+            : (this.accounts.find((a) => gatewaySourcePrefix + a.id === sourceId)?.name ??
+              sourceId),
           model: route.model,
+          ...(binding &&
+            target && {
+              upstreamModel: binding.protocolModels[target]?.upstreamModel,
+              inboundProtocol: inbound,
+              upstreamProtocol: target,
+              revision: binding.revision,
+            }),
+          ...(route.restartReason && { restartReason: route.restartReason }),
           ...(pendingId && {
             pendingName:
               this.accounts.find((a) => gatewaySourcePrefix + a.id === pendingId)?.name ??
@@ -705,21 +1025,37 @@ export class ModelGatewayService {
         return;
       }
       await this.ensure();
+      await this.syncProviders();
+      await this.refreshCatalogRoute(id);
       const route = await this.route(id);
       if (!route) {
         json(res, 404, { error: 'Gateway route is unavailable.' });
         return;
       }
       this.active.set(id, (this.active.get(id) ?? 0) + 1);
+      const catalogId = route.catalog ? `${id}:${fingerprint(route.catalog)}` : undefined;
+      if (catalogId && route.catalog) {
+        const active = this.activeCatalogs.get(catalogId);
+        this.activeCatalogs.set(catalogId, {
+          snapshot: route.catalog,
+          requests: (active?.requests ?? 0) + 1,
+        });
+      }
       const done = (): void => {
         this.active.set(id, Math.max(0, (this.active.get(id) ?? 1) - 1));
+        if (catalogId) {
+          const active = this.activeCatalogs.get(catalogId);
+          if (active && active.requests > 1) active.requests--;
+          else this.activeCatalogs.delete(catalogId);
+        }
       };
       res.once('close', done);
+      if (route.catalog) await this.syncProviders();
       this.proxy(
         req,
         res,
         session[2] + url.search,
-        route.sourceId.slice(gatewaySourcePrefix.length),
+        catalogId ? `catalog:${catalogId}` : route.sourceId.slice(gatewaySourcePrefix.length),
         id
       );
       return;
@@ -739,22 +1075,22 @@ export class ModelGatewayService {
       return;
     }
     const headers: Record<string, string | string[] | undefined> = {
-      ...req.headers,
+      ...gatewayHttpHeaders(req.headers, true),
       host: new URL(this.backend).host,
       authorization: `Bearer ${this.token}`,
       'x-emdash-account': accountId ?? '',
       session_id: sessionId ?? '',
     };
-    delete headers.cookie;
-    delete headers['x-api-key'];
     const upstream = request(
       new URL(path, this.backend),
       { method: req.method, headers },
       (response) => {
         res.writeHead(response.statusCode ?? 502, {
-          ...response.headers,
+          ...gatewayHttpHeaders(response.headers, false),
           'cache-control': 'no-store',
         });
+        response.once('end', () => res.addTrailers(gatewayHttpHeaders(response.trailers, false)));
+        response.once('error', () => res.destroy());
         response.pipe(res);
       }
     );
@@ -762,6 +1098,7 @@ export class ModelGatewayService {
       json(res, 502, { error: 'The gateway connection failed. The request was not replayed.' })
     );
     req.once('aborted', () => upstream.destroy());
+    req.once('end', () => upstream.addTrailers(gatewayHttpHeaders(req.trailers, true)));
     res.once('close', () => upstream.destroy());
     req.pipe(upstream);
   }

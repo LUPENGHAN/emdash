@@ -13,6 +13,7 @@ import codexBaseInstructions from '../../node/codex-base-instructions.md?raw';
 
 export type CodexCatalogModel = {
   id: string;
+  name?: string;
   contextWindow?: number;
   /** Off for models the user marked as not reasoning: no efforts are offered. */
   reasoning: boolean;
@@ -159,6 +160,7 @@ export function buildCodexModelCatalog(
       return {
         ...(base ?? fallbackModelInfo(model.id)),
         slug: model.id,
+        ...(model.name && { display_name: model.name }),
         ...(model.contextWindow !== undefined && {
           context_window: model.contextWindow,
           max_context_window: model.contextWindow,

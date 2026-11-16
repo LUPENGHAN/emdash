@@ -14,7 +14,7 @@ import { observer } from 'mobx-react-lite';
 import { useEffect, useState } from 'react';
 import { getAgentsClient, hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgentSettings } from '@core/features/agents/api/browser/use-agent-settings';
-import { useGatewayStatus } from '@core/features/model-gateway/api/browser/use-gateway';
+import { GatewayModelsPanel } from '@core/features/model-gateway/contributions/browser/models-panel';
 import { GatewayProvidersPanel } from '@core/features/model-gateway/contributions/browser/providers-panel';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { openModal } from '@core/manifests/browser/modal-api';
@@ -27,9 +27,7 @@ import {
   normalizeCodexReasoningLevels,
   OFFICIAL_ACCOUNT_AGENTS,
   OFFICIAL_ACCOUNT_LABELS,
-  sourcesForAgent,
   type OfficialAccountAgent,
-  defaultSourceLabel,
   describeProvider,
   formatContextWindow,
   parseContextWindow,
@@ -38,15 +36,16 @@ import {
   PROVIDER_PROTOCOLS,
   providerEndpoints,
   providerModelsAuth,
-  providerRoutingSources,
   providerModelsUrl,
   providerSupportsAgent,
   type ClaudeModelRoles,
   type CodexReasoning,
   type CodexReasoningEffort,
   type ModelProvider,
+  type ModelSourceValue,
   type ProviderProtocol,
 } from '../api';
+import { ModelSourceSelect } from '../contributions/browser/model-source-select';
 import {
   applyContextWindowToSelected,
   canApplyContextToSelected,
@@ -67,7 +66,6 @@ const AGENT_NAMES: Record<string, string> = {
 export function ProvidersSettingsPage() {
   const { value, update } = useAppSettingsKey('modelProviders');
   const providers = value?.providers ?? [];
-  const gateway = useGatewayStatus();
   const apis = providers.filter((provider) => !provider.account);
   const [editing, setEditing] = useState<ModelProvider | 'new' | null>(null);
 
@@ -80,6 +78,7 @@ export function ProvidersSettingsPage() {
         title="Providers"
         description="Configure providers once. Anthropic Messages, OpenAI Chat Completions and Responses share the local router. Credentials stay in secure storage."
       />
+      <GatewayModelsPanel />
       <GatewayProvidersPanel />
       <section className="space-y-3">
         <h3 className="text-sm font-medium text-foreground">Your providers</h3>
@@ -142,7 +141,7 @@ export function ProvidersSettingsPage() {
         {!editing ? <ProviderTransfer providers={apis} /> : null}
       </section>
       <OfficialAccounts providers={providers} saveProviders={saveProviders} />
-      <AgentDefaults providers={providerRoutingSources(providers, gateway.data?.providers ?? [])} />
+      <AgentDefaults />
     </div>
   );
 }
@@ -581,7 +580,8 @@ function ProviderForm({
       </Field.Root>
       <Field.Root>
         <Field.Label>
-          Models ({selected.length} added{upstream.length ? ` of ${upstream.length}` : ''})
+          Upstream model suggestions ({selected.length} added
+          {upstream.length ? ` of ${upstream.length}` : ''})
         </Field.Label>
         {upstream.length > 0 || selected.length > 0 ? (
           <>
@@ -712,7 +712,10 @@ function ProviderForm({
             </ul>
           </>
         ) : (
-          <Field.Description>Fetch the upstream models, or type model ids below.</Field.Description>
+          <Field.Description>
+            Fetch the upstream models, or type model ids below. Publish agent-facing aliases in
+            Gateway models; these suggestions do not change published routes.
+          </Field.Description>
         )}
         {selected.length > 0 ? (
           <Field.Description>
@@ -1273,7 +1276,7 @@ function ClaudeModelRolesField({
 }
 
 /** Which provider (and model) each agent runs on by default; conversations can override. */
-function AgentDefaults({ providers }: { providers: ModelProvider[] }) {
+function AgentDefaults() {
   return (
     <section className="space-y-3">
       <div>
@@ -1285,98 +1288,35 @@ function AgentDefaults({ providers }: { providers: ModelProvider[] }) {
       </div>
       <div className="flex flex-col divide-y divide-border rounded-md border border-border">
         {PROVIDER_CAPABLE_AGENTS.map((agentId) => (
-          <AgentDefaultRow key={agentId} agentId={agentId} providers={providers} />
+          <AgentDefaultRow key={agentId} agentId={agentId} />
         ))}
       </div>
     </section>
   );
 }
 
-const AgentDefaultRow = observer(function AgentDefaultRow({
-  agentId,
-  providers,
-}: {
-  agentId: string;
-  providers: ModelProvider[];
-}) {
+const AgentDefaultRow = observer(function AgentDefaultRow({ agentId }: { agentId: string }) {
   const { value: config, update, reset } = useAgentSettings(agentId, hostRefFromConnectionId());
-  const sourceId = config?.modelSource ?? '';
-  const provider =
-    providers.find((candidate) => candidate.id === sourceId) ??
-    providers.find((candidate) => candidate.id === `gateway:${sourceId}`);
-  const model = config?.sourceModel ?? '';
-
-  const save = (patch: { modelSource?: string; sourceModel?: string }) => {
-    const next = { ...config, ...patch };
+  const save = (value: ModelSourceValue) => {
+    const next = {
+      ...config,
+      modelSource: value.modelSource ?? undefined,
+      sourceModel: value.sourceModel,
+    };
     if (!next.extraArgs && !next.env && !next.modelSource) reset(undefined);
     else update(next);
   };
-
   return (
-    <div className="flex items-center gap-3 px-3 py-2">
-      <span className="w-28 shrink-0 text-sm">{AGENT_NAMES[agentId]}</span>
-      <Select.Root
-        value={sourceId}
-        onValueChange={(next) =>
-          save({ modelSource: next ? String(next) : undefined, sourceModel: undefined })
-        }
-      >
-        <Select.Trigger appearance="input" className="min-w-0 flex-1">
-          <Select.Value>
-            {provider
-              ? `${provider.name}${sourceId && provider.id !== sourceId ? ' (direct)' : ''}`
-              : sourceId
-                ? 'Missing provider'
-                : defaultSourceLabel(agentId)}
-          </Select.Value>
-        </Select.Trigger>
-        <Select.Content align="start" width="trigger">
-          <Select.Item value="">{defaultSourceLabel(agentId)}</Select.Item>
-          {/* Kept selectable so the select does not reset (and clear) a deleted provider. */}
-          {sourceId && !providers.some((candidate) => candidate.id === sourceId) ? (
-            <Select.Item value={sourceId}>
-              {provider ? `${provider.name} (direct)` : 'Missing provider'}
-            </Select.Item>
-          ) : null}
-          {sourcesForAgent(providers, agentId).map((candidate) => {
-            const support = providerSupportsAgent(candidate, agentId);
-            return (
-              <Select.Item key={candidate.id} value={candidate.id} disabled={!support.ok}>
-                {candidate.name}
-                {support.ok ? null : (
-                  <span className="ml-2 text-xs text-foreground-muted">({support.reason})</span>
-                )}
-              </Select.Item>
-            );
-          })}
-        </Select.Content>
-      </Select.Root>
-      <Select.Root
-        value={model}
-        disabled={!provider}
-        onValueChange={(next) =>
-          save({ modelSource: sourceId, sourceModel: next ? String(next) : undefined })
-        }
-      >
-        <Select.Trigger appearance="input" className="min-w-0 flex-1">
-          <Select.Value>{provider ? model || firstModelLabel(provider) : '—'}</Select.Value>
-        </Select.Trigger>
-        <Select.Content align="start" width="trigger">
-          <Select.Item value="">{provider ? firstModelLabel(provider) : '—'}</Select.Item>
-          {model && !provider?.models.includes(model) ? (
-            <Select.Item value={model}>{model}</Select.Item>
-          ) : null}
-          {(provider?.models ?? []).map((id) => (
-            <Select.Item key={id} value={id}>
-              {id}
-            </Select.Item>
-          ))}
-        </Select.Content>
-      </Select.Root>
+    <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3 px-3 py-3">
+      <span className="pt-2 text-sm">{AGENT_NAMES[agentId]}</span>
+      <div className="space-y-2">
+        <ModelSourceSelect
+          agentId={agentId}
+          value={{ modelSource: config?.modelSource ?? null, sourceModel: config?.sourceModel }}
+          onChange={save}
+          showReset={false}
+        />
+      </div>
     </div>
   );
 });
-
-function firstModelLabel(provider: ModelProvider): string {
-  return provider.models[0] ? `First model (${provider.models[0]})` : 'Agent default model';
-}

@@ -130,6 +130,7 @@ import {
   mainAgentHome,
   prepareAccountHome,
 } from '@core/features/model-providers/node/official-accounts';
+import { describeOwnSource } from '@core/features/model-providers/node/own-source';
 import { createModelProviderKeys } from '@core/features/model-providers/node/provider-keys';
 import { createUsageLimitsService } from '@core/features/model-providers/node/usage-limits';
 import { previewServerService } from '@core/features/preview-servers/api/node/preview-server-service-instance';
@@ -511,6 +512,10 @@ export async function bootServices(
     ? join(process.resourcesPath, 'model-gateway')
     : join(app.getAppPath(), '..', 'model-gateway', 'dist');
   const modelGateway = new ModelGatewayService({
+    getModels: () => appSettingsService.get('gatewayModels'),
+    saveModels: async (settings) => {
+      await appSettingsService.update('gatewayModels', settings);
+    },
     secrets: encryptedAppSecretsStore,
     routes: new AppDbKeyValueStore<Record<string, GatewayRoute>>(db, 'model-gateway-routes', log),
     ledger: new AppDbKeyValueStore<Record<string, GatewayUsage>>(db, 'model-gateway-usage', log),
@@ -609,8 +614,19 @@ export async function bootServices(
     .restore()
     .catch(() => log.warn('Could not restore the model gateway. Retry from settings.'));
   const effectiveAgentConfig = createEffectiveAgentConfig({
-    prepareGateway: (sourceId, model, conversationId) =>
-      modelGateway.prepareLaunch(sourceId, model, conversationId),
+    nativeSourceAvailable: async (agentId, config) => {
+      if (/ANTHROPIC_BASE_URL|model_provider|base_url/.test(config?.extraArgs ?? '')) return false;
+      return (
+        (
+          await describeOwnSource(agentId, undefined, {
+            home: homedir(),
+            env: { ...process.env, ...config?.env },
+          })
+        )?.official !== false
+      );
+    },
+    prepareGateway: (sourceId, model, conversationId, agentId) =>
+      modelGateway.prepareLaunch(sourceId, model, conversationId, agentId),
     getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
     getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
     getApiKey: modelProviderKeys.read,

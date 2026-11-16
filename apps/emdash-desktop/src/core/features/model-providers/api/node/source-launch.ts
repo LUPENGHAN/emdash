@@ -58,7 +58,8 @@ export function buildSourceLaunch(
   provider: ModelProvider,
   apiKey: string,
   model?: string,
-  codexKnownModels: CodexModelInfo[] = []
+  codexKnownModels: CodexModelInfo[] = [],
+  gatewayCompatibility = false
 ): SourceLaunch | null {
   const key =
     provider.id.startsWith('gateway:') && agent !== 'codex'
@@ -82,6 +83,34 @@ export function buildSourceLaunch(
   switch (agent) {
     case 'claude': {
       if (!anthropic) return null;
+      const compatibilityEnv: Record<string, string> = gatewayCompatibility
+        ? {
+            DISABLE_PROMPT_CACHING: '1',
+            CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
+            ENABLE_TOOL_SEARCH: 'false',
+          }
+        : {};
+      const catalog =
+        provider.id === 'gateway:models'
+          ? {
+              env: { ANTHROPIC_BASE_URL: anthropic.url, ...compatibilityEnv },
+              availableModels: provider.models,
+              modelPicker: {
+                replaceBuiltInOptions: true,
+                options: provider.models.map((id) => ({
+                  model: id,
+                  label: provider.modelNames?.[id] ?? id,
+                })),
+              },
+            }
+          : undefined;
+      // extraArgs is whitespace-split; JSON escapes keep this one argv element.
+      const settings =
+        catalog &&
+        JSON.stringify(catalog).replace(
+          /\s/g,
+          (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
+        );
       return {
         env: {
           ANTHROPIC_BASE_URL: anthropic.url,
@@ -89,8 +118,13 @@ export function buildSourceLaunch(
             ? { ANTHROPIC_API_KEY: apiKey }
             : { ANTHROPIC_AUTH_TOKEN: apiKey }),
           ...claudeModelEnv(provider, model),
+          ...compatibilityEnv,
+          ...(catalog && {
+            EMDASH_CLAUDE_SETTINGS: JSON.stringify(catalog),
+            CLAUDE_MODEL_CONFIG: JSON.stringify({ availableModels: provider.models }),
+          }),
         },
-        args: [],
+        args: settings ? ['--settings', settings] : [],
       };
     }
     case 'codex': {
@@ -108,6 +142,7 @@ export function buildSourceLaunch(
         const efforts = userCodexEfforts(provider, id);
         return {
           id,
+          ...(provider.modelNames?.[id] && { name: provider.modelNames[id] }),
           ...(provider.contextWindows?.[id] && { contextWindow: provider.contextWindows[id] }),
           reasoning: !provider.nonReasoningModels?.includes(id),
           ...(efforts && { efforts }),
@@ -211,7 +246,7 @@ export function buildSourceLaunch(
                       context: contextWindow,
                       output: Math.min(contextWindow, OPENCODE_OUTPUT_LIMIT),
                     };
-                    return [id, { name: id, ...(limit && { limit }) }];
+                    return [id, { name: provider.modelNames?.[id] ?? id, ...(limit && { limit }) }];
                   })
                 ),
               },
@@ -240,6 +275,7 @@ export function buildSourceLaunch(
           const contextWindow = provider.contextWindows?.[id];
           return {
             id,
+            ...(provider.modelNames?.[id] && { name: provider.modelNames[id] }),
             reasoning: !provider.nonReasoningModels?.includes(id),
             ...(contextWindow && { contextWindow }),
           };

@@ -29,6 +29,7 @@ import {
   usesProviderSource,
   type ModelSourceValue,
 } from '@core/features/model-providers/api';
+import { useModelSource } from '@core/features/model-providers/api/browser/use-model-source';
 import { ModelSourceSelect } from '@core/features/model-providers/contributions/browser/model-source-select';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
 import { useModalController } from '@core/manifests/browser/modal-api';
@@ -113,7 +114,8 @@ export const CreateConversationModal = observer(function CreateConversationModal
     },
   });
   const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
-  const [source, setSource] = useState<ModelSourceValue>({});
+  const [sourceOverride, setSource] = useState<ModelSourceValue>({});
+  const source = useModelSource(providerId, sourceOverride, Boolean(connectionId));
   const providerSource = usesProviderSource(source);
   const agentSessions = importableSessions.filter((session) => session.providerId === providerId);
   const resumeSession =

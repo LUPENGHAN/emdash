@@ -8,6 +8,7 @@ import { resumeWritingSettingsContribution } from '@core/features/conversations/
 import { preferredConversationTypeSettingsContribution } from '@core/features/conversations/contributions/settings';
 import { filesSettingsContribution } from '@core/features/editor/contributions/settings';
 import { languageSettingsContribution } from '@core/features/localization/contributions/settings';
+import { gatewayModelsSettingsContribution } from '@core/features/model-gateway/contributions/settings';
 import { modelProvidersSettingsContribution } from '@core/features/model-providers/contributions/settings';
 import {
   localProjectSettingsSchemaContribution,
@@ -41,6 +42,7 @@ export const appSettingsSchemaContributions = {
   files: filesSettingsContribution,
   defaultAgent: defaultAgentSettingsContribution,
   modelProviders: modelProvidersSettingsContribution,
+  gatewayModels: gatewayModelsSettingsContribution,
   remoteAccess: remoteAccessSettingsContribution,
   agentLibrary: agentLibrarySettingsContribution,
   preferredConversationType: preferredConversationTypeSettingsContribution,

@@ -131,7 +131,7 @@ type usageSink struct {
 	bridge *bridge
 }
 
-func (s *usageSink) HandleUsage(_ context.Context, v u.Record) {
+func (s *usageSink) HandleUsage(ctx context.Context, v u.Record) {
 	if v.Source == "emdash-drain" {
 		_ = s.bridge.emit("drained", nil)
 		return
@@ -144,7 +144,11 @@ func (s *usageSink) HandleUsage(_ context.Context, v u.Record) {
 	if v.Source != "emdash:usage-known" && v.Detail.TotalTokens == 0 && v.Detail.InputTokens == 0 && v.Detail.OutputTokens == 0 {
 		status = "missing"
 	}
-	raw, err := json.Marshal(map[string]any{"id": id, "accountId": v.AuthID, "model": v.Model, "sessionId": v.SessionID, "at": v.RequestedAt.UnixMilli(), "inputTokens": v.Detail.InputTokens, "outputTokens": v.Detail.OutputTokens, "cachedTokens": v.Detail.CachedTokens, "failed": v.Failed, "status": status})
+	entry := map[string]any{"id": id, "accountId": v.AuthID, "model": v.Model, "sessionId": v.SessionID, "at": v.RequestedAt.UnixMilli(), "inputTokens": v.Detail.InputTokens, "outputTokens": v.Detail.OutputTokens, "cachedTokens": v.Detail.CachedTokens, "failed": v.Failed, "status": status}
+	for key, value := range gateway.UsageAttribution(ctx) {
+		entry[key] = value
+	}
+	raw, err := json.Marshal(entry)
 	if err == nil {
 		err = s.db.Update(func(tx *bolt.Tx) error {
 			b, e := tx.CreateBucketIfNotExists([]byte("usage"))
@@ -162,19 +166,20 @@ func (s *usageSink) HandleUsage(_ context.Context, v u.Record) {
 }
 
 type provider struct {
-	ProtocolKeys     map[string]string `json:"protocolKeys"`
-	Endpoints        map[string]string `json:"endpoints"`
-	Protocol         string            `json:"protocol"`
-	AnthropicBaseURL string            `json:"anthropicBaseUrl"`
-	AnthropicAuth    string            `json:"anthropicAuth"`
-	ContextWindows   map[string]int    `json:"contextWindows"`
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	BaseURL          string            `json:"baseUrl"`
-	APIKey           string            `json:"apiKey"`
-	Models           []string          `json:"models"`
-	ModelMap         map[string]string `json:"modelMap"`
-	Headers          map[string]string `json:"headers"`
+	Route            *gateway.ModelRoute `json:"route,omitempty"`
+	ProtocolKeys     map[string]string   `json:"protocolKeys"`
+	Endpoints        map[string]string   `json:"endpoints"`
+	Protocol         string              `json:"protocol"`
+	AnthropicBaseURL string              `json:"anthropicBaseUrl"`
+	AnthropicAuth    string              `json:"anthropicAuth"`
+	ContextWindows   map[string]int      `json:"contextWindows"`
+	ID               string              `json:"id"`
+	Name             string              `json:"name"`
+	BaseURL          string              `json:"baseUrl"`
+	APIKey           string              `json:"apiKey"`
+	Models           []string            `json:"models"`
+	ModelMap         map[string]string   `json:"modelMap"`
+	Headers          map[string]string   `json:"headers"`
 }
 
 func run() error {
@@ -259,8 +264,9 @@ func run() error {
 	store := &tokenStore{initial: input.Accounts, bridge: b}
 	sdkauth.RegisterTokenStore(store)
 	manager := a.NewManager(store, gateway.Selector{}, nil)
-	apiExecutor := gateway.ResponsesExecutor{Client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 60 * time.Second}}}
+	apiExecutor := gateway.ResponsesExecutor{Client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 60 * time.Second, DisableCompression: true}}}
 	var providersMu sync.Mutex
+	modelRoutes := &gateway.ModelRoutes{}
 	var managed []string
 	middleware := func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -270,11 +276,22 @@ func run() error {
 				return
 			}
 			id := c.GetHeader("X-Emdash-Account")
+			if strings.HasPrefix(id, "catalog:") {
+				var handled bool
+				id, handled = modelRoutes.Resolve(c, strings.TrimPrefix(id, "catalog:"))
+				if handled {
+					return
+				}
+			}
 			if id == "" {
 				c.AbortWithStatusJSON(400, gin.H{"error": "session account required"})
 				return
 			}
 			c.Set("emdash.account", id)
+			if _, ok := manager.GetByID(id); !ok {
+				c.AbortWithStatusJSON(409, gin.H{"error": "The saved provider binding is unavailable. Restore its configuration or restart the agent."})
+				return
+			}
 			if auth, ok := manager.GetByID(id); ok && auth.Provider == gateway.ResponsesProvider {
 				if auth.Disabled {
 					c.AbortWithStatus(403)
@@ -302,6 +319,18 @@ func run() error {
 		return &cliproxy.WatcherWrapper{}, nil
 	}).WithConfig(cfg).WithConfigPath(configPath).WithCoreAuthManager(manager).WithLocalManagementPassword(input.Token).WithServerOptions(api.WithMiddleware(middleware), api.WithRouterConfigurator(func(e *gin.Engine, _ *handlers.BaseAPIHandler, _ *config.Config) {
 		e.GET("/emdash/health", func(c *gin.Context) { c.JSON(200, gin.H{"protocol": protocol}) })
+		e.PUT("/emdash/model-routes", func(c *gin.Context) {
+			var entries []gateway.SessionModels
+			if err := c.ShouldBindJSON(&entries); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid model catalogs"})
+				return
+			}
+			if err := modelRoutes.Replace(entries); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+			c.Status(204)
+		})
 		e.PUT("/emdash/providers", func(c *gin.Context) {
 			var entries []provider
 			if err := c.ShouldBindJSON(&entries); err != nil {
@@ -334,7 +363,9 @@ func run() error {
 				contexts, _ := json.Marshal(p.ContextWindows)
 				endpoints, _ := json.Marshal(p.Endpoints)
 				protocolKeys, _ := json.Marshal(p.ProtocolKeys)
+				route, _ := json.Marshal(p.Route)
 				auth := &a.Auth{ID: p.ID, Provider: gateway.ResponsesProvider, Label: p.Name, Status: a.StatusActive, Attributes: map[string]string{"api_key": p.APIKey, "base_url": p.BaseURL, "emdash_models": string(modelMap), "emdash_headers": string(headers), "emdash_protocol_keys": string(protocolKeys), "emdash_endpoints": string(endpoints), "emdash_contexts": string(contexts), "emdash_protocol": p.Protocol, "anthropic_base_url": p.AnthropicBaseURL, "anthropic_auth": p.AnthropicAuth}}
+				auth.Attributes["emdash_route"] = string(route)
 				if _, err := manager.Register(c.Request.Context(), auth); err != nil {
 					c.JSON(500, gin.H{"error": "provider registration failed"})
 					return

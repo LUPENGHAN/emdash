@@ -66,9 +66,8 @@ export function GatewayProvidersPanel() {
         <div>
           <h3 className="text-sm font-medium">Local routing</h3>
           <p className="text-xs text-foreground-muted">
-            Starts automatically. Local provider selections use the router; each conversation keeps
-            its own provider. Existing direct sessions and remote connections keep their original
-            path.
+            Starts automatically. Choose a published model in a gateway conversation. Existing
+            provider-based sessions keep their saved routes.
           </p>
         </div>
         <span role="status" className="shrink-0 text-xs">
@@ -121,7 +120,8 @@ export function GatewayProvidersPanel() {
         <div className="space-y-2 text-xs">
           {routes.data?.length === 0 ? (
             <p className="text-foreground-muted">
-              No routed conversations yet. Choose a provider when creating a conversation.
+              No routed conversations yet. Choose Gateway and a published model when creating a
+              conversation.
             </p>
           ) : null}
           {routes.data?.map((route) => (
@@ -133,6 +133,17 @@ export function GatewayProvidersPanel() {
               <span className="text-foreground-muted">Local router →</span>
               <span>{route.providerName}</span>
               <code>{route.model}</code>
+              {route.upstreamModel ? (
+                <span className="text-foreground-muted">
+                  → {route.upstreamModel} · {route.inboundProtocol} → {route.upstreamProtocol} ·
+                  revision {route.revision}
+                </span>
+              ) : null}
+              {route.restartReason ? (
+                <span role="status" className="text-foreground-muted">
+                  {route.restartReason}
+                </span>
+              ) : null}
               {route.pendingName ? (
                 <span className="text-foreground-muted">→ {route.pendingName} after this turn</span>
               ) : null}
@@ -263,7 +274,15 @@ export function GatewayProvidersPanel() {
                       configured.value?.providers?.find((p) => p.id === item.accountId)?.name ??
                       item.accountId}
                   </td>
-                  <td className="p-1">{item.model}</td>
+                  <td className="p-1">
+                    <span>{item.model}</span>
+                    {item.upstreamModel ? (
+                      <span className="block text-foreground-muted">
+                        {item.upstreamModel} · {item.inboundProtocol} → {item.upstreamProtocol} ·
+                        revision {item.routeRevision}
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="p-1">
                     {item.status === 'missing' ? 'Unknown' : item.inputTokens}
                   </td>

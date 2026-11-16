@@ -1,7 +1,8 @@
 import { access, mkdtemp, rm } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { secret } from '@emdash/shared';
 import { expect, it } from 'vitest';
 import type { ModelProvider } from '@core/features/model-providers/api';
@@ -28,6 +29,155 @@ const binary = resolve(
 const built = await access(binary).then(
   () => true,
   () => false
+);
+
+it.runIf(built)(
+  'preserves HTTP payloads, metadata, errors and trailers across both gateway hops',
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'emdash-proxy-http-'));
+    const raw =
+      '{ "model": "alternate", "input": "你好", "temperature":0.2, "max_output_tokens":64, "tools":[], "future": {"enabled":true} }\n';
+    const events =
+      ': heartbeat\r\nid: 9\r\nretry: 50\r\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":1}}}\r\n\r\n: end';
+    const failure = '{"type":"error","error":{"type":"MissingSessionID","message":"send session"}}';
+    const server = createServer((req, res) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        const url = new URL(req.url!, 'http://upstream');
+        const mode = url.searchParams.get('mode');
+        expect(req.url).toBe(`/v1/responses?mode=${mode}&opaque=%2F&opaque=%2B`);
+        expect(Buffer.concat(chunks)).toEqual(mode === 'gzip' ? gzipSync(raw) : Buffer.from(raw));
+        expect(req.headers['x-feature']).toBe('one, two');
+        expect(req.headers['openai-project']).toBe('project');
+        expect(req.headers.authorization).toBe('Bearer fake-upstream-key');
+        expect(req.headers.session_id).toBe('conversation-http');
+        expect(req.headers.cookie).toBeUndefined();
+        expect(req.headers['x-hop']).toBeUndefined();
+        expect(req.headers['x-emdash-account']).toBeUndefined();
+        expect(req.trailers['x-request-proof']).toBe('request-proof');
+        const body =
+          mode === 'error'
+            ? Buffer.from(failure)
+            : mode === 'gzip'
+              ? gzipSync(events)
+              : Buffer.from(events);
+        res.writeHead(mode === 'error' ? 400 : 201, {
+          'content-type': mode === 'error' ? 'application/problem+json' : 'text/event-stream',
+          ...(mode === 'gzip' ? { 'content-encoding': 'gzip' } : {}),
+          'x-feature': ['one', 'two'],
+          'retry-after': '12',
+          'x-ratelimit-remaining': '3',
+          'set-cookie': 'provider-login=secret',
+          connection: 'x-hop-response',
+          'x-hop-response': 'private',
+          trailer: 'x-response-proof',
+        });
+        res.write(body);
+        res.addTrailers({ 'x-response-proof': 'response-proof' });
+        res.end();
+      })().catch((error: unknown) => res.destroy(error instanceof Error ? error : undefined));
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const bound = server.address();
+    if (!bound || typeof bound === 'string') throw new Error('No listener');
+    const service = new ModelGatewayService({
+      binary,
+      dataDir: dir,
+      routes: store<GatewayRoute>(),
+      ledger: store<GatewayUsage>(),
+      inventory: async () => [
+        {
+          provider: {
+            id: 'http',
+            name: 'HTTP',
+            protocol: 'openai-responses',
+            baseUrl: `http://127.0.0.1:${bound.port}/v1`,
+            models: ['m', 'alternate'],
+          },
+          apiKey: 'fake-upstream-key',
+        },
+      ],
+      secrets: {
+        getSecret: async () => null,
+        setSecret: async () => undefined,
+        deleteSecret: async () => undefined,
+      },
+      conversationIdle: async () => true,
+      conversationLocal: async () => true,
+    });
+    try {
+      await service.restore();
+      const target = await service.prepareLaunch('gateway:http', 'm', 'conversation-http');
+      for (const mode of ['stream', 'error', 'gzip']) {
+        const response = await new Promise<{
+          status?: number;
+          headers: Record<string, unknown>;
+          trailers: Record<string, unknown>;
+          body: Buffer;
+        }>((resolve, reject) => {
+          const outgoing = request(
+            target.provider.baseUrl + `/responses?mode=${mode}&opaque=%2F&opaque=%2B`,
+            {
+              method: 'POST',
+              headers: {
+                authorization: `Bearer ${target.apiKey}`,
+                'content-type': 'application/json',
+                ...(mode === 'gzip'
+                  ? { 'content-encoding': 'gzip', 'accept-encoding': 'gzip' }
+                  : {}),
+                'x-feature': ['one', 'two'],
+                'openai-project': 'project',
+                'user-agent': 'coding-agent/test',
+                cookie: 'local-login=secret',
+                connection: 'keep-alive, x-hop, session_id, x-emdash-account',
+                'x-hop': 'private',
+                session_id: 'spoofed',
+                'x-emdash-account': 'spoofed',
+                trailer: 'x-request-proof',
+              },
+            },
+            (incoming) => {
+              const chunks: Buffer[] = [];
+              incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
+              incoming.once('error', reject);
+              incoming.once('end', () =>
+                resolve({
+                  status: incoming.statusCode,
+                  headers: incoming.headers,
+                  trailers: incoming.trailers,
+                  body: Buffer.concat(chunks),
+                })
+              );
+            }
+          );
+          outgoing.once('error', reject);
+          outgoing.write(mode === 'gzip' ? gzipSync(raw) : raw);
+          outgoing.addTrailers({ 'x-request-proof': 'request-proof' });
+          outgoing.end();
+        });
+        expect(response.status).toBe(mode === 'error' ? 400 : 201);
+        expect(response.body).toEqual(
+          mode === 'error'
+            ? Buffer.from(failure)
+            : mode === 'gzip'
+              ? gzipSync(events)
+              : Buffer.from(events)
+        );
+        expect(response.headers['retry-after']).toBe('12');
+        expect(response.headers['x-ratelimit-remaining']).toBe('3');
+        expect(response.headers['x-feature']).toBe('one, two');
+        expect(response.headers['set-cookie']).toBeUndefined();
+        expect(response.headers['x-hop-response']).toBeUndefined();
+        expect(response.trailers['x-response-proof']).toBe('response-proof');
+      }
+    } finally {
+      await service.dispose();
+      await new Promise<void>((done) => server.close(() => done()));
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+  30000
 );
 
 it.runIf(built)(
