@@ -193,6 +193,14 @@ prepare dependencies needed by a clean checkout. Saved workspace and run receipt
 recovery; an unknown execution result blocks approval and is never automatically replayed. Check
 workspaces remain available for diagnosis until a safe cleanup flow is implemented.
 
+Project attachment, Host ready edges, system resume and accepted PR merge observations schedule
+baseline checks without adding platform polling. PR observations are emitted after metadata is
+saved; the project resolves the configured upstream repository and target branch before acting.
+Events during a running check schedule a following check. Default delegation also waits for a
+following check when one is already running, then saves its approved OID rather than reusing an
+earlier fetch. Directory code tasks are rejected before baseline preparation; management tasks keep
+their independent workspace path.
+
 ## Management workspace execution
 
 Workspace-registry records created through `createManagementWorktree` carry immutable
