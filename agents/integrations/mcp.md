@@ -34,3 +34,5 @@
 - Project/task/conversation discovery, task dispatch and ACP message acceptance run in the background. Mutations that retain a human confirmation, such as archive/delete, first pass background task authorization.
 - Stable request IDs deduplicate dispatch and messages. Unknown message acceptance is retained without automatic replay; terminal messages remain pending when safe delivery cannot be confirmed.
 - Result submission requests review. Only the designated main conversation can acknowledge result events or review a result through MCP; main conversation changes preserve coordinator identity and task history.
+
+- Delegated tasks may carry `depends_on`: plans remain visible without worktrees or processes until prerequisite results are accepted. Admission freezes approved result versions and commit references. Waiting plans can be cancelled through the main-agent UI or `cancel_pending_task`; cancellation never stops a running session.

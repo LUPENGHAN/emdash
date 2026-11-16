@@ -231,9 +231,10 @@ PR 操作明确携带源项目、源分支、推送远端、目标仓库和目�
 | --- | --- | --- |
 | 发现项目 | 可选查询 | 允许访问的项目 ID、host、可用状态、基线摘要 |
 | 列出任务／会话 | 可选 `project_id`、协调者或任务过滤条件 | 仅返回获准访问的数据；跨项目范围须显式表达 |
-| 创建任务 | `project_id?`、名称、任务说明、`base_branch?`、`agent?`、`connection?`、`supplier_id?`、`model?`、`effort?`、`request_id` | 返回稳定任务 ID、会话 ID、准备状态和解析后的有效配置 |
+| 创建任务 | `project_id?`、名称、任务说明、`base_branch?`、`depends_on?`、`agent?`、`connection?`、`supplier_id?`、`model?`、`effort?`、`request_id` | 返回稳定任务 ID、会话 ID、准备状态和解析后的有效配置 |
 | 发消息 | `conversation_id`、文本、`request_id` | 验证目标身份和权限，返回已排队／已投递状态 |
 | 获取任务状态 | `task_id` | 运行状态、等待原因、负责关系、最新结果版本 |
+| 取消等待任务 | `task_id` | 当前负责的主 Agent 取消尚未获准启动的任务，保留记录；不停止运行中的任务 |
 | 提交结果 | `task_id`、摘要、提交引用、验证证据、未解决项、`request_id` | 幂等保存结果并通知负责的主 Agent |
 | 读取管理文档 | 协调者 ID、相对路径、可选版本 | 校验权限与路径，返回内容和版本 |
 | PR 操作 | 源任务、源分支、目标仓库与分支 | 复用 PR 服务，返回明确目标和链接 |

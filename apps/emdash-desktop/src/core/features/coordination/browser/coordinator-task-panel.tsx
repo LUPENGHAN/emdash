@@ -116,6 +116,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
                 <article key={task.taskId} className="mb-3 rounded-lg border border-border p-3">
                   <Button
                     variant="ghost"
+                    disabled={task.taskCreated === false}
                     onClick={() =>
                       navigate(taskViewDef({ projectId: task.projectId, taskId: task.taskId }))
                     }
@@ -125,6 +126,30 @@ const CoordinatorContent = observer(function CoordinatorContent({
                   <span className="ml-2 text-xs text-foreground-muted">
                     {getProjectStore(task.projectId)?.name ?? 'Project unavailable'} · {task.state}
                   </span>
+                  {task.taskCreated === false && task.state === 'blocked' && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        void getCoordinationClient()
+                          .then((client) =>
+                            client.cancelPendingTask({ id: record.id, taskId: task.taskId })
+                          )
+                          .then(() => queryClient.invalidateQueries({ queryKey: key }))
+                          .catch((error) =>
+                            toast.error('Could not cancel task', { description: String(error) })
+                          );
+                      }}
+                    >
+                      Cancel waiting task
+                    </Button>
+                  )}
+                  {task.blockedReason && <p className="mt-2 text-sm">{task.blockedReason}</p>}
+                  {!!task.dependsOn?.length && (
+                    <p className="mt-2 text-xs text-foreground-muted">
+                      Prerequisites: {task.dependsOn.join(', ')}
+                    </p>
+                  )}
                   {task.result && (
                     <div className="mt-2 space-y-2 text-sm">
                       <p className="whitespace-pre-wrap">{task.result.summary}</p>

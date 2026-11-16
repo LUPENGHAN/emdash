@@ -243,7 +243,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'handoff',
     {
       description:
-        "Hand this conversation's work to another agent: it starts with the original ask, your last reply, the git state and a transcript path. Use when your quota is nearly out or another agent suits the work better. Task creation and startup run in the background. Reuse request_id when retrying.",
+        "Hand this conversation's work to another agent: it starts with the original ask, your last reply, the git state and a transcript path. Use when your quota is nearly out or another agent suits the work better. Task creation and startup run in the background. Reuse request_id when retrying. With depends_on, returns a blocked plan without a worktree until prerequisite results are accepted.",
       inputSchema: {
         agent: agentSchema,
         model: z.string().optional(),
@@ -272,6 +272,12 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       description:
         "Create a git worktree through Emdash, as a task in the target project: use this instead of `git worktree add` (or a worktree tool of your own), so the worktree lands where Emdash keeps them and the user can see and review its code in Emdash. Returns the worktree's path and branch; work there yourself, or pass `prompt` to start an agent in it. Task creation and startup run in the background. Reuse request_id when retrying.",
       inputSchema: {
+        depends_on: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            'Prerequisite task IDs; resources and agent start wait until their results are accepted'
+          ),
         project_grants: z
           .array(z.string().min(1))
           .optional()
@@ -322,6 +328,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       name,
       project_id,
       project_grants,
+      depends_on,
       request_id,
       base_branch,
       prompt,
@@ -337,6 +344,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         name,
         ...(project_id && { projectId: project_id }),
         ...(project_grants && { projectGrants: project_grants }),
+        ...(depends_on && { dependsOn: depends_on }),
         ...(request_id && { requestId: request_id }),
         ...(base_branch && { baseBranch: base_branch }),
         ...(prompt && { prompt, ...(agent && { providerId: agent }) }),
@@ -357,6 +365,16 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     },
     ({ task_id, expected_owner }) =>
       dispatch({ kind: 'take_over_task', taskId: task_id, expectedOwner: expected_owner })
+  );
+
+  server.registerTool(
+    'cancel_pending_task',
+    {
+      description:
+        'Main agent: cancel a task waiting for prerequisites, before startup has been admitted. Keeps its history; does not stop a running task.',
+      inputSchema: { task_id: z.string().min(1) },
+    },
+    ({ task_id }) => dispatch({ kind: 'cancel_pending_task', taskId: task_id })
   );
 
   server.registerTool(

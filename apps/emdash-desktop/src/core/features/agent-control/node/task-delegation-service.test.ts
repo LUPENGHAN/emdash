@@ -234,3 +234,92 @@ describe('durable task delegation', () => {
     expect(test.deps.start).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('waiting delegation recovery', () => {
+  it('persists planned IDs without resources and starts once after the prerequisite is accepted', async () => {
+    const test = setup();
+    let waiting = true;
+    test.deps.getBlocker = vi.fn(async () => (waiting ? 'Waiting for review' : null));
+    test.deps.onCreated = vi.fn(async () => {});
+    const action = { ...request, dependsOn: ['a', 'b'] };
+    const planned = JSON.parse((await test.service.dispatch(caller, action)).text);
+    expect(planned).toMatchObject({
+      status: 'blocked',
+      planned_branch: 'implement',
+      waiting_for: 'Waiting for review',
+    });
+    expect(planned.path).toBeUndefined();
+    expect(test.deps.create).not.toHaveBeenCalled();
+    expect(test.deps.activate).not.toHaveBeenCalled();
+    expect(test.deps.start).not.toHaveBeenCalled();
+    const restarted = new TaskDelegationService(test.deps);
+    const report = vi.fn();
+    await restarted.resumePending(report);
+    expect(test.deps.start).not.toHaveBeenCalled();
+    expect(
+      JSON.parse((await restarted.dispatch(caller, { ...action, dependsOn: ['b', 'a', 'a'] })).text)
+        .task_id
+    ).toBe(planned.task_id);
+    await expect(restarted.dispatch(caller, { ...action, dependsOn: ['a'] })).rejects.toThrow(
+      'different task parameters'
+    );
+    waiting = false;
+    await Promise.all([restarted.resumePending(report), restarted.resumePending(report)]);
+    const running = JSON.parse((await restarted.dispatch(caller, action)).text);
+    expect(running).toMatchObject({
+      task_id: planned.task_id,
+      conversation_id: planned.conversation_id,
+      status: 'agent_started',
+      configuration: { effort: 'high' },
+    });
+    expect(test.deps.create).toHaveBeenCalledOnce();
+    expect(test.deps.start).toHaveBeenCalledOnce();
+    expect(test.deps.prepare).toHaveBeenCalledOnce();
+    expect(report).not.toHaveBeenCalled();
+  });
+  it('resumes with the current owner without rekeying the request or changing its frozen configuration', async () => {
+    const test = setup();
+    let waiting = true;
+    test.deps.getBlocker = async () => (waiting ? 'Waiting' : null);
+    const first = JSON.parse(
+      (await test.service.dispatch(caller, { ...request, dependsOn: ['a'] })).text
+    );
+    const originalKeys = [...test.records.keys()];
+    const current = { ...caller, taskId: 'other-main', conversationId: 'replacement-main' };
+    test.deps.recoveryContext = async () => ({ caller: current, projectGrants: [] });
+    test.deps.onPrepared = vi.fn(async () => {});
+    waiting = false;
+    const report = vi.fn();
+    await new TaskDelegationService(test.deps).resumePending(report);
+    expect(test.deps.authorize).toHaveBeenLastCalledWith(
+      current,
+      'project',
+      expect.objectContaining({ dependsOn: ['a'] })
+    );
+    expect(test.deps.onPrepared).toHaveBeenCalledWith(
+      current,
+      expect.objectContaining({ id: first.task_id }),
+      expect.anything()
+    );
+    expect([...test.records.keys()]).toEqual(originalKeys);
+    expect([...test.records.values()][0].caller).toEqual(caller);
+    expect(test.deps.prepare).toHaveBeenCalledOnce();
+    expect(test.deps.start).toHaveBeenCalledOnce();
+    expect(report).not.toHaveBeenCalled();
+  });
+  it('rejects future delegation versions before resources can be replayed', async () => {
+    const test = setup();
+    await test.service.dispatch(caller, request);
+    const [key, value] = [...test.records.entries()][0];
+    test.records.set(key, {
+      ...value,
+      version: '99',
+      phase: 'prepared',
+    } as unknown as DelegationRecord);
+    const report = vi.fn();
+    await new TaskDelegationService(test.deps).resumePending(report);
+    expect(report).toHaveBeenCalledOnce();
+    expect(test.deps.create).toHaveBeenCalledOnce();
+    expect(test.deps.start).toHaveBeenCalledOnce();
+  });
+});

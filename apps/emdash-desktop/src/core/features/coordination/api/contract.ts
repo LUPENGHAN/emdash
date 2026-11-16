@@ -11,6 +11,10 @@ import {
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  cancelPendingTask: procedure({
+    input: z.object({ id: z.string(), taskId: z.string() }),
+    output: z.custom<Coordinator>(),
+  }),
   inspectTask: procedure({
     input: z.object({ id: z.string(), taskId: z.string() }),
     output: z.custom<TakeoverPreview>(),

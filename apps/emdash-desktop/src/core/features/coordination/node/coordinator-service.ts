@@ -8,6 +8,7 @@ import {
   agentSelectionSchema,
   coordinatorRecord,
   type AgentSelection,
+  type AssignedTask,
   type Coordinator,
   type CoordinationEvent,
   type TaskResult,
@@ -39,12 +40,13 @@ type Dependencies = {
   setTaskStatus(taskId: string, status: 'review' | 'done' | 'in_progress'): Promise<void>;
   deliver(coordinator: Coordinator, eventId: string, text: string): Promise<void>;
   emit(event: CoordinationEvent): void;
+  onSchedulingChange?(): void;
   reportError?(error: unknown, id: string): void;
 };
 
 const instruction = `You are this project's main agent. Coordinate existing Emdash tasks through MCP.
 Delegate implementation into task worktrees; keep code changes on their own branches.
-Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort.
+Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort. Use depends_on for tasks that must wait for approved prerequisite results.
 Workers must call submit_task_result with commits, checks and unresolved issues. Inspect their changes and evidence before reviewing a result.
 When a result notification arrives, call acknowledge_task_results with its event IDs before taking follow-up actions.
 Agent startup, an idle process and a created PR do not prove task completion. Do not automatically merge branches or PRs.`;
@@ -72,7 +74,7 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '3',
+        version: '4',
         id,
         kind: 'project',
         name: 'Main agent',
@@ -128,7 +130,7 @@ export class CoordinatorService {
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '3',
+        version: '4',
         id,
         name,
         kind: 'cross-project',
@@ -152,11 +154,13 @@ export class CoordinatorService {
   async instructionsForTask(taskId: string): Promise<string | undefined> {
     const records = await this.list();
     if (records.some((record) => record.taskId === taskId)) return instruction;
-    if (records.some((record) => record.tasks[taskId]))
+    const assignment = records.find((record) => record.tasks[taskId])?.tasks[taskId];
+    if (assignment)
       return `You are executing delegated Emdash task ${taskId}.
 Keep code on this task's branch. Before finishing, call submit_task_result with this task ID,
 a stable request_id, a summary, commit references, checks actually run and unresolved issues.
-Do not mark the task complete yourself. The responsible main agent reviews your result.`;
+Do not mark the task complete yourself. The responsible main agent reviews your result.
+Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ?? [])}. These references do not install changes into this repository; consume the specified commits or versions explicitly.`;
     return undefined;
   }
   private parseRecord(value: unknown): Coordinator {
@@ -254,6 +258,7 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
       }
       const next = { ...record, ...patch };
       await this.save(next);
+      if (patch.projectAccess) this.deps.onSchedulingChange?.();
       return next;
     });
   }
@@ -287,6 +292,7 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
       })
     );
     void this.deliverPending(id).catch((error) => this.deps.reportError?.(error, id));
+    this.deps.onSchedulingChange?.();
     return record;
   }
   async defaultsForCaller(caller: AgentCaller): Promise<AgentSelection> {
@@ -359,7 +365,8 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
   async registerDelegation(
     caller: AgentCaller,
     params: CreateTaskParams,
-    grantedProjectIds: string[] = []
+    grantedProjectIds: string[] = [],
+    dependsOn: string[] = []
   ): Promise<void> {
     await this.assertDelegationGrants(caller, grantedProjectIds);
     await this.ownership.runExclusive('ownership', async () => {
@@ -367,7 +374,11 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
       const record = records.find(
         (entry) => entry.taskId === caller.taskId || entry.tasks[caller.taskId]
       );
-      if (!record) return;
+      if (!record) {
+        if (dependsOn.length)
+          throw new Error('Task dependencies require a responsible main agent.');
+        return;
+      }
       const owner = records.find((entry) => entry.tasks[params.id]);
       if (owner && owner.id !== record.id)
         throw new Error(
@@ -388,11 +399,16 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
           )
         )
           throw new Error('Worker project grants exceed the caller permissions.');
+        await this.validateDependencies(caller, params.id, dependsOn, records);
         latest.tasks[params.id] = {
           taskId: params.id,
           projectId: params.projectId,
           name: params.taskConfig.name,
-          state: 'assigned',
+          state: dependsOn.length ? 'blocked' : 'assigned',
+          dependsOn: [...new Set(dependsOn)],
+          taskCreated: false,
+          createdAt: Date.now(),
+          ...(dependsOn.length && { blockedReason: 'Waiting for dependency review.' }),
           resultVersion: 0,
           submissions: {},
           ...(grantedProjectIds.length && { grantedProjectIds: [...new Set(grantedProjectIds)] }),
@@ -400,6 +416,180 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
         await this.save(latest);
       });
     });
+  }
+  private async validateDependencies(
+    caller: AgentCaller,
+    taskId: string,
+    dependsOn: string[],
+    records: Coordinator[]
+  ): Promise<void> {
+    const tasks = new Map(
+      records.flatMap((record) =>
+        Object.values(record.tasks).map((task) => [task.taskId, task] as const)
+      )
+    );
+    for (const id of dependsOn) {
+      const task = tasks.get(id);
+      if (!task || id === taskId)
+        throw new Error('Choose an existing coordinated task as a prerequisite.');
+      if (!mayAccessTask(caller, records, { id, projectId: task.projectId }, 'read'))
+        throw new Error('Dependency task permission denied.');
+      const visit = (next: string, seen: Set<string>): boolean => {
+        if (next === taskId) return true;
+        if (seen.has(next)) return false;
+        seen.add(next);
+        return (tasks.get(next)?.dependsOn ?? []).some((id) => visit(id, seen));
+      };
+      if (visit(id, new Set())) throw new Error('Task dependencies would form a cycle.');
+    }
+  }
+  async plannedTasks(projectId: string) {
+    return (await this.list()).flatMap((record) =>
+      Object.values(record.tasks).filter(
+        (task) => task.projectId === projectId && task.taskCreated === false
+      )
+    );
+  }
+  async dependencyGate(taskId: string): Promise<string | null> {
+    return this.ownership.runExclusive('ownership', async () => {
+      const snapshot = await this.list();
+      const owner = snapshot.find((record) => record.tasks[taskId]);
+      const assignment = owner?.tasks[taskId];
+      if (assignment?.state === 'cancelled') return 'This task was cancelled before startup.';
+      if (!owner || !assignment?.dependsOn?.length || assignment.dependencyResults) return null;
+      const dependencies = assignment.dependsOn;
+      const ids = [
+        owner.id,
+        ...snapshot
+          .filter((record) => dependencies.some((id) => record.tasks[id]))
+          .map((record) => record.id),
+      ];
+      return this.underLocks(this.locks, ids, async () => {
+        const records = await this.list();
+        const latest = await this.get(owner.id);
+        const task = latest.tasks[taskId];
+        if (!task) throw new Error('The planned task is unavailable.');
+        if (task.dependencyResults) return null;
+        const actor: AgentCaller = {
+          taskId: latest.taskId,
+          projectId: latest.projectId,
+          conversationId: latest.conversationId,
+          providerId: latest.primary.agent ?? 'coordinator',
+          title: latest.name,
+          cwd: null,
+        };
+        const snapshots: NonNullable<AssignedTask['dependencyResults']> = [];
+        for (const id of dependencies) {
+          const predecessor = records.find((record) => record.tasks[id])?.tasks[id];
+          if (
+            predecessor &&
+            !mayAccessTask(actor, records, { id, projectId: predecessor.projectId }, 'read')
+          ) {
+            const reason = `Dependency ${id} is outside the responsible main agent's project scope.`;
+            task.state = 'blocked';
+            task.blockedReason = reason;
+            await this.save(latest);
+            return reason;
+          }
+          const live = predecessor ? await this.deps.getTask(id) : null;
+          if (
+            !predecessor ||
+            !live ||
+            predecessor.state !== 'done' ||
+            !predecessor.review?.accepted ||
+            !predecessor.result
+          ) {
+            const reason =
+              !predecessor || !live
+                ? `Dependency ${id} is unavailable.`
+                : `Waiting for review of ${predecessor.name}.`;
+            if (task.state !== 'blocked' || task.blockedReason !== reason) {
+              task.state = 'blocked';
+              task.blockedReason = reason;
+              await this.save(latest);
+            }
+            return reason;
+          }
+          snapshots.push({
+            taskId: id,
+            projectId: predecessor.projectId,
+            version: predecessor.resultVersion,
+            commits: predecessor.result.commits,
+          });
+        }
+        task.dependencyResults = snapshots;
+        task.state = 'assigned';
+        task.blockedReason = undefined;
+        await this.save(latest);
+        return null;
+      });
+    });
+  }
+  async cancelPendingTask(id: string, taskId: string, caller?: AgentCaller): Promise<Coordinator> {
+    return this.ownership.runExclusive('ownership', () =>
+      this.locks.runExclusive(id, async () => {
+        const record = await this.get(id);
+        if (
+          caller &&
+          (caller.taskId !== record.taskId || caller.conversationId !== record.conversationId)
+        )
+          throw new Error('Only the responsible main conversation can cancel this planned task.');
+        const task = record.tasks[taskId];
+        if (!task || task.taskCreated !== false)
+          throw new Error('Choose a waiting task that has not started.');
+        if (task.state === 'cancelled') return record;
+        if (task.state !== 'blocked' || task.dependencyResults)
+          throw new Error('Task startup has been admitted. Stop it through its task workspace.');
+        task.state = 'cancelled';
+        task.blockedReason = 'Cancelled before startup.';
+        await this.save(record);
+        return record;
+      })
+    );
+  }
+  async markTaskCreated(taskId: string): Promise<void> {
+    await this.ownership.runExclusive('ownership', async () => {
+      const owner = (await this.list()).find((record) => record.tasks[taskId]);
+      if (!owner) return;
+      await this.locks.runExclusive(owner.id, async () => {
+        const latest = await this.get(owner.id);
+        const task = latest.tasks[taskId];
+        if (!task || task.taskCreated === true) return;
+        task.taskCreated = true;
+        await this.save(latest);
+      });
+    });
+  }
+  private async codeTask(taskId: string, records: Coordinator[]) {
+    const live = await this.deps.getTask(taskId);
+    if (live) return live;
+    const planned = records.find((record) => record.tasks[taskId])?.tasks[taskId];
+    return planned?.taskCreated === false
+      ? { id: taskId, projectId: planned.projectId, name: planned.name, type: 'task' as const }
+      : null;
+  }
+  async recoveryContext(
+    taskId: string,
+    fallback: AgentCaller
+  ): Promise<{ caller: AgentCaller; projectGrants?: string[] }> {
+    const records = await this.accessRecords(fallback, taskId);
+    const owner = records.find((record) => record.tasks[taskId]);
+    if (!owner) return { caller: fallback };
+    await this.deps.assertProjectAvailable(owner.projectId);
+    const caller: AgentCaller = {
+      taskId: owner.taskId,
+      conversationId: owner.conversationId,
+      projectId: owner.projectId,
+      providerId: owner.primary.agent ?? fallback.providerId,
+      title: owner.name,
+      cwd: null,
+    };
+    return {
+      caller,
+      projectGrants: (owner.tasks[taskId].grantedProjectIds ?? []).filter((id) =>
+        mayAccessProject(caller, { kind: 'main', coordinator: owner }, id, 'delegate')
+      ),
+    };
   }
   private underLocks<T>(mutex: KeyedMutex, ids: string[], action: () => Promise<T>): Promise<T> {
     const keys = [...new Set(ids)].sort();
@@ -430,7 +620,7 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
             (caller.taskId !== next.taskId || caller.conversationId !== next.conversationId)
           )
             throw new Error('Only the designated main conversation can take over a task.');
-          const task = await this.deps.getTask(taskId);
+          const task = await this.codeTask(taskId, records);
           if (!task || task.archivedAt)
             throw new Error('The target task is unavailable or archived.');
           if (task.type !== 'task' || records.some((entry) => entry.taskId === taskId))
@@ -508,11 +698,12 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
       )
     );
     void this.deliverPending(id).catch((error) => this.deps.reportError?.(error, id));
+    this.deps.onSchedulingChange?.();
     return record;
   }
   async inspectTask(id: string, taskId: string): Promise<TakeoverPreview> {
     const record = await this.get(id);
-    const task = await this.deps.getTask(taskId);
+    const task = await this.codeTask(taskId, await this.list());
     if (!task || task.archivedAt || task.type !== 'task')
       throw new Error('Choose an available code task.');
     await this.deps.assertProjectAvailable(task.projectId);
@@ -560,6 +751,8 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
         throw new Error('Only the responsible main conversation can submit another task result.');
       const task = latest.tasks[taskId];
       if (!task) throw new Error('The task owner changed. Retry submitting the result.');
+      if (task.taskCreated === false)
+        throw new Error('The task has not been created. Wait for its prerequisites.');
       const previous = task.submissions[requestId];
       if (previous && previous.fingerprint !== fingerprint)
         throw new Error('This result request_id has different content.');
@@ -625,6 +818,7 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
       task.review = { note, accepted, at: Date.now() };
       await this.save(record);
       await this.deps.setTaskStatus(taskId, accepted ? 'done' : 'in_progress');
+      this.deps.onSchedulingChange?.();
       return record;
     });
   }
@@ -637,7 +831,8 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
           for (const event of latest.events) if (event.state === 'queued') event.state = 'pending';
           await this.save(latest);
           for (const task of Object.values(latest.tasks)) {
-            if (task.state === 'assigned') continue;
+            if (task.state === 'assigned' || task.state === 'blocked' || task.state === 'cancelled')
+              continue;
             const status = task.state === 'changes_requested' ? 'in_progress' : task.state;
             try {
               await this.deps.setTaskStatus(task.taskId, status);

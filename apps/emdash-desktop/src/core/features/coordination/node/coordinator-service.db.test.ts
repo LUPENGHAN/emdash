@@ -67,6 +67,7 @@ it('restores coordinator identity, defaults, result snapshots and acknowledgment
     },
     ['other']
   );
+  await first.markTaskCreated('worker');
   const receipt = await first.submit({ ...main, taskId: 'worker' }, 'worker', 'submission', {
     summary: 'Implemented',
     commits: ['abc'],
@@ -147,6 +148,7 @@ it('rolls back both owners on a SQLite write failure and transfers results after
     taskConfig: { version: '1', name: 'Worker' },
     workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
   });
+  await service.markTaskCreated('worker');
   const receipt = await service.submit({ ...caller, taskId: 'worker' }, 'worker', 'result', {
     summary: 'Ready for review',
     commits: ['abc'],
@@ -173,4 +175,67 @@ it('rolls back both owners on a SQLite write failure and transfers results after
   expect((await restarted.getByTask(source.taskId))?.events).toEqual([]);
   expect((await restarted.getByTask(target.taskId))?.events[0].id).toBe(receipt.eventId);
   expect((await restarted.getByTask(target.taskId))?.tasks.worker.resultVersion).toBe(1);
+});
+
+it('retains waiting plans, approved prerequisite snapshots and cancellation in SQLite', async () => {
+  const make = () =>
+    new CoordinatorService({
+      store: new AppDbKeyValueStore<Record<string, Coordinator>>(fixture.db, 'coordinators'),
+      getTask: async (id) =>
+        id === 'parent' ? { id, projectId: 'project', name: 'Parent', type: 'task' } : null,
+      getConversation: async () => null,
+      resources: () => {
+        throw new Error('No runtime should be allocated');
+      },
+      defaultAgent: async () => 'claude',
+      resolveSelection: createSelectionResolver({
+        defaultAgent: async () => 'claude',
+        getAgentSettings: async () => undefined,
+        getProviders: async () => [],
+        getModels: async () => [],
+      }),
+      assertProjectAvailable: async () => {},
+      setTaskStatus: async () => {},
+      emit: () => {},
+      deliver: async () => {},
+    });
+  const service = make();
+  const main = await service.ensureProject('project');
+  const caller: AgentCaller = {
+    taskId: main.taskId,
+    conversationId: main.conversationId,
+    projectId: 'project',
+    providerId: 'claude',
+    title: 'Main',
+    cwd: null,
+  };
+  const plan = (id: string) => ({
+    id,
+    projectId: 'project',
+    taskConfig: { version: '1' as const, name: id },
+    workspaceConfig: {
+      version: '2' as const,
+      git: { kind: 'none' as const },
+      workspace: { kind: 'new-worktree' as const },
+    },
+  });
+  await service.registerDelegation(caller, plan('parent'));
+  await service.markTaskCreated('parent');
+  await service.registerDelegation(caller, plan('child'), [], ['parent']);
+  await service.registerDelegation(caller, plan('cancelled'), [], ['parent']);
+  await service.cancelPendingTask(main.id, 'cancelled');
+  expect(await make().dependencyGate('child')).toContain('Waiting for review');
+  await make().submit({ ...caller, taskId: 'parent' }, 'parent', 'result', {
+    summary: 'Checked',
+    commits: ['abc'],
+    checks: [],
+    unresolved: [],
+    prUrls: [],
+  });
+  await make().review(main.id, 'parent', true, 'Verified', 1);
+  expect(await make().dependencyGate('child')).toBeNull();
+  expect((await make().getTaskCoordination('child'))?.assignment?.dependencyResults).toEqual([
+    { taskId: 'parent', projectId: 'project', version: 1, commits: ['abc'] },
+  ]);
+  expect(await make().dependencyGate('cancelled')).toContain('cancelled');
 });

@@ -101,6 +101,7 @@ async function assigned(test: ReturnType<typeof setup>) {
     taskConfig: { version: '1', name: 'Implementation' },
     workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
   });
+  await test.service.markTaskCreated('worker-task');
   return record;
 }
 
@@ -429,11 +430,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('3');
+    expect((await test.service.ensureProject('project')).version).toBe('4');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('3');
+    expect(test.records.get(record.id)?.version).toBe('4');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -652,4 +653,186 @@ describe('main agent coordination', () => {
     });
     expect((await test.service.getByTask(record.taskId))?.primary.agent).toBe('claude');
   });
+});
+
+describe('prerequisite result scheduling', () => {
+  const plan = (id: string, projectId = 'project') => ({
+    id,
+    projectId,
+    taskConfig: { version: '1' as const, name: id },
+    workspaceConfig: {
+      version: '2' as const,
+      git: { kind: 'none' as const },
+      workspace: { kind: 'new-worktree' as const },
+    },
+  });
+  it('holds resources until review and freezes the accepted result version across recovery', async () => {
+    const test = setup();
+    const main = await assigned(test);
+    await test.service.registerDelegation(caller(main), plan('dependent'), [], ['worker-task']);
+    expect(await test.service.plannedTasks('project')).toMatchObject([
+      { taskId: 'dependent', taskCreated: false },
+    ]);
+    expect(await test.service.dependencyGate('dependent')).toContain('Waiting for review');
+    await expect(
+      test.service.submit(caller(main, 'dependent'), 'dependent', 'premature', result)
+    ).rejects.toThrow('not been created');
+    await test.service.submit(caller(main, 'worker-task'), 'worker-task', 'first', result);
+    expect(await test.service.dependencyGate('dependent')).toContain('Waiting for review');
+    await test.service.review(main.id, 'worker-task', false, 'Fix tests', 1);
+    expect(await test.service.dependencyGate('dependent')).toContain('Waiting for review');
+    await test.service.submit(caller(main, 'worker-task'), 'worker-task', 'second', {
+      ...result,
+      commits: ['verified'],
+    });
+    await test.service.review(main.id, 'worker-task', true, 'Checked', 2);
+    expect(await new CoordinatorService(test.deps).dependencyGate('dependent')).toBeNull();
+    expect((await test.service.getTaskCoordination('dependent'))?.assignment).toMatchObject({
+      state: 'assigned',
+      taskCreated: false,
+      dependencyResults: [
+        { taskId: 'worker-task', projectId: 'project', version: 2, commits: ['verified'] },
+      ],
+    });
+    expect(await test.service.instructionsForTask('dependent')).toContain('verified');
+    await test.service.submit(caller(main, 'worker-task'), 'worker-task', 'third', {
+      ...result,
+      commits: ['another'],
+    });
+    expect(await test.service.dependencyGate('dependent')).toBeNull();
+    expect(
+      (await test.service.getTaskCoordination('dependent'))?.assignment?.dependencyResults?.[0]
+        .version
+    ).toBe(2);
+    expect(test.resources.create).not.toHaveBeenCalled();
+    expect(test.resources.start).not.toHaveBeenCalled();
+  });
+  it('rejects unknown, self, cyclic and unauthorized prerequisite references', async () => {
+    const test = setup();
+    const main = await assigned(test);
+    await expect(
+      test.service.registerDelegation(caller(main), plan('missing'), [], ['unknown'])
+    ).rejects.toThrow('existing coordinated task');
+    await expect(
+      test.service.registerDelegation(caller(main), plan('self'), [], ['self'])
+    ).rejects.toThrow('existing coordinated task');
+    const stored = test.records.get(main.id)!;
+    stored.tasks['worker-task'].dependsOn = ['cyclic'];
+    test.records.set(main.id, stored);
+    await expect(
+      test.service.registerDelegation(caller(main), plan('cyclic'), [], ['worker-task'])
+    ).rejects.toThrow('cycle');
+    const other = await test.service.ensureProject('other');
+    await test.service.registerDelegation(caller(other), plan('foreign', 'other'));
+    await test.service.update(main.id, {
+      projectAccess: { mode: 'selected', projectIds: ['project'] },
+    });
+    await expect(
+      test.service.registerDelegation(caller(main), plan('unauthorized'), [], ['foreign'])
+    ).rejects.toThrow('permission denied');
+    await expect(
+      test.service.registerDelegation(
+        { ...caller(main), taskId: 'ordinary', conversationId: 'ordinary' },
+        plan('ordinary'),
+        [],
+        ['worker-task']
+      )
+    ).rejects.toThrow('responsible main agent');
+    expect((await test.service.getByTask(main.taskId))?.tasks.missing).toBeUndefined();
+  });
+  it('does not release a dependent task when the approved prerequisite was deleted', async () => {
+    const test = setup();
+    const main = await assigned(test);
+    await test.service.registerDelegation(caller(main), plan('dependent'), [], ['worker-task']);
+    await test.service.submit(caller(main, 'worker-task'), 'worker-task', 'result', result);
+    await test.service.review(main.id, 'worker-task', true, 'Checked', 1);
+    test.deps.getTask.mockResolvedValue(null);
+    expect(await test.service.dependencyGate('dependent')).toContain('unavailable');
+    expect((await test.service.getTaskCoordination('dependent'))?.assignment?.state).toBe(
+      'blocked'
+    );
+  });
+  it('transfers a planned task without runtime resources and recovers using its current owner', async () => {
+    const test = setup();
+    const main = await assigned(test);
+    await test.service.registerDelegation(
+      caller(main),
+      plan('dependent'),
+      ['project'],
+      ['worker-task']
+    );
+    const target = await test.service.ensureProject('target');
+    test.deps.getTask.mockImplementation(async (id) =>
+      id === 'worker-task' ? { id, projectId: 'project', name: id, type: 'task' } : null
+    );
+    expect((await test.service.inspectTask(target.id, 'dependent')).ownerId).toBe(main.id);
+    await test.service.takeOverTask(target.id, 'dependent', main.id, caller(target));
+    const restored = new CoordinatorService(test.deps);
+    expect(await restored.recoveryContext('dependent', caller(main))).toMatchObject({
+      caller: { conversationId: target.conversationId, taskId: target.taskId },
+      projectGrants: ['project'],
+    });
+    await restored.markTaskCreated('dependent');
+    expect((await restored.getTaskCoordination('dependent'))?.assignment?.taskCreated).toBe(true);
+    expect(test.resources.create).not.toHaveBeenCalled();
+  });
+});
+
+it('keeps cancelled plans blocked after review, restart and repeated cancellation', async () => {
+  const test = setup();
+  const main = await assigned(test);
+  await test.service.registerDelegation(
+    caller(main),
+    {
+      id: 'cancelled',
+      projectId: 'project',
+      taskConfig: { version: '1', name: 'Cancel me' },
+      workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+    },
+    [],
+    ['worker-task']
+  );
+  await expect(
+    test.service.cancelPendingTask(main.id, 'cancelled', {
+      ...caller(main),
+      conversationId: 'stale-main',
+    })
+  ).rejects.toThrow('responsible main');
+  await test.service.cancelPendingTask(main.id, 'cancelled', caller(main));
+  await test.service.cancelPendingTask(main.id, 'cancelled', caller(main));
+  await test.service.submit(caller(main, 'worker-task'), 'worker-task', 'result', result);
+  await test.service.review(main.id, 'worker-task', true, 'Checked', 1);
+  expect(await new CoordinatorService(test.deps).dependencyGate('cancelled')).toContain(
+    'cancelled'
+  );
+  expect((await test.service.getTaskCoordination('cancelled'))?.assignment?.state).toBe(
+    'cancelled'
+  );
+  expect(test.resources.create).not.toHaveBeenCalled();
+});
+
+it('does not admit a planned dependency after the main agent project scope narrows', async () => {
+  const test = setup();
+  const main = await assigned(test);
+  const other = await test.service.ensureProject('other');
+  await test.service.registerDelegation(
+    caller(other),
+    {
+      id: 'dependent',
+      projectId: 'other',
+      taskConfig: { version: '1', name: 'Dependent' },
+      workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+    },
+    [],
+    ['worker-task']
+  );
+  await test.service.submit(caller(main, 'worker-task'), 'worker-task', 'result', result);
+  await test.service.review(main.id, 'worker-task', true, 'Checked', 1);
+  await test.service.update(other.id, {
+    projectAccess: { mode: 'selected', projectIds: ['other'] },
+  });
+  expect(await test.service.dependencyGate('dependent')).toContain('outside');
+  await test.service.update(other.id, { projectAccess: { mode: 'all' } });
+  expect(await test.service.dependencyGate('dependent')).toBeNull();
+  await expect(test.service.cancelPendingTask(other.id, 'dependent')).rejects.toThrow('admitted');
 });

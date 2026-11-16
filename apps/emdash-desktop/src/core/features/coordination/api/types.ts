@@ -35,13 +35,18 @@ export type AssignedTask = {
   taskId: string;
   projectId: string;
   name: string;
-  state: 'assigned' | 'review' | 'changes_requested' | 'done';
+  state: 'assigned' | 'blocked' | 'cancelled' | 'review' | 'changes_requested' | 'done';
   result?: TaskResult;
   resultVersion: number;
   submissions: Record<string, { version: number; fingerprint: string }>;
   review?: { note: string; accepted: boolean; at: number };
   grantedProjectIds?: string[];
   ownershipHistory?: { from: string | null; to: string; at: number }[];
+  dependsOn?: string[];
+  blockedReason?: string;
+  taskCreated?: boolean;
+  createdAt?: number;
+  dependencyResults?: { taskId: string; projectId: string; version: number; commits: string[] }[];
 };
 export type ResultEvent = {
   id: string;
@@ -52,7 +57,7 @@ export type ResultEvent = {
   error?: string;
 };
 export type Coordinator = {
-  version: '3';
+  version: '4';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -120,25 +125,56 @@ const coordinatorV1 = z.object({
   creationFingerprint: z.string().optional(),
 });
 
+const coordinatorV3 = coordinatorV1.extend({
+  version: z.literal('3'),
+  tasks: z.record(
+    z.string(),
+    coordinatorV1.shape.tasks.valueType.extend({
+      ownershipHistory: z
+        .array(z.object({ from: z.string().nullable(), to: z.string(), at: z.number() }))
+        .optional(),
+    })
+  ),
+});
 export const coordinatorRecord = defineVersionedSchema()
   .initial('1', coordinatorV1)
   .version('2', coordinatorV1.extend({ version: z.literal('2') }), (record) => ({
     ...record,
     version: '2' as const,
   }))
+  .version('3', coordinatorV3, (record) => ({ ...record, version: '3' as const }))
   .version(
-    '3',
-    coordinatorV1.extend({
-      version: z.literal('3'),
+    '4',
+    coordinatorV3.extend({
+      version: z.literal('4'),
       tasks: z.record(
         z.string(),
-        coordinatorV1.shape.tasks.valueType.extend({
-          ownershipHistory: z
-            .array(z.object({ from: z.string().nullable(), to: z.string(), at: z.number() }))
+        coordinatorV3.shape.tasks.valueType.extend({
+          state: z.enum([
+            'assigned',
+            'blocked',
+            'cancelled',
+            'review',
+            'changes_requested',
+            'done',
+          ]),
+          dependsOn: z.array(z.string()).optional(),
+          blockedReason: z.string().optional(),
+          taskCreated: z.boolean().optional(),
+          createdAt: z.number().optional(),
+          dependencyResults: z
+            .array(
+              z.object({
+                taskId: z.string(),
+                projectId: z.string(),
+                version: z.number().int().positive(),
+                commits: z.array(z.string()),
+              })
+            )
             .optional(),
         })
       ),
     }),
-    (record) => ({ ...record, version: '3' as const })
+    (record) => ({ ...record, version: '4' as const })
   )
   .build();

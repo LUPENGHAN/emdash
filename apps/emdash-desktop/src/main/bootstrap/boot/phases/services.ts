@@ -29,6 +29,7 @@ import { createBackendTaskDelegation } from '@core/features/agent-control/node/b
 import {
   BackgroundAgentControl,
   type AgentMessageRecord,
+  type AgentTaskSnapshot,
 } from '@core/features/agent-control/node/background-agent-control';
 import { agentControlEvents } from '@core/features/agent-control/node/event-host';
 import { resolveAgentCaller } from '@core/features/agent-control/node/resolve-caller';
@@ -740,9 +741,23 @@ export async function bootServices(
           'acknowledge_task_results',
           'review_task_result',
           'take_over_task',
+          'cancel_pending_task',
         ].includes(action.kind)
       )
         await assertActiveAgentCaller(caller);
+      if (action.kind === 'cancel_pending_task') {
+        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        const main = await coordinationRuntime.service.getByTask(caller.taskId);
+        if (!main) throw new Error('Only a main agent can cancel a planned task.');
+        const record = await coordinationRuntime.service.cancelPendingTask(
+          main.id,
+          action.taskId,
+          caller
+        );
+        return {
+          text: JSON.stringify({ task_id: action.taskId, assignment: record.tasks[action.taskId] }),
+        };
+      }
       if (action.kind === 'take_over_task') {
         if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
         const main = await coordinationRuntime.service.getByTask(caller.taskId);
@@ -1152,7 +1167,33 @@ export async function bootServices(
         throw new Error(`Agent startup failed: ${JSON.stringify(started.error)}`);
     },
     onPrepared: async (caller, params, request) => {
-      await coordinationRuntime.service?.registerDelegation(caller, params, request.projectGrants);
+      await coordinationRuntime.service?.registerDelegation(
+        caller,
+        params,
+        request.projectGrants,
+        request.dependsOn
+      );
+    },
+    getBlocker: async (taskId) => {
+      if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+      return coordinationRuntime.service.dependencyGate(taskId);
+    },
+    onCreated: async (taskId) => coordinationRuntime.service?.markTaskCreated(taskId),
+    recoveryContext: async (params, fallback) => {
+      if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+      const context = await coordinationRuntime.service.recoveryContext(params.id, fallback);
+      const actual = await resolveAgentCaller(
+        db,
+        async (workspaceId) => (await workspaceIdentity.resolve(workspaceId))?.path ?? null,
+        context.caller.conversationId
+      );
+      if (
+        !actual ||
+        actual.taskId !== context.caller.taskId ||
+        actual.projectId !== context.caller.projectId
+      )
+        throw new Error('The responsible main conversation is unavailable.');
+      return { ...context, caller: actual };
     },
     getDelegationDefaults: async (caller) => {
       const defaults = await coordinationRuntime.service?.defaultsForCaller(caller);
@@ -1187,7 +1228,31 @@ export async function bootServices(
         throw new Error('The target project is unavailable or archived.');
     },
   });
+  let delegationDrain: Promise<void> | undefined;
+  let delegationDrainRequested = false;
+  let delegationDrainStopped = false;
+  const scheduleDelegations = () => {
+    delegationDrainRequested = true;
+    if (delegationDrain || delegationDrainStopped) return;
+    const report = (error: unknown) =>
+      log.warn('Could not recover task delegation', { error: String(error) });
+    delegationDrain = Promise.resolve()
+      .then(async () => {
+        while (delegationDrainRequested && !delegationDrainStopped) {
+          delegationDrainRequested = false;
+          await taskDelegation.service?.resumePending(report);
+        }
+      })
+      .catch(report)
+      .finally(() => {
+        delegationDrain = undefined;
+      });
+  };
+  appScope.add(() => {
+    delegationDrainStopped = true;
+  });
   const coordinatorService = new CoordinatorService({
+    onSchedulingChange: scheduleDelegations,
     store: new AppDbKeyValueStore<Record<string, Coordinator>>(db, 'coordinators'),
     resources: () => {
       if (!taskDelegation.service) throw new Error('Task resources are still starting.');
@@ -1280,6 +1345,24 @@ export async function bootServices(
       branchObservedAt: workspace?.observedAt ?? null,
     };
   };
+  const plannedTaskSnapshots = async (projectId: string): Promise<AgentTaskSnapshot[]> =>
+    (await coordinatorService.plannedTasks(projectId)).map((task) => {
+      const timestamp = new Date(task.createdAt ?? 0).toISOString();
+      return {
+        id: task.taskId,
+        projectId,
+        name: task.name,
+        type: 'task',
+        status: 'todo',
+        isPinned: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        statusChangedAt: timestamp,
+        prs: [],
+        conversations: {},
+        workspacePending: true,
+      };
+    });
   coordinationRuntime.background = new BackgroundAgentControl({
     access: coordinatorService,
     assertCaller: assertActiveAgentCaller,
@@ -1312,19 +1395,26 @@ export async function bootServices(
       if (!project) throw new Error(`Unknown project: ${projectId}`);
       if (project.archivedAt) throw new Error(`The target project is archived: ${projectId}`);
     },
-    tasks: async (projectId) =>
-      (await taskService.getTasks(projectId)).map((task) => ({
+    tasks: async (projectId) => {
+      const live = (await taskService.getTasks(projectId)).map((task) => ({
         ...task,
         ...taskBranchFacts(task.workspaceId),
-      })),
+      }));
+      const planned = await plannedTaskSnapshots(projectId);
+      return [...live, ...planned.filter((task) => !live.some((entry) => entry.id === task.id))];
+    },
     task: async (id) => {
       const [row] = await db
         .select()
         .from(tasks)
         .where(and(eq(tasks.id, id), isNull(tasks.deletedAt)))
         .limit(1);
-      return row
-        ? { ...mapTaskRowToTask(row), ...taskBranchFacts(row.workspaceId ?? undefined) }
+      if (row)
+        return { ...mapTaskRowToTask(row), ...taskBranchFacts(row.workspaceId ?? undefined) };
+      const assignment = (await coordinatorService.getTaskCoordination(id))?.assignment;
+      return assignment?.taskCreated === false
+        ? ((await plannedTaskSnapshots(assignment.projectId)).find((task) => task.id === id) ??
+            null)
         : null;
     },
     conversations: (projectId) => getConversationsForProject(db, projectId),
@@ -1409,11 +1499,7 @@ export async function bootServices(
       await coordinatorService.recover();
     })
     .catch((error) => log.warn('Could not restore main agents', { error: String(error) }));
-  const delegationRecoveryTimer = setTimeout(() => {
-    const report = (error: unknown) =>
-      log.warn('Could not recover task delegation', { error: String(error) });
-    void taskDelegation.service?.resumePending(report).catch(report);
-  }, 1000);
+  const delegationRecoveryTimer = setTimeout(scheduleDelegations, 1000);
   appScope.add(() => clearTimeout(delegationRecoveryTimer));
   const searchService = createSearchService({
     db,

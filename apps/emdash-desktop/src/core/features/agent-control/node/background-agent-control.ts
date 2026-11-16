@@ -25,7 +25,11 @@ const messageRecordSchema = z.object({
   reason: z.string().optional(),
 });
 export type AgentMessageRecord = z.infer<typeof messageRecordSchema>;
-export type AgentTaskSnapshot = Task & { branch?: string | null; branchObservedAt?: number | null };
+export type AgentTaskSnapshot = Task & {
+  branch?: string | null;
+  branchObservedAt?: number | null;
+  workspacePending?: boolean;
+};
 type Dependencies = {
   access: BackgroundAgentAccess;
   assertCaller(caller: AgentCaller): Promise<void>;

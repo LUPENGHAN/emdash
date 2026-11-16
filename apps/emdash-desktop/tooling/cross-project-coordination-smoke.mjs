@@ -640,6 +640,53 @@ try {
     },
   });
   assert.equal(expandedGrant.isError, true);
+  const dependentRequest = {
+    project_id: coordinator.projectId,
+    name: 'Consume approved SDK result',
+    request_id: 'dependent-work',
+    depends_on: [grantedTask.task_id],
+    agent: 'claude',
+    ui: 'terminal',
+    prompt: 'Consume only the approved prerequisite version',
+    connection: 'official',
+    effort: 'high',
+  };
+  const dependentPlan = JSON.parse(await call(independentClient, 'create_task', dependentRequest));
+  assert.equal(dependentPlan.status, 'blocked');
+  assert.equal(dependentPlan.path, undefined);
+  assert.ok(dependentPlan.waiting_for.includes('Waiting for review'));
+  assert.ok(!(await readdir(capture)).includes(dependentPlan.conversation_id + '.json'));
+  const plannedStatus = JSON.parse(
+    await call(independentClient, 'get_task_status', { task_id: dependentPlan.task_id })
+  );
+  assert.equal(plannedStatus.task.workspacePending, true);
+  assert.equal(plannedStatus.coordination.assignment.taskCreated, false);
+  const plannedList = JSON.parse(
+    await call(independentClient, 'list_tasks', { project_id: coordinator.projectId })
+  );
+  assert.ok(plannedList.some((task) => task.id === dependentPlan.task_id && task.workspacePending));
+  const branchesBeforeReview = await git('worktree', 'list', '--porcelain');
+  assert.ok(!branchesBeforeReview.includes('refs/heads/' + dependentPlan.planned_branch));
+  assert.equal(
+    JSON.parse(await call(independentClient, 'create_task', dependentRequest)).task_id,
+    dependentPlan.task_id
+  );
+  const cancelledPlan = JSON.parse(
+    await call(independentClient, 'create_task', {
+      ...dependentRequest,
+      name: 'Cancelled waiting consumer',
+      request_id: 'cancelled-dependent',
+    })
+  );
+  await page.getByTestId('coordinator-tasks-tab').click();
+  const cancelArticle = page.locator('article').filter({ hasText: 'Cancelled waiting consumer' });
+  await cancelArticle.getByRole('button', { name: 'Cancel waiting task', exact: true }).click();
+  await cancelArticle.getByText('Cancelled before startup.', { exact: true }).waitFor();
+  const cancelledStatus = JSON.parse(
+    await call(independentClient, 'get_task_status', { task_id: cancelledPlan.task_id })
+  );
+  assert.equal(cancelledStatus.coordination.assignment.state, 'cancelled');
+  await call(independentClient, 'cancel_pending_task', { task_id: cancelledPlan.task_id });
   const independentResult = JSON.parse(
     await call(grantedWorkerClient, 'submit_task_result', {
       task_id: grantedTask.task_id,
@@ -657,12 +704,53 @@ try {
   await call(independentClient, 'acknowledge_task_results', {
     event_ids: [independentResult.eventId],
   });
+  const beforeDependencyReview = JSON.parse(
+    await call(independentClient, 'get_task_status', { task_id: dependentPlan.task_id })
+  );
+  assert.equal(beforeDependencyReview.coordination.assignment.state, 'blocked');
+  assert.ok(!(await readdir(capture)).includes(dependentPlan.conversation_id + '.json'));
   await call(independentClient, 'review_task_result', {
     task_id: grantedTask.task_id,
     result_version: 1,
     accepted: true,
     note: 'Inspected independent main task result',
   });
+  const dependentCapture = await waitForCapture(dependentPlan.conversation_id);
+  assert.equal(dependentCapture.effort, 'high');
+  assert.equal(dependentCapture.cliEffort, 'high');
+  assert.ok(!(await readdir(capture)).includes(cancelledPlan.conversation_id + '.json'));
+  assert.equal(
+    JSON.parse(
+      await call(independentClient, 'create_task', {
+        ...dependentRequest,
+        name: 'Cancelled waiting consumer',
+        request_id: 'cancelled-dependent',
+      })
+    ).status,
+    'blocked'
+  );
+  const dependentStarted = JSON.parse(
+    await call(independentClient, 'create_task', dependentRequest)
+  );
+  assert.equal(dependentStarted.status, 'agent_started');
+  assert.equal(dependentStarted.task_id, dependentPlan.task_id);
+  assert.equal(dependentStarted.conversation_id, dependentPlan.conversation_id);
+  const dependencySnapshot = JSON.parse(
+    await call(independentClient, 'get_task_status', { task_id: dependentPlan.task_id })
+  );
+  assert.equal(dependencySnapshot.coordination.assignment.taskCreated, true);
+  assert.deepEqual(dependencySnapshot.coordination.assignment.dependencyResults, [
+    {
+      taskId: grantedTask.task_id,
+      projectId: relatedProjectId,
+      version: 1,
+      commits: [relatedBaseline],
+    },
+  ]);
+  const startedHead = (
+    await promisify(execFile)('git', ['rev-parse', 'HEAD'], { cwd: dependentStarted.path })
+  ).stdout.trim();
+  assert.equal(startedHead, baseline);
   await page.getByTestId('coordinator-tasks-tab').click();
   await page.getByText('Independent coordination result', { exact: true }).waitFor();
   await page.screenshot({ path: join(profile, 'independent-main-result.png') });
@@ -776,11 +864,16 @@ try {
           'task explicitly taken over through the UI without changing its branch or worker',
           'pending result moved to the new owner and old owner could not acknowledge or review it',
           'independent main requires an explicit code target project',
+          'dependent task visible without worktree or process until prerequisite result review',
+          'waiting task cancelled through the UI remains unstarted after prerequisite acceptance',
+          'accepted cross-repository prerequisite automatically released the same task with frozen high effort',
+          'approved prerequisite result version and commits persisted in the dependent task',
           'explicit worker grant allowed cross-repository delegation and capped child grants',
           'main conversation switched through the UI without losing task history',
           'unconfirmed result redirected and old main consumption authority revoked',
         ],
         relatedProjectId,
+        dependentTaskId: dependentPlan.task_id,
         crossTaskId: cross.task_id,
         workerCommit,
         taskId: created.task_id,

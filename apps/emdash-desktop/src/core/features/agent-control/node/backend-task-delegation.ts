@@ -17,7 +17,11 @@ import { AppDbKeyValueStore } from '@core/services/app-db/node/key-value-store';
 import { tasks } from '@core/services/app-db/node/schema';
 import type { AgentCaller, AgentControlAction } from '../api';
 import { delegationModelSelection } from '../api/model-selection';
-import { TaskDelegationService, type DelegationRecord } from './task-delegation-service';
+import {
+  TaskDelegationService,
+  type DelegationRecord,
+  type TaskDelegationDependencies,
+} from './task-delegation-service';
 
 type Dependencies = {
   db: AppDb;
@@ -33,6 +37,9 @@ type Dependencies = {
     targetProjectId: string,
     request?: Extract<AgentControlAction, { kind: 'create_task' }>
   ): Promise<void>;
+  getBlocker?(taskId: string): Promise<string | null>;
+  onCreated?(taskId: string): Promise<void>;
+  recoveryContext?: TaskDelegationDependencies['recoveryContext'];
   onPrepared?(
     caller: AgentCaller,
     params: CreateTaskParams,
@@ -86,6 +93,9 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
     store: new AppDbKeyValueStore<Record<string, DelegationRecord>>(deps.db, 'agent-delegations'),
     authorize: deps.authorize,
     onPrepared: deps.onPrepared,
+    getBlocker: deps.getBlocker,
+    onCreated: deps.onCreated,
+    recoveryContext: deps.recoveryContext,
     prepare: async (caller, request, ids): Promise<CreateTaskParams> => {
       const defaults =
         ids.role === 'coordination' ? undefined : await deps.getDelegationDefaults?.(caller);
