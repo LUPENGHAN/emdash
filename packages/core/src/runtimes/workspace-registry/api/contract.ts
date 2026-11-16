@@ -9,6 +9,7 @@ import {
   deleteWorkspaceErrorSchema,
   deleteWorktreeErrorSchema,
   measureUsageErrorSchema,
+  removeUnchangedWorktreeErrorSchema,
   runScriptErrorSchema,
   updateWorktreeErrorSchema,
   workspaceNotFoundErrorSchema,
@@ -28,6 +29,7 @@ import {
   patchPersonalProjectConfigInputSchema,
   projectConfigStateSchema,
   refreshWorkspacesInputSchema,
+  removeUnchangedWorktreeInputSchema,
   retryStepInputSchema,
   runScriptInputSchema,
   updateWorktreeInputSchema,
@@ -138,6 +140,14 @@ export const workspaceRegistryContract = defineContract({
     input: createWorktreeInputSchema,
     data: workspaceRecordSchema,
     error: createWorktreeErrorSchema,
+    callTimeoutMs: 0,
+  }),
+
+  /** Keeps the branch and refuses local files, active work, or changed creation identity. */
+  removeUnchangedWorktree: fallible({
+    input: removeUnchangedWorktreeInputSchema,
+    data: z.void(),
+    error: removeUnchangedWorktreeErrorSchema,
     callTimeoutMs: 0,
   }),
 

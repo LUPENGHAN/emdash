@@ -28,6 +28,17 @@ export const deleteWorktreeInputSchema = z.object({
 });
 export type DeleteWorktreeInput = z.infer<typeof deleteWorktreeInputSchema>;
 
+/** Remove a never-activated, unchanged checkout without running lifecycle scripts. */
+export const removeUnchangedWorktreeInputSchema = z.object({
+  workspaceId: z.string().min(1),
+  repositoryId: z.string().min(1),
+  repositoryPath: z.string().min(1),
+  path: z.string().min(1),
+  branch: z.string().min(1),
+  oid: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/),
+});
+export type RemoveUnchangedWorktreeInput = z.infer<typeof removeUnchangedWorktreeInputSchema>;
+
 /**
  * Fast-forward one worktree's checkout to `sourceRef` fetched from `remote` (spec:
  * pr-workspace-model staleness, manual update). Instruction-as-input: the host never

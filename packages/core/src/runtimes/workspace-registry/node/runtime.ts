@@ -34,6 +34,7 @@ import type {
   DeleteWorkspaceError,
   DeleteWorktreeError,
   MeasureUsageError,
+  RemoveUnchangedWorktreeError,
   RunScriptError,
   UpdateWorktreeError,
   WorkspaceNotFoundError,
@@ -53,6 +54,7 @@ import type {
   PatchPersonalProjectConfigInput,
   ProjectConfigState,
   RefreshWorkspacesInput,
+  RemoveUnchangedWorktreeInput,
   RetryStepInput,
   RunScriptInput,
   UpdateWorktreeInput,
@@ -97,6 +99,11 @@ import {
   resolveProjectConfig,
   type ProjectConfigHostDefaults,
 } from './project-config';
+import {
+  cleanupRefusal,
+  removeUnchangedWorktree,
+  worktreePathExists,
+} from './remove-unchanged-worktree';
 import { listRepositoryWorktrees, observeWorkspaceGit } from './scan/observe-git';
 import { RegistryScanner, type RegistryScannerDeps, type ScanLanding } from './scan/scanner';
 import type { ScanRequest, ScanTarget } from './scan/scheduler';
@@ -597,6 +604,70 @@ export class WorkspaceRegistryRuntime {
         );
       }
       return await this.removeWorkspace({ workspaceId: input.workspaceId });
+    });
+  }
+
+  /** Strict removal for disposable checks; never deactivates or deletes their branch. */
+  removeUnchangedWorktree(
+    input: RemoveUnchangedWorktreeInput
+  ): Promise<Result<void, RemoveUnchangedWorktreeError>> {
+    return this.workspaceClaims.runExclusive(input.workspaceId, async () => {
+      const record = this.store.get(input.workspaceId);
+      if (!record) {
+        return (await worktreePathExists(input.path))
+          ? cleanupRefusal(
+              'identity-changed',
+              'An unregistered path still exists; it was preserved.'
+            )
+          : ok(undefined);
+      }
+      const parent = this.store.get(input.repositoryId);
+      if (
+        record.kind !== 'worktree' ||
+        record.origin !== 'registered' ||
+        record.path !== input.path ||
+        record.parentId !== input.repositoryId ||
+        parent?.kind !== 'repository' ||
+        parent.path !== input.repositoryPath ||
+        record.creation?.requestedPath !== input.path ||
+        record.creation.branch !== input.branch ||
+        record.creation.baseRef !== input.oid ||
+        record.creation.purpose !== undefined ||
+        record.creation.gitSetup !== undefined ||
+        record.lastCreateOutcome?.status !== 'succeeded'
+      )
+        return cleanupRefusal('identity-changed', 'The saved worktree creation identity changed.');
+      if (
+        record.lastActivatedAt !== null ||
+        this.overlays.get(record.id)?.activation ||
+        record.lifecycle?.steps.some(
+          (step) => step.status === 'pending' || step.status === 'running'
+        )
+      )
+        return cleanupRefusal(
+          'workspace-active',
+          'The workspace was activated or has unfinished lifecycle work.'
+        );
+      const release = this.muteScans(record.id);
+      const releaseParent = this.muteScans(parent.id);
+      try {
+        const result = await removeUnchangedWorktree(input, this.gitContext, async () => {
+          if (!this.scriptsClient) throw new Error('Cannot inspect scripts on this Host.');
+          const runs = await this.scriptsClient.runs
+            .state({ workspacePath: input.path }, 'current')
+            .snapshot();
+          return (
+            Object.values(runs.data).some((run) => run.status === 'running') ||
+            (await this.countSessions(input.path)) > 0
+          );
+        });
+        if (!result.success) return result;
+        await this.removeWorkspace({ workspaceId: input.workspaceId });
+        return ok(undefined);
+      } finally {
+        releaseParent();
+        release();
+      }
     });
   }
 
@@ -1453,7 +1524,11 @@ export class WorkspaceRegistryRuntime {
    * the record, the standard 5-minute timeout for everything but run. The run is
    * detached — this verb returns once it started; observation writes its steps.
    */
-  async runScript(input: RunScriptInput): Promise<Result<void, RunScriptError>> {
+  runScript(input: RunScriptInput): Promise<Result<void, RunScriptError>> {
+    return this.workspaceClaims.runExclusive(input.workspaceId, () => this.runScriptLocked(input));
+  }
+
+  private async runScriptLocked(input: RunScriptInput): Promise<Result<void, RunScriptError>> {
     const record = this.store.get(input.workspaceId);
     if (!record) {
       return err({ type: 'workspace-not-found', workspaceId: input.workspaceId });

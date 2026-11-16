@@ -62,6 +62,20 @@ export const deleteWorktreeErrorSchema = z.discriminatedUnion('type', [
 ]);
 export type DeleteWorktreeError = z.infer<typeof deleteWorktreeErrorSchema>;
 
+export const removeUnchangedWorktreeErrorSchema = z.object({
+  type: z.literal('cleanup-refused'),
+  reason: z.enum([
+    'identity-changed',
+    'workspace-active',
+    'worktree-dirty',
+    'unsafe-path',
+    'inspection-failed',
+    'removal-failed',
+  ]),
+  message: z.string(),
+});
+export type RemoveUnchangedWorktreeError = z.infer<typeof removeUnchangedWorktreeErrorSchema>;
+
 export const activateWorkspaceErrorSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('workspace-not-found'), workspaceId: z.string() }),
   /** The record survives as observedStatus 'missing' but there is nothing to prepare. */
