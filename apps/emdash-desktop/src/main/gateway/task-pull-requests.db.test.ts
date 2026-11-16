@@ -218,6 +218,7 @@ process.exit(result.status ?? 1);
     caller,
     input,
     git,
+    hostGit,
     checkout,
     fork,
     oid,
@@ -295,6 +296,25 @@ it('retains a background project attachment for prepare and restores it for save
   expect((await restored.run(t.input.taskId, t.input.requestId, t.caller)).phase).toBe('complete');
   expect(t.track).toHaveBeenCalledTimes(2);
   expect(t.ensure).toHaveBeenCalledOnce();
+});
+
+it('prepares the actual commit when the live HEAD projection has not observed an agent commit', async () => {
+  const t = await setup();
+  const selector = { checkout: hostPathFromNative(t.checkout) };
+  const state = t.hostGit.checkout.model.state(selector, 'head');
+  const before = await state.snapshot();
+  await writeFile(join(t.checkout, 'committed-by-agent.ts'), 'export const changed = true;');
+  await exec('git', ['add', '.'], { cwd: t.checkout });
+  await exec('git', ['commit', '-m', 'Agent commit'], { cwd: t.checkout });
+  const oid = (await exec('git', ['rev-parse', 'HEAD'], { cwd: t.checkout })).stdout.trim();
+  // This fixture has no filesystem watch notifications, so the projection stays cached.
+  expect((await state.snapshot()).data).toEqual(before.data);
+  const service = t.service();
+  expect((await service.prepare(t.input, t.caller)).plan.oid).toBe(oid);
+  expect((await service.run(t.input.taskId, t.input.requestId, t.caller)).phase).toBe('complete');
+  expect(
+    (await exec('git', ['--git-dir', t.fork, 'rev-parse', 'refs/heads/feat/sdk'])).stdout.trim()
+  ).toBe(oid);
 });
 
 it('creates from the pinned remote commit without publishing local commits, including later local work', async () => {

@@ -629,7 +629,10 @@ export class PullRequestService {
             : 'Matching pull requests could not be checked completely. No pull request was created.',
         });
       const candidate = candidates[0];
-      if (candidate) return ok(candidate);
+      if (candidate) {
+        await this.refreshAfterMutation(repositoryUrl, candidate.number, signal);
+        return ok(candidate);
+      }
       signal.throwIfAborted();
       return this.createPullRequest({ ...input, repositoryUrl, headRepositoryUrl }, signal);
     });

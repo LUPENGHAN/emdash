@@ -2,12 +2,14 @@ import { isDeepEqual } from '@emdash/shared';
 import { createScope, type Scope } from '@emdash/shared/concurrency';
 import { observe, remote, type RemoteModel } from '@emdash/wire/state';
 import { reaction, toJS } from 'mobx';
+import { getSourceControlClient } from '@core/features/source-control/api/browser/client';
 import type { GitRepositoryStore } from '@core/features/source-control/api/browser/stores/git-repository-store';
 import { getTaskPrAssociationStore } from '@core/features/source-control/api/browser/stores/task-source-control-selectors';
 import { gitCheckoutStoreToken } from '@core/features/source-control/contributions/browser/workspace-store-tokens';
 import type { TaskManagerStore } from '@core/features/tasks/api/browser/stores/task-manager';
 import type { TaskStore } from '@core/features/tasks/api/browser/stores/task-store';
 import { workspaceRegistry } from '@core/features/workspaces/api/browser/stores/workspace-registry';
+import { log } from '@core/primitives/logging/browser/logger';
 import type { Task, WorkspaceObservedPrFacts } from '@core/primitives/tasks/api';
 import { pullRequestsContract, selectCurrentPr } from '@core/services/pull-requests/api';
 import {
@@ -16,6 +18,7 @@ import {
 } from '@core/services/pull-requests/api/client';
 import { derivePrAssociation } from './derive-pr-association';
 import { derivePrCheckoutDrift, type PrDriftObservedFacts } from './derive-pr-checkout-drift';
+import { savedTaskPrAssociations } from './saved-task-pr-associations';
 
 export class TaskPrSyncCoordinator {
   private readonly scope = createScope({ label: 'task-pr-sync-coordinator' });
@@ -26,6 +29,7 @@ export class TaskPrSyncCoordinator {
   private readonly reloadGenerations = new WeakMap<TaskStore, number>();
   /** The PR cache's last-sync stamp for the watched repository ("as of last sync"). */
   private lastSyncedAt: number | null = null;
+  private readonly receiptTargets = new Map<string, { syncedAt: number | null }>();
   private readonly disposeGitHeadReaction: () => void;
   private readonly disposeRepositoryReaction: () => void;
 
@@ -33,6 +37,9 @@ export class TaskPrSyncCoordinator {
     private readonly tasks: TaskManagerStore,
     private readonly repository: GitRepositoryStore
   ) {
+    void this.watchSavedRequests().catch((error) =>
+      log.warn('Could not subscribe to task PR receipts', { error: String(error) })
+    );
     // Association and drift inputs: the checkout store's live head plus the mirror's
     // association facts (breadcrumb, upstream, branch) and fallback git facts —
     // observation changes must re-derive even when the local checkout never moved
@@ -87,6 +94,20 @@ export class TaskPrSyncCoordinator {
     }
   }
 
+  private async watchSavedRequests(): Promise<void> {
+    const client = await getSourceControlClient();
+    if (this.scope.disposed) return;
+    const unsubscribe = await client.taskPullRequests.events.subscribe(undefined, {
+      onEvent: ({ taskId }) => {
+        const task = this.tasks.tasks.get(taskId);
+        if (task && isRegistered(task)) void this.reloadTask(task);
+      },
+      onGap: () => this.reloadAll(),
+    });
+    this.scope.add(unsubscribe);
+    if (!this.scope.disposed) this.reloadAll();
+  }
+
   /**
    * Re-derives the task's PR association from observed facts, validated against the
    * PR cache on this read (pr-workspace-model spec, Association): breadcrumb, then
@@ -104,9 +125,7 @@ export class TaskPrSyncCoordinator {
     this.reloadGenerations.set(store, reloadGeneration);
     const repositoryUrl = this.repository.pullRequestRepositoryUrl;
     const fallbackHeadRepositoryUrl = this.repository.canonicalPushRepositoryUrl;
-    // Missing repository context prevents a refresh; it does not prove that the
-    // task's last-known PR stopped existing.
-    if (!repositoryUrl) return;
+    // Saved receipts keep their target even when the Project base remote is unavailable.
     const association = getTaskPrAssociationStore(store);
     const inputs = associationInputs(store);
     // With no checkout evidence, there is nothing authoritative that can supersede
@@ -116,29 +135,86 @@ export class TaskPrSyncCoordinator {
     let prs: Task['prs'];
     try {
       const client = await getPullRequestsRuntimeClient();
-      prs = await derivePrAssociation({
-        observed: inputs.observed,
-        checkoutBranch: inputs.checkoutBranch,
-        fallbackHeadRepositoryUrl,
-        lookups: cacheLookups(client, repositoryUrl),
-      });
+      const sourceControl = await getSourceControlClient();
+      const records = await sourceControl.taskPullRequests.list({ taskId: store.data.id });
+      const branch = inputs.checkoutBranch ?? inputs.observed?.branch;
+      const workspaceId = inputs.workspaceId;
+      prs =
+        branch && workspaceId
+          ? await savedTaskPrAssociations({
+              taskId: store.data.id,
+              workspaceId,
+              branch,
+              records,
+              byUrl: async (target, url) => {
+                this.watchReceiptTarget(target);
+                const result = await client.getPullRequestByUrl({ repositoryUrl: target, url });
+                if (!result.success)
+                  throw new Error(`PR cache lookup failed: ${result.error.type}`);
+                return result.data.pr;
+              },
+            })
+          : [];
+      if (!prs.length) {
+        if (!repositoryUrl) return;
+        prs = await derivePrAssociation({
+          observed: inputs.observed,
+          checkoutBranch: inputs.checkoutBranch,
+          fallbackHeadRepositoryUrl,
+          lookups: cacheLookups(client, repositoryUrl),
+        });
+      }
     } catch {
       return;
     }
     // Drop stale results: another reload owns the write when the inputs moved.
-    if (this.reloadGenerations.get(store) !== reloadGeneration) return;
+    if (this.scope.disposed || this.reloadGenerations.get(store) !== reloadGeneration) return;
+    if (this.tasks.tasks.get(store.data.id) !== store) return;
     if (this.repository.pullRequestRepositoryUrl !== repositoryUrl) return;
     if (this.repository.canonicalPushRepositoryUrl !== fallbackHeadRepositoryUrl) return;
     if (!isDeepEqual(associationInputs(store), inputs)) return;
     // Drift is derived against the PR the panel renders (selectCurrentPr).
+    const currentPr = selectCurrentPr(prs) ?? null;
     const drift = derivePrCheckoutDrift({
       checkout: inputs.checkout,
       observed: inputs.observed,
-      pr: selectCurrentPr(prs) ?? null,
-      syncedAt: this.lastSyncedAt,
+      pr: currentPr,
+      syncedAt:
+        currentPr?.repositoryUrl === repositoryUrl
+          ? this.lastSyncedAt
+          : (this.receiptTargets.get(currentPr?.repositoryUrl ?? '')?.syncedAt ?? null),
     });
     if (!isRegistered(store)) return;
     association.setAssociation(prs, drift);
+  }
+
+  /** Explicit PR targets can differ from the Project base remote. */
+  private watchReceiptTarget(repositoryUrl: string): void {
+    if (repositoryUrl === this.repository.pullRequestRepositoryUrl) return;
+    if (this.receiptTargets.has(repositoryUrl) || this.scope.disposed) return;
+    const target = { syncedAt: null as number | null };
+    this.receiptTargets.set(repositoryUrl, target);
+    const scope = this.scope.child(`receipt-sync:${repositoryUrl}`);
+    void this.getSyncRemote()
+      .then((syncRemote) => {
+        if (scope.disposed) return;
+        let revision: number | undefined;
+        observe(
+          syncRemote({ repositoryUrl }).states.state,
+          ({ value }) => {
+            if (value?.lastSyncedAt !== undefined) target.syncedAt = value.lastSyncedAt;
+            if (value?.revision === undefined || value.revision === revision) return;
+            revision = value.revision;
+            this.reloadAll();
+          },
+          { scope }
+        );
+      })
+      .catch((error) => {
+        this.receiptTargets.delete(repositoryUrl);
+        void scope.dispose();
+        log.warn('Could not subscribe to saved PR target', { error: String(error) });
+      });
   }
 
   private async watchSync(repositoryUrl: string | null): Promise<void> {
@@ -191,6 +267,7 @@ function isRegistered(store: TaskStore): boolean {
 }
 
 type AssociationInputs = {
+  workspaceId: string | null;
   checkout: PrDriftObservedFacts | null;
   observed: WorkspaceObservedPrFacts | null;
   checkoutBranch: string | null;
@@ -199,6 +276,7 @@ type AssociationInputs = {
 function associationInputs(store: TaskStore): AssociationInputs {
   const git = getTaskGitCheckoutStore(store);
   return {
+    workspaceId: store.workspaceId ?? (store.data as Task).workspaceId ?? null,
     checkout: toJS(git?.headTrackingSnapshot ?? null),
     observed: toJS(store.workspaceObservedPr),
     checkoutBranch: git?.branchName ?? null,

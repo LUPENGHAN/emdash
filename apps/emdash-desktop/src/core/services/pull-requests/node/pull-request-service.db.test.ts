@@ -117,6 +117,12 @@ describe('PullRequestService ownership', () => {
       expect.any(AbortSignal)
     );
     expect(h.engine.createPullRequest).not.toHaveBeenCalled();
+    expect(h.context.fetchPullRequest).toHaveBeenCalledWith(
+      7,
+      expect.any(AbortSignal),
+      expect.anything()
+    );
+    expect(h.store.getPullRequestByUrl(existing.url)?.url).toBe(existing.url);
   });
   it.each([true, false])(
     'refuses ambiguous or incomplete matching inventory (%s)',

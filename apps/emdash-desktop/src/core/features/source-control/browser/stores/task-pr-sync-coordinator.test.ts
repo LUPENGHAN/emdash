@@ -1,5 +1,5 @@
 import { observable, runInAction } from 'mobx';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GitRepositoryStore } from '@core/features/source-control/api/browser/stores/git-repository-store';
 import { getTaskPrAssociationStore } from '@core/features/source-control/api/browser/stores/task-source-control-selectors';
 import type { TaskManagerStore } from '@core/features/tasks/api/browser/stores/task-manager';
@@ -9,6 +9,14 @@ import { TaskPrSyncCoordinator } from './task-pr-sync-coordinator';
 
 const mocks = vi.hoisted(() => ({
   getPullRequestsRuntimeClient: vi.fn(() => new Promise<never>(() => {})),
+  list: vi.fn(),
+  subscribe: vi.fn(),
+}));
+
+vi.mock('@core/features/source-control/api/browser/client', () => ({
+  getSourceControlClient: async () => ({
+    taskPullRequests: { list: mocks.list, events: { subscribe: mocks.subscribe } },
+  }),
 }));
 
 vi.mock('@core/manifests/browser/task-persistent-stores', async () => {
@@ -31,10 +39,17 @@ vi.mock('@core/services/pull-requests/api/client', () => ({
 
 const coordinators: TaskPrSyncCoordinator[] = [];
 
+beforeEach(() => {
+  mocks.list.mockResolvedValue([]);
+  mocks.subscribe.mockResolvedValue(() => {});
+});
+
 afterEach(() => {
   for (const coordinator of coordinators) coordinator.dispose();
   coordinators.length = 0;
   mocks.getPullRequestsRuntimeClient.mockClear();
+  mocks.list.mockReset();
+  mocks.subscribe.mockReset();
 });
 
 function makeTask(overrides: Partial<Task> = {}): Task {

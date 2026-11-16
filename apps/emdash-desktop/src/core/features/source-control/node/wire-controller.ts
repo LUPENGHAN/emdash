@@ -1,6 +1,7 @@
 import { err, ok, type Result } from '@emdash/shared';
 import {
   createLiveJobReplicaCache,
+  createEventStreamHost,
   LiveJobFailedError,
   type LiveJobContext,
 } from '@emdash/wire/live';
@@ -62,6 +63,9 @@ export function createSourceControlWireController(
 
   return createController(sourceControlContract, {
     taskPullRequests: {
+      events:
+        options.taskPullRequests?.events ??
+        createEventStreamHost(sourceControlContract.taskPullRequests.events),
       prepare: (input) => {
         if (!options.taskPullRequests) throw new Error('Task PR creation is unavailable.');
         return options.taskPullRequests.prepare(input);
@@ -106,6 +110,10 @@ export function createSourceControlWireController(
       ),
     },
     checkout: {
+      readHead: (input, meta) =>
+        withCheckoutRuntime(options, input, (git, mapped) =>
+          git.checkout.readHead(mapped, callOptions(meta))
+        ),
       readRemoteBranch: (input, meta) =>
         withIdentityRuntime(
           options.runtimes,

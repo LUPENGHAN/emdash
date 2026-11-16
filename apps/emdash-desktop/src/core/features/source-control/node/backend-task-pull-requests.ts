@@ -118,13 +118,14 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
   const check = async (plan: TaskPullRequestPlan, published = false) => {
     const host = await runtime(plan);
     const [head, remote] = await Promise.all([
-      host.git.checkout.model.state({ checkout: host.checkout }, 'head').snapshot(),
+      host.git.checkout.readHead({ checkout: host.checkout }),
       host.git.checkout.inspectPushTarget({
         checkout: host.checkout,
         remote: plan.pushTarget.remote,
       }),
     ]);
     if (
+      !head.success ||
       head.data.kind !== 'branch' ||
       head.data.ref !== plan.sourceRef ||
       (plan.push !== false && head.data.oid !== plan.oid)
@@ -183,10 +184,10 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
           repoFacts: project.repoFacts,
           projectId: target.projectId,
         }),
-        host.git.checkout.model.state({ checkout: host.checkout }, 'head').snapshot(),
+        host.git.checkout.readHead({ checkout: host.checkout }),
         project.git.repository.model.state(project.repository, 'remotes').snapshot(),
       ]);
-      if (head.data.kind !== 'branch' || isManagementBranch(head.data.ref))
+      if (!head.success || head.data.kind !== 'branch' || isManagementBranch(head.data.ref))
         throw new Error('Choose a committed code task branch for this PR.');
       const branch = head.data.ref.slice('refs/heads/'.length);
       if (input.sourceBranch && input.sourceBranch !== branch)

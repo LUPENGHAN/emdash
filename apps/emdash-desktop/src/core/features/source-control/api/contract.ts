@@ -3,6 +3,7 @@ import type { Result } from '@emdash/shared';
 import {
   defineContract,
   downloadFile,
+  eventStream,
   liveJob,
   liveModel,
   liveState,
@@ -107,6 +108,7 @@ const sourceControlRepositoryContract = defineContract({
 });
 
 const sourceControlCheckoutContract = defineContract({
+  readHead: runtimeFallibleProcedure(workspaceKeySchema, checkout.readHead.output),
   readRemoteBranch: runtimeFallibleProcedure(
     checkout.readRemoteBranch.input
       .omit({ checkout: true, credentials: true })
@@ -194,6 +196,7 @@ export const sourceControlDomain = 'sourceControl' as const;
 
 export const sourceControlContract = defineContract({
   taskPullRequests: defineContract({
+    events: eventStream({ key: z.void(), event: z.object({ taskId: z.string() }) }),
     prepare: procedure({ input: taskPullRequestInputSchema, output: taskPullRequestRecord.schema }),
     run: procedure({
       input: z.object({ taskId: z.string(), requestId: z.string() }),

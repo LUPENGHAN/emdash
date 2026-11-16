@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { KeyedMutex } from '@emdash/shared/concurrency';
 import { redactSecrets } from '@emdash/shared/logger';
+import { createEventStreamHost } from '@emdash/wire/live';
 import type { AgentCaller } from '@core/features/agent-control/api';
 import type { PullRequestError } from '@core/services/pull-requests/api/errors';
+import { sourceControlContract } from '../api/contract';
 import {
   taskPullRequestInputSchema,
   taskPullRequestPlanSchema,
@@ -35,6 +37,7 @@ export class TaskPullRequestFailure extends Error {
 
 /** A task owns the request across receiver changes; authorization is checked on every step. */
 export class TaskPullRequestService {
+  readonly events = createEventStreamHost(sourceControlContract.taskPullRequests.events);
   private readonly tasks = new KeyedMutex();
   constructor(private readonly deps: TaskPullRequestDependencies) {}
   private key(taskId: string, requestId: string) {
@@ -50,6 +53,7 @@ export class TaskPullRequestService {
   }
   private async save(key: string, record: TaskPullRequestRecord) {
     await this.deps.store.setOrThrow(key, record);
+    this.events.emit(undefined, { taskId: record.plan.taskId });
     this.deps.changed?.(record.plan.taskId);
   }
   async list(taskId: string, caller?: AgentCaller): Promise<TaskPullRequestRecord[]> {
