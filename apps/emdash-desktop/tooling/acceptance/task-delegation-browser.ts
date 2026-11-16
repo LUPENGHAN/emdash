@@ -61,6 +61,8 @@ async function prepareProject(input: {
   wrapper: string;
   repository: string;
   worktreeRoot: string;
+  name?: string;
+  baselineBranch?: string;
 }) {
   const agents = await getAgentsClient();
   const selected = await agents.setUsedInstallation({
@@ -72,7 +74,7 @@ async function prepareProject(input: {
   const projects = await getProjectsWireClient();
   const created = await projects.createProject({
     type: 'local',
-    name: 'Delegation acceptance',
+    name: input.name ?? 'Delegation acceptance',
     path: input.repository,
   });
   if (!created.success) throw new Error(JSON.stringify(created.error));
@@ -84,7 +86,9 @@ async function prepareProject(input: {
     projectId: project.id,
     patch: {
       placement: { stored: { worktreeRoot: input.worktreeRoot } },
-      gitIdentity: { stored: { defaultBranch: { remote: null, branch: 'main' } } },
+      gitIdentity: {
+        stored: { defaultBranch: { remote: null, branch: input.baselineBranch ?? 'main' } },
+      },
     },
   });
   if (!saved.success) throw new Error(JSON.stringify(saved.error));
@@ -136,4 +140,15 @@ export async function createReplacementMain(input: { projectId: string; taskId: 
     modelSource: null,
     effort: null,
   });
+}
+
+export async function prepareAdditionalProject(input: {
+  wrapper: string;
+  repository: string;
+  worktreeRoot: string;
+  name: string;
+  baselineBranch: string;
+}) {
+  const { project } = await prepareProject(input);
+  return project.id;
 }

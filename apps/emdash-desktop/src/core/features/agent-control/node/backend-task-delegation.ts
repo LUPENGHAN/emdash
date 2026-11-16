@@ -28,8 +28,16 @@ type Dependencies = {
   startConversation(params: CreateTaskParams): Promise<void>;
   getAgentSettings(agentId: string): Promise<ProviderCustomConfig | undefined>;
   getBranchDefaults(): Promise<{ branchPrefix?: string; appendRandomBranchSuffix?: boolean }>;
-  authorize(caller: AgentCaller, targetProjectId: string): Promise<void>;
-  onPrepared?(caller: AgentCaller, params: CreateTaskParams): Promise<void>;
+  authorize(
+    caller: AgentCaller,
+    targetProjectId: string,
+    request?: Extract<AgentControlAction, { kind: 'create_task' }>
+  ): Promise<void>;
+  onPrepared?(
+    caller: AgentCaller,
+    params: CreateTaskParams,
+    request: Extract<AgentControlAction, { kind: 'create_task' }>
+  ): Promise<void>;
   getDelegationDefaults?(
     caller: AgentCaller
   ): Promise<Partial<Extract<AgentControlAction, { kind: 'create_task' }>>>;

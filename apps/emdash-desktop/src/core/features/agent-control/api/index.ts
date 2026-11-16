@@ -5,8 +5,8 @@ import type { TaskResult } from '@core/features/coordination/api/types';
 /**
  * Agent control: an MCP server ("emdash") that every local agent gets, so agents can
  * coordinate with each other and drive this app's UI. The main process authenticates
- * the calling conversation and hands each action to the window the user used last,
- * which carries it out with the same code paths as the UI.
+ * the calling conversation. Discovery, coordination and dispatch run in the background;
+ * interactive actions go to the focused window through the same code paths as the UI.
  */
 
 /** The conversation an MCP call comes from. */
@@ -74,7 +74,9 @@ export type AgentControlAction =
       note: string;
       resultVersion: number;
     }
-  | { kind: 'list_conversations'; scope: 'task' | 'project' }
+  | { kind: 'list_projects'; query?: string }
+  | { kind: 'get_task_status'; taskId: string }
+  | { kind: 'list_conversations'; scope: 'task' | 'project'; projectId?: string; taskId?: string }
   | {
       kind: 'create_conversation';
       providerId: string;
@@ -85,7 +87,7 @@ export type AgentControlAction =
       prompt: string;
       ui?: 'terminal' | 'chat';
     }
-  | { kind: 'send_message'; conversationId: string; text: string }
+  | { kind: 'send_message'; conversationId: string; text: string; requestId?: string }
   | { kind: 'handoff'; providerId: string; model?: string; note?: string }
   | { kind: 'suggest_task'; title: string; prompt: string }
   | {
@@ -93,6 +95,7 @@ export type AgentControlAction =
       name: string;
       projectId?: string;
       requestId?: string;
+      projectGrants?: string[];
       /** The explicit code base branch; absent resolves the target project baseline. */
       baseBranch?: string;
       /** An agent to start in the new task with this first message. */
@@ -104,7 +107,7 @@ export type AgentControlAction =
       effort?: string | null;
       ui?: 'terminal' | 'chat';
     }
-  | { kind: 'list_tasks'; includeArchived: boolean }
+  | { kind: 'list_tasks'; includeArchived: boolean; projectId?: string }
   | { kind: 'archive_task'; taskId: string }
   | { kind: 'delete_task'; taskId: string }
   | { kind: 'delete_requirement'; id: string; title: string; childCount: number }

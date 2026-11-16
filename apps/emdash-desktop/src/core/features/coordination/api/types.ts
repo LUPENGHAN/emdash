@@ -16,6 +16,11 @@ export type ResolvedAgentSelection = {
   effortOptions: Record<string, { label: string; level: number }>;
   errors: string[];
 };
+export const projectAccessSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('all') }),
+  z.object({ mode: z.literal('selected'), projectIds: z.array(z.string().min(1)) }),
+]);
+export type ProjectAccess = z.infer<typeof projectAccessSchema>;
 export const taskResultSchema = z.object({
   summary: z.string().trim().min(1),
   commits: z.array(z.string()).default([]),
@@ -35,6 +40,7 @@ export type AssignedTask = {
   resultVersion: number;
   submissions: Record<string, { version: number; fingerprint: string }>;
   review?: { note: string; accepted: boolean; at: number };
+  grantedProjectIds?: string[];
 };
 export type ResultEvent = {
   id: string;
@@ -45,12 +51,13 @@ export type ResultEvent = {
   error?: string;
 };
 export type Coordinator = {
-  version: '1';
+  version: '2';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
   projectId: string;
   projectIds: string[];
+  projectAccess?: ProjectAccess;
   taskId: string;
   conversationId: string;
   primary: AgentSelection;
@@ -61,47 +68,52 @@ export type Coordinator = {
 };
 export type CoordinationEvent = { coordinatorId: string; projectId: string };
 
-export const coordinatorRecord = defineVersionedSchema()
-  .initial(
-    '1',
+const coordinatorV1 = z.object({
+  version: z.literal('1'),
+  id: z.string(),
+  kind: z.enum(['project', 'cross-project']),
+  name: z.string(),
+  projectId: z.string(),
+  projectIds: z.array(z.string()),
+  projectAccess: projectAccessSchema.optional(),
+  taskId: z.string(),
+  conversationId: z.string(),
+  primary: agentSelectionSchema,
+  delegationDefaults: agentSelectionSchema,
+  params: z.custom<CreateTaskParams>().optional(),
+  tasks: z.record(
+    z.string(),
     z.object({
-      version: z.literal('1'),
-      id: z.string(),
-      kind: z.enum(['project', 'cross-project']),
-      name: z.string(),
-      projectId: z.string(),
-      projectIds: z.array(z.string()),
       taskId: z.string(),
-      conversationId: z.string(),
-      primary: agentSelectionSchema,
-      delegationDefaults: agentSelectionSchema,
-      params: z.custom<CreateTaskParams>().optional(),
-      tasks: z.record(
+      projectId: z.string(),
+      name: z.string(),
+      state: z.enum(['assigned', 'review', 'changes_requested', 'done']),
+      result: taskResultSchema.optional(),
+      resultVersion: z.number().int().nonnegative(),
+      submissions: z.record(
         z.string(),
-        z.object({
-          taskId: z.string(),
-          projectId: z.string(),
-          name: z.string(),
-          state: z.enum(['assigned', 'review', 'changes_requested', 'done']),
-          result: taskResultSchema.optional(),
-          resultVersion: z.number().int().nonnegative(),
-          submissions: z.record(
-            z.string(),
-            z.object({ version: z.number().int().positive(), fingerprint: z.string() })
-          ),
-          review: z.object({ note: z.string(), accepted: z.boolean(), at: z.number() }).optional(),
-        })
+        z.object({ version: z.number().int().positive(), fingerprint: z.string() })
       ),
-      events: z.array(
-        z.object({
-          id: z.string(),
-          taskId: z.string(),
-          version: z.number().int().positive(),
-          result: taskResultSchema,
-          state: z.enum(['pending', 'queued', 'acknowledged']),
-          error: z.string().optional(),
-        })
-      ),
+      review: z.object({ note: z.string(), accepted: z.boolean(), at: z.number() }).optional(),
+      grantedProjectIds: z.array(z.string()).optional(),
     })
-  )
+  ),
+  events: z.array(
+    z.object({
+      id: z.string(),
+      taskId: z.string(),
+      version: z.number().int().positive(),
+      result: taskResultSchema,
+      state: z.enum(['pending', 'queued', 'acknowledged']),
+      error: z.string().optional(),
+    })
+  ),
+});
+
+export const coordinatorRecord = defineVersionedSchema()
+  .initial('1', coordinatorV1)
+  .version('2', coordinatorV1.extend({ version: z.literal('2') }), (record) => ({
+    ...record,
+    version: '2' as const,
+  }))
   .build();

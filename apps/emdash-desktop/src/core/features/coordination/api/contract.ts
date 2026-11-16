@@ -2,6 +2,7 @@ import { defineContract, eventStream, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
 import {
   agentSelectionSchema,
+  projectAccessSchema,
   type Coordinator,
   type CoordinationEvent,
   type ResolvedAgentSelection,
@@ -31,6 +32,8 @@ export const coordinationContract = defineContract({
       id: z.string(),
       primary: agentSelectionSchema.optional(),
       delegationDefaults: agentSelectionSchema.optional(),
+      projectAccess: projectAccessSchema.optional(),
+      projectIds: z.array(z.string().min(1)).optional(),
     }),
     output: z.custom<Coordinator>(),
   }),

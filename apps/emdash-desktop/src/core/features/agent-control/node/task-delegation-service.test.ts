@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
 import {
@@ -89,6 +90,37 @@ describe('durable task delegation', () => {
     expect(test.deps.create).toHaveBeenCalledOnce();
     expect(test.deps.start).toHaveBeenCalledOnce();
     expect(test.tasks.size).toBe(1);
+  });
+
+  it('retains request fingerprints without grants and includes explicit grants in retry identity', async () => {
+    const test = setup();
+    await test.service.dispatch(caller, request);
+    const saved = [...test.records.values()][0];
+    const historical = createHash('sha256')
+      .update(
+        JSON.stringify([
+          caller.projectId,
+          request.name,
+          undefined,
+          request.prompt,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+        ])
+      )
+      .digest('hex');
+    expect(saved.fingerprint).toBe(historical);
+    await expect(
+      test.service.dispatch(caller, { ...request, projectGrants: ['other'] })
+    ).rejects.toThrow('different task parameters');
+    const granted = { ...request, requestId: 'granted', projectGrants: ['b', 'a'] };
+    const first = await test.service.dispatch(caller, granted);
+    expect(
+      await test.service.dispatch(caller, { ...granted, projectGrants: ['a', 'b', 'a'] })
+    ).toEqual(first);
   });
 
   it('returns persisted task IDs after service recreation and freezes initial configuration', async () => {

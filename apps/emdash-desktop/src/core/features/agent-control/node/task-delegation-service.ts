@@ -30,7 +30,7 @@ export type TaskDelegationDependencies = {
     setOrThrow(key: string, value: DelegationRecord): Promise<void>;
     getAll(): Promise<Record<string, DelegationRecord | undefined>>;
   };
-  authorize(caller: AgentCaller, projectId: string): Promise<void>;
+  authorize(caller: AgentCaller, projectId: string, request?: CreateDelegatedTask): Promise<void>;
   prepare(
     caller: AgentCaller,
     request: CreateDelegatedTask,
@@ -45,7 +45,11 @@ export type TaskDelegationDependencies = {
   activate(taskId: string, projectId: string): Promise<{ path: string }>;
   /** Must attach to an observed session or start it idempotently, without replaying a prompt. */
   start(params: CreateTaskParams): Promise<void>;
-  onPrepared?(caller: AgentCaller, params: CreateTaskParams): Promise<void>;
+  onPrepared?(
+    caller: AgentCaller,
+    params: CreateTaskParams,
+    request: CreateDelegatedTask
+  ): Promise<void>;
 };
 
 function requestFingerprint(request: CreateDelegatedTask, projectId: string): string {
@@ -62,6 +66,7 @@ function requestFingerprint(request: CreateDelegatedTask, projectId: string): st
         request.connection,
         request.effort,
         request.ui,
+        ...(request.projectGrants?.length ? [[...new Set(request.projectGrants)].sort()] : []),
       ])
     )
     .digest('hex');
@@ -77,7 +82,7 @@ export class TaskDelegationService {
 
   async dispatch(caller: AgentCaller, request: CreateDelegatedTask): Promise<AgentControlResult> {
     const projectId = request.projectId ?? caller.projectId;
-    await this.deps.authorize(caller, projectId);
+    await this.deps.authorize(caller, projectId, request);
     const requestId = request.requestId ?? randomUUID();
     const key = createHash('sha256')
       .update(JSON.stringify([caller.conversationId, requestId]))
@@ -114,7 +119,7 @@ export class TaskDelegationService {
         await this.deps.store.setOrThrow(key, record);
       };
       try {
-        await this.deps.onPrepared?.(caller, record.params);
+        await this.deps.onPrepared?.(caller, record.params, record.request);
         const state = await this.deps.findTask(record.params.id, projectId);
         if (state === 'deleted')
           throw new Error(
@@ -145,6 +150,10 @@ export class TaskDelegationService {
               ? 'agent_started'
               : 'workspace_ready',
             path: record.path,
+            branch:
+              'branchName' in record.params.workspaceConfig.git
+                ? record.params.workspaceConfig.git.branchName
+                : undefined,
             configuration: record.params.taskConfig.initialConversation,
           }),
         };

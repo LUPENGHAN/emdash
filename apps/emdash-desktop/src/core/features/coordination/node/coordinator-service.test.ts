@@ -377,6 +377,62 @@ describe('main agent coordination', () => {
     );
   });
 
+  it('stores explicit worker grants and prevents children from expanding beyond their parent', async () => {
+    const test = setup();
+    const record = await assigned(test);
+    const worker = caller(record, 'worker-task');
+    await expect(test.service.assertDelegationGrants(worker, ['other'])).rejects.toThrow(
+      'permission denied'
+    );
+    await test.service.registerDelegation(
+      caller(record),
+      {
+        id: 'granted-worker',
+        projectId: 'other',
+        taskConfig: { version: '1', name: 'Granted' },
+        workspaceConfig: {
+          version: '2',
+          git: { kind: 'none' },
+          workspace: { kind: 'new-worktree' },
+        },
+      },
+      ['project']
+    );
+    const granted = { ...caller(record, 'granted-worker'), projectId: 'other' };
+    await test.service.assertDelegationGrants(granted, ['project']);
+    await expect(test.service.assertDelegationGrants(granted, ['ungranted'])).rejects.toThrow(
+      'permission denied'
+    );
+    const restored = new CoordinatorService(test.deps);
+    expect(
+      (await restored.getByTask(record.taskId))?.tasks['granted-worker'].grantedProjectIds
+    ).toEqual(['project']);
+    await restored.update(record.id, {
+      projectAccess: { mode: 'selected', projectIds: ['other'] },
+      projectIds: ['project', 'other'],
+    });
+    expect(await restored.mayAccessProject(granted, 'project', 'delegate')).toBe(false);
+    expect(
+      await restored.mayAccessTask(granted, { id: 'granted-worker', projectId: 'other' }, 'control')
+    ).toBe(true);
+  });
+
+  it('upgrades version 1 records and refuses to overwrite future coordination data', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
+    expect((await test.service.ensureProject('project')).version).toBe('2');
+    await test.service.update(record.id, {
+      projectAccess: { mode: 'selected', projectIds: ['project'] },
+    });
+    expect(test.records.get(record.id)?.version).toBe('2');
+    test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
+    await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
+      'future-version'
+    );
+    expect((test.records.get(record.id) as unknown as { version: string }).version).toBe('99');
+  });
+
   it('uses the configured default worker agent independently of the primary agent', async () => {
     const test = setup();
     const record = await test.service.ensureProject('project');

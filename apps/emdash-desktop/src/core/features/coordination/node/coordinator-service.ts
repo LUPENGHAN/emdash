@@ -11,7 +11,9 @@ import {
   type CoordinationEvent,
   type TaskResult,
   type ResolvedAgentSelection,
+  type ProjectAccess,
 } from '../api/types';
+import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordinator-access';
 
 type Dependencies = {
   store: {
@@ -49,9 +51,11 @@ export class CoordinatorService {
     const records: Coordinator[] = [];
     for (const [id, value] of Object.entries(await this.deps.store.getAll())) {
       if (!value) continue;
-      const parsed = coordinatorRecord.schema.safeParse(value);
-      if (parsed.success) records.push(parsed.data);
-      else this.deps.reportError?.(parsed.error, id);
+      try {
+        records.push(this.parseRecord(value));
+      } catch (error) {
+        this.deps.reportError?.(error, id);
+      }
     }
     return records;
   }
@@ -59,9 +63,9 @@ export class CoordinatorService {
     const id = `project:${projectId}`;
     return this.locks.runExclusive(id, async () => {
       const saved = await this.deps.store.getOrThrow(id);
-      if (saved) return coordinatorRecord.schema.parse(saved);
+      if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '1',
+        version: '2',
         id,
         kind: 'project',
         name: 'Main agent',
@@ -91,10 +95,15 @@ a stable request_id, a summary, commit references, checks actually run and unres
 Do not mark the task complete yourself. The responsible main agent reviews your result.`;
     return undefined;
   }
+  private parseRecord(value: unknown): Coordinator {
+    const parsed = coordinatorRecord.safeParse(value);
+    if (parsed.status !== 'ok') throw new Error(`Cannot read coordinator record: ${parsed.status}`);
+    return coordinatorRecord.schema.parse(parsed.data);
+  }
   private async get(id: string): Promise<Coordinator> {
     const record = await this.deps.store.getOrThrow(id);
     if (!record) throw new Error('The main agent no longer exists.');
-    return coordinatorRecord.schema.parse(record);
+    return this.parseRecord(record);
   }
   private async save(record: Coordinator): Promise<void> {
     await this.deps.store.setOrThrow(record.id, coordinatorRecord.schema.parse(record));
@@ -158,10 +167,20 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
   }
   async update(
     id: string,
-    patch: { primary?: AgentSelection; delegationDefaults?: AgentSelection }
+    patch: {
+      primary?: AgentSelection;
+      delegationDefaults?: AgentSelection;
+      projectAccess?: ProjectAccess;
+      projectIds?: string[];
+    }
   ): Promise<Coordinator> {
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
+      if (patch.projectAccess?.mode === 'selected')
+        for (const projectId of patch.projectAccess.projectIds)
+          await this.deps.assertProjectAvailable(projectId);
+      if (patch.projectIds)
+        for (const projectId of patch.projectIds) await this.deps.assertProjectAvailable(projectId);
       if (patch.primary && record.params)
         throw new Error('Change the active main conversation through its session settings.');
       for (const selection of [patch.primary, patch.delegationDefaults]) {
@@ -217,7 +236,50 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
     };
   }
 
-  async registerDelegation(caller: AgentCaller, params: CreateTaskParams): Promise<void> {
+  async getTaskCoordination(taskId: string) {
+    const record = (await this.list()).find(
+      (entry) => entry.taskId === taskId || entry.tasks[taskId]
+    );
+    if (!record) return null;
+    return {
+      coordinatorId: record.id,
+      mainTaskId: record.taskId,
+      mainConversationId: record.conversationId,
+      assignment: record.tasks[taskId] ?? null,
+    };
+  }
+  async mayAccessProject(
+    caller: AgentCaller,
+    projectId: string,
+    intent: 'read' | 'delegate'
+  ): Promise<boolean> {
+    const records = await this.list();
+    return mayAccessProject(caller, coordinatorPrincipal(caller, records), projectId, intent);
+  }
+  async mayAccessTask(
+    caller: AgentCaller,
+    target: { id: string; projectId: string },
+    intent: 'read' | 'control'
+  ): Promise<boolean> {
+    return mayAccessTask(caller, await this.list(), target, intent);
+  }
+  async assertDelegationGrants(caller: AgentCaller, projectIds: string[]): Promise<void> {
+    const records = await this.list();
+    const principal = coordinatorPrincipal(caller, records);
+    if (projectIds.length && principal.kind === 'ordinary')
+      throw new Error('Project grants require a responsible main agent.');
+    for (const projectId of projectIds) {
+      if (!mayAccessProject(caller, principal, projectId, 'delegate'))
+        throw new Error(`Project permission denied: ${projectId}`);
+      await this.deps.assertProjectAvailable(projectId);
+    }
+  }
+  async registerDelegation(
+    caller: AgentCaller,
+    params: CreateTaskParams,
+    grantedProjectIds: string[] = []
+  ): Promise<void> {
+    await this.assertDelegationGrants(caller, grantedProjectIds);
     const record = (await this.list()).find(
       (entry) => entry.taskId === caller.taskId || entry.tasks[caller.taskId]
     );
@@ -232,6 +294,7 @@ Do not mark the task complete yourself. The responsible main agent reviews your 
         state: 'assigned',
         resultVersion: 0,
         submissions: {},
+        ...(grantedProjectIds.length && { grantedProjectIds: [...new Set(grantedProjectIds)] }),
       };
       await this.save(latest);
     });

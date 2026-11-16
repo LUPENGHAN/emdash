@@ -6,6 +6,8 @@
 - `src/main/core/mcp/utils/` — adapters, catalog, config IO, config paths, conversion
 - `src/main/core/mcp/controller.ts`
 - `src/core/primitives/mcp/api/`
+- `src/core/features/agent-control/node/` — app-owned `emdash` tools, authenticated callers, background discovery, delegation and messages
+- `src/core/features/coordination/` — main agent identity, task ownership, project access, worker grants and durable results
 - `src/core/features/mcp/browser/` (`mcp-view.tsx`, `components/`)
 
 ## Current Behavior
@@ -24,3 +26,11 @@
 - do not assume all providers support the same MCP transport types
 - keep canonical MCP data in shared types and adapt at the edges
 - if you add provider-specific MCP behavior, update both service and UI compatibility handling
+
+## App-owned coordination tools
+
+- MCP caller identity is separate from target project and task IDs. A project main agent can operate across authorized projects; linked projects organize context and do not grant access.
+- Main agents default to accessible projects and can be narrowed to selected projects. Delegated workers control their own task and receive extra project permissions only through explicit, bounded grants. Native agent shell tools are not an OS sandbox.
+- Project/task/conversation discovery, task dispatch and ACP message acceptance run in the background. Mutations that retain a human confirmation, such as archive/delete, first pass background task authorization.
+- Stable request IDs deduplicate dispatch and messages. Unknown message acceptance is retained without automatic replay; terminal messages remain pending when safe delivery cannot be confirmed.
+- Result submission requests review. Only the designated main conversation can acknowledge result events or review a result through MCP; main conversation changes preserve coordinator identity and task history.

@@ -52,13 +52,20 @@ it('restores coordinator identity, defaults, result snapshots and acknowledgment
     title: 'Main',
     cwd: null,
   };
-  await first.update(record.id, { delegationDefaults: { agent: 'codex', effort: 'high' } });
-  await first.registerDelegation(main, {
-    id: 'worker',
-    projectId: record.projectId,
-    taskConfig: { version: '1', name: 'Code task' },
-    workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+  await first.update(record.id, {
+    delegationDefaults: { agent: 'codex', effort: 'high' },
+    projectAccess: { mode: 'selected', projectIds: ['project', 'other'] },
   });
+  await first.registerDelegation(
+    main,
+    {
+      id: 'worker',
+      projectId: record.projectId,
+      taskConfig: { version: '1', name: 'Code task' },
+      workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+    },
+    ['other']
+  );
   const receipt = await first.submit({ ...main, taskId: 'worker' }, 'worker', 'submission', {
     summary: 'Implemented',
     commits: ['abc'],
@@ -69,6 +76,13 @@ it('restores coordinator identity, defaults, result snapshots and acknowledgment
   await first.deliverPending(record.id);
   deliver.mockClear();
   const restarted = service();
+  expect((await restarted.getByTask(record.taskId))?.projectAccess).toEqual({
+    mode: 'selected',
+    projectIds: ['project', 'other'],
+  });
+  expect(await restarted.mayAccessProject({ ...main, taskId: 'worker' }, 'other', 'delegate')).toBe(
+    true
+  );
   await restarted.recover();
   expect(deliver).toHaveBeenCalledOnce();
   expect((await restarted.getByTask(main.taskId))?.delegationDefaults).toEqual({

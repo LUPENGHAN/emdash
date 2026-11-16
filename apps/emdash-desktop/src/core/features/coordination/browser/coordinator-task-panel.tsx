@@ -4,14 +4,17 @@ import { observer } from 'mobx-react-lite';
 import { useEffect, useState, type ReactNode } from 'react';
 import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
 import { PROVIDER_CAPABLE_AGENTS } from '@core/features/model-providers/api';
-import { getProjectStore } from '@core/features/projects/api/browser/stores/project-selectors';
+import {
+  getProjectStore,
+  getProjectManagerStore,
+} from '@core/features/projects/api/browser/stores/project-selectors';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
-import type { AgentSelection, AssignedTask, Coordinator } from '../api/types';
+import type { AgentSelection, AssignedTask, Coordinator, ProjectAccess } from '../api/types';
 
 export const CoordinatorTaskPanel = observer(function CoordinatorTaskPanel({
   children,
@@ -95,6 +98,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
             <p>Loading main agent…</p>
           ) : tab === 'settings' ? (
             <div className="space-y-6">
+              <ProjectAccessSettings record={record} />
               <MainConversationSettings record={record} />
               <DelegationDefaults record={record} />
             </div>
@@ -168,6 +172,106 @@ const CoordinatorContent = observer(function CoordinatorContent({
           )}
         </div>
       )}
+    </div>
+  );
+});
+
+const ProjectAccessSettings = observer(function ProjectAccessSettings({
+  record,
+}: {
+  record: Coordinator;
+}) {
+  const [access, setAccess] = useState<ProjectAccess>(record.projectAccess ?? { mode: 'all' });
+  const [linked, setLinked] = useState(record.projectIds);
+  const [saving, setSaving] = useState(false);
+  const projects = Array.from(getProjectManagerStore().projects.values()).filter(
+    (project) => !project.data?.archivedAt
+  );
+  return (
+    <div className="max-w-lg space-y-3">
+      <p className="text-sm">Project access</p>
+      <Select.Root
+        value={access.mode}
+        onValueChange={(value) =>
+          setAccess(
+            value === 'selected'
+              ? { mode: 'selected', projectIds: [record.projectId] }
+              : { mode: 'all' }
+          )
+        }
+      >
+        <Select.Trigger data-testid="coordinator-project-access">
+          <Select.Value />
+        </Select.Trigger>
+        <Select.Content>
+          <Select.Item data-testid="coordinator-access-all" value="all">
+            All accessible Emdash projects
+          </Select.Item>
+          <Select.Item data-testid="coordinator-access-selected" value="selected">
+            Selected projects
+          </Select.Item>
+        </Select.Content>
+      </Select.Root>
+      <p className="text-xs text-foreground-muted">
+        Linked projects organize context. Allowed projects control discovery and delegation. Workers
+        only receive explicitly granted project access.
+      </p>
+      <div className="space-y-2">
+        {projects.map((project) => (
+          <div key={project.id} className="flex items-center gap-3 text-sm">
+            <span className="min-w-0 flex-1 truncate">{project.name}</span>
+            <label className="flex items-center gap-1">
+              <input
+                type="checkbox"
+                checked={linked.includes(project.id)}
+                onChange={(event) =>
+                  setLinked(
+                    event.target.checked
+                      ? [...linked, project.id]
+                      : linked.filter((id) => id !== project.id)
+                  )
+                }
+              />{' '}
+              Linked
+            </label>
+            {access.mode === 'selected' && (
+              <label className="flex items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={access.projectIds.includes(project.id)}
+                  onChange={(event) =>
+                    setAccess({
+                      mode: 'selected',
+                      projectIds: event.target.checked
+                        ? [...access.projectIds, project.id]
+                        : access.projectIds.filter((id) => id !== project.id),
+                    })
+                  }
+                />{' '}
+                Allowed
+              </label>
+            )}
+          </div>
+        ))}
+      </div>
+      <Button
+        data-testid="coordinator-save-access"
+        disabled={saving}
+        onClick={() => {
+          setSaving(true);
+          void getCoordinationClient()
+            .then((client) =>
+              client.update({ id: record.id, projectAccess: access, projectIds: linked })
+            )
+            .then(() => toast.success('Project access saved'))
+            .catch((error) =>
+              toast.error('Could not save project access', { description: String(error) })
+            )
+            .finally(() => setSaving(false));
+        }}
+      >
+        Save project access
+      </Button>
     </div>
   );
 });

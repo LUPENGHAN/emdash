@@ -110,7 +110,7 @@ export function formatUsageLimits(limits: UsageLimits): string {
 
 /**
  * The tools every agent gets from Emdash's built-in MCP server ("emdash"). Tools that
- * start work, message another agent or run commands ask the user in Emdash first.
+ * need interactive UI keep their confirmation paths; authorized coordination runs in the background.
  */
 export function registerAgentControlTools(server: McpServer, ctx: AgentControlToolContext): void {
   const { caller } = ctx;
@@ -150,14 +150,45 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
 
   // ── Working with other agents ──────────────────────────────────────────────────
   server.registerTool(
+    'list_projects',
+    {
+      description:
+        'Discover authorized Emdash projects with stable IDs, host availability and code baseline. Linked projects organize context; permissions are enforced separately.',
+      inputSchema: { query: z.string().optional() },
+      annotations: { readOnlyHint: true },
+    },
+    ({ query }) => dispatch({ kind: 'list_projects', ...(query && { query }) })
+  );
+  server.registerTool(
+    'get_task_status',
+    {
+      description:
+        'Read an authorized task status, main agent ownership, result version and waiting reason.',
+      inputSchema: { task_id: z.string().min(1) },
+      annotations: { readOnlyHint: true },
+    },
+    ({ task_id }) => dispatch({ kind: 'get_task_status', taskId: task_id })
+  );
+
+  server.registerTool(
     'list_conversations',
     {
       description:
         'Conversations in this task (or the whole project) with their agent, model and status (working, waiting for input, idle).',
-      inputSchema: { scope: z.enum(['task', 'project']).default('task') },
+      inputSchema: {
+        scope: z.enum(['task', 'project']).default('task'),
+        project_id: z.string().min(1).optional(),
+        task_id: z.string().min(1).optional(),
+      },
       annotations: { readOnlyHint: true },
     },
-    ({ scope }) => dispatch({ kind: 'list_conversations', scope })
+    ({ scope, project_id, task_id }) =>
+      dispatch({
+        kind: 'list_conversations',
+        scope,
+        ...(project_id && { projectId: project_id }),
+        ...(task_id && { taskId: task_id }),
+      })
   );
 
   server.registerTool(
@@ -192,11 +223,20 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'send_message',
     {
       description:
-        'Send a message to another conversation in this task (get ids from list_conversations). The user confirms in Emdash.',
-      inputSchema: { conversation_id: z.string(), text: z.string().min(1) },
+        'Send a message to an authorized conversation. Get IDs from list_conversations and reuse request_id when retrying. ACP messages queue in the background; terminal messages retain a pending state when automatic delivery cannot be confirmed.',
+      inputSchema: {
+        conversation_id: z.string(),
+        text: z.string().min(1),
+        request_id: z.string().min(1).optional(),
+      },
     },
-    ({ conversation_id, text }) =>
-      dispatch({ kind: 'send_message', conversationId: conversation_id, text })
+    ({ conversation_id, text, request_id }) =>
+      dispatch({
+        kind: 'send_message',
+        conversationId: conversation_id,
+        text,
+        ...(request_id && { requestId: request_id }),
+      })
   );
 
   server.registerTool(
@@ -232,6 +272,12 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       description:
         "Create a git worktree through Emdash, as a task in the target project: use this instead of `git worktree add` (or a worktree tool of your own), so the worktree lands where Emdash keeps them and the user can see and review its code in Emdash. Returns the worktree's path and branch; work there yourself, or pass `prompt` to start an agent in it. Task creation and startup run in the background. Reuse request_id when retrying.",
       inputSchema: {
+        project_grants: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            'Explicit project permissions for this worker; cannot exceed your own permissions'
+          ),
         project_id: z
           .string()
           .optional()
@@ -275,6 +321,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     ({
       name,
       project_id,
+      project_grants,
       request_id,
       base_branch,
       prompt,
@@ -289,6 +336,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         kind: 'create_task',
         name,
         ...(project_id && { projectId: project_id }),
+        ...(project_grants && { projectGrants: project_grants }),
         ...(request_id && { requestId: request_id }),
         ...(base_branch && { baseBranch: base_branch }),
         ...(prompt && { prompt, ...(agent && { providerId: agent }) }),
@@ -351,10 +399,18 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     {
       description:
         'Tasks in this project: id, name, branch, status, whether an agent is running in it, and when it was created. Yours is marked. Use the id with archive_task or delete_task.',
-      inputSchema: { include_archived: z.boolean().default(false) },
+      inputSchema: {
+        include_archived: z.boolean().default(false),
+        project_id: z.string().min(1).optional(),
+      },
       annotations: { readOnlyHint: true },
     },
-    ({ include_archived }) => dispatch({ kind: 'list_tasks', includeArchived: include_archived })
+    ({ include_archived, project_id }) =>
+      dispatch({
+        kind: 'list_tasks',
+        includeArchived: include_archived,
+        ...(project_id && { projectId: project_id }),
+      })
   );
 
   server.registerTool(

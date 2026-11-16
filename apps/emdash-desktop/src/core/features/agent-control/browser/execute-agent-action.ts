@@ -134,6 +134,8 @@ export async function executeAgentAction(
       return { text: 'Suggested to the user; they can start it from the notification.' };
     }
 
+    case 'list_projects':
+    case 'get_task_status':
     case 'submit_task_result':
     case 'acknowledge_task_results':
     case 'review_task_result':

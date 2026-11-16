@@ -406,6 +406,55 @@ describe('requirement tools', () => {
 });
 
 describe('registerAgentControlTools task tools', () => {
+  it('dispatches explicit project discovery, task queries, message request IDs and worker grants', async () => {
+    const { tool, dispatch } = registeredTools();
+    await tool('list_projects')?.handler({ query: 'backend' });
+    expect(dispatch).toHaveBeenLastCalledWith({ kind: 'list_projects', query: 'backend' });
+    await tool('list_tasks')?.handler({ project_id: 'other', include_archived: false });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'list_tasks',
+      projectId: 'other',
+      includeArchived: false,
+    });
+    await tool('list_conversations')?.handler({
+      project_id: 'other',
+      task_id: 'worker',
+      scope: 'task',
+    });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'list_conversations',
+      projectId: 'other',
+      taskId: 'worker',
+      scope: 'task',
+    });
+    await tool('get_task_status')?.handler({ task_id: 'worker' });
+    expect(dispatch).toHaveBeenLastCalledWith({ kind: 'get_task_status', taskId: 'worker' });
+    await tool('send_message')?.handler({
+      conversation_id: 'target',
+      text: 'Inspect',
+      request_id: 'message',
+    });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'send_message',
+      conversationId: 'target',
+      text: 'Inspect',
+      requestId: 'message',
+    });
+    await tool('create_task')?.handler({
+      name: 'Granted work',
+      project_id: 'other',
+      project_grants: ['source'],
+      request_id: 'grant',
+    });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'create_task',
+      name: 'Granted work',
+      projectId: 'other',
+      projectGrants: ['source'],
+      requestId: 'grant',
+    });
+  });
+
   it('validates and dispatches result submission, acknowledgment and versioned review', async () => {
     const { tool, dispatch } = registeredTools();
     const result = {

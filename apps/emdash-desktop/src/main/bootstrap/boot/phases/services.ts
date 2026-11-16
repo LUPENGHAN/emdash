@@ -13,7 +13,7 @@ import { pullRequestsPluginRegistry } from '@emdash/plugins/pull-requests';
 import { secret } from '@emdash/shared';
 import { runWithTimeout } from '@emdash/shared/scheduling';
 import { peek } from '@emdash/wire/state';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { app, Notification, powerMonitor } from 'electron';
 import { AccountAuthServerClient } from '@core/features/account/node/services/account-auth-server-client';
 import { AccountOAuthClient } from '@core/features/account/node/services/account-oauth-client';
@@ -26,6 +26,10 @@ import type { AgentControlDispatcher } from '@core/features/agent-control/node/a
 import { createAgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
 import { startAgentControlServer } from '@core/features/agent-control/node/agent-control-server';
 import { createBackendTaskDelegation } from '@core/features/agent-control/node/backend-task-delegation';
+import {
+  BackgroundAgentControl,
+  type AgentMessageRecord,
+} from '@core/features/agent-control/node/background-agent-control';
 import { agentControlEvents } from '@core/features/agent-control/node/event-host';
 import { resolveAgentCaller } from '@core/features/agent-control/node/resolve-caller';
 import type { TaskDelegationService } from '@core/features/agent-control/node/task-delegation-service';
@@ -51,7 +55,9 @@ import { AutomationsService } from '@core/features/automations/api/node/automati
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
 import { conversationEvents } from '@core/features/conversations/api/node/conversation-events';
 import { createConversationRegistry } from '@core/features/conversations/api/node/registry';
+import { mapConversationRowToConversation } from '@core/features/conversations/api/node/utils';
 import { resolveConversationRuntimeTarget } from '@core/features/conversations/node/conversation-runtime-target';
+import { getConversationsForProject } from '@core/features/conversations/node/getConversationsForProject';
 import { launchTuiConversation } from '@core/features/conversations/node/launch-tui-conversation';
 import { resumeLegacyCursorConversation } from '@core/features/conversations/node/legacy-cursor-sessions';
 import { getProviderSettingsService } from '@core/features/conversations/node/provider-settings-service';
@@ -149,6 +155,7 @@ import { previewServerService } from '@core/features/preview-servers/api/node/pr
 import { PreviewServerAccessService } from '@core/features/preview-servers/node/preview-server-access-service';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
 import { projectEvents } from '@core/features/projects/api/node/project-events';
+import { resolveProjectEffectiveSettings } from '@core/features/projects/api/node/settings/effective-settings';
 import {
   loadStoredGitSettings,
   loadStoredIntegrationAccounts,
@@ -181,6 +188,7 @@ import { TaskService } from '@core/features/tasks/api/node/task-service';
 import type { TaskSessionCleanup } from '@core/features/tasks/api/node/task-session-cleanup';
 import { TaskSessionLaunchContextResolver } from '@core/features/tasks/api/node/task-session-launch-context';
 import { TaskSessionManager } from '@core/features/tasks/api/node/task-session-manager';
+import { mapTaskRowToTask } from '@core/features/tasks/api/node/utils/utils';
 import { installAutomationTelemetry } from '@core/features/telemetry/node/automation-telemetry';
 import { installTaskTelemetry } from '@core/features/telemetry/node/task-telemetry';
 import { createUsageOverview } from '@core/features/usage/node/usage-overview';
@@ -190,6 +198,7 @@ import {
   deactivateWorkspaceParticipants,
 } from '@core/features/workspaces/api/node/lifecycle-participants';
 import { WorkspacePlacementResolver } from '@core/features/workspaces/api/node/placement/workspace-placement-resolver';
+import { createWorkspaceRegistry } from '@core/features/workspaces/api/node/registry';
 import { WorkspaceCreations } from '@core/features/workspaces/api/node/registry-verbs';
 import { acquireWorkspaceRuntime } from '@core/features/workspaces/api/node/runtime-access';
 import type { TaskProviderOpts } from '@core/features/workspaces/api/node/workspace-factory';
@@ -198,9 +207,10 @@ import { WorkspaceRegistryBackfillService } from '@core/features/workspaces/node
 import { WorkspaceRegistrySyncService } from '@core/features/workspaces/node/sync/workspace-registry-sync-service';
 import { startPeriodicSweep } from '@core/primitives/periodic-sweep/node/periodic-sweep';
 import { DEFAULT_AGENT_GIT_CREDENTIALS } from '@core/primitives/project-settings/api';
+import { projectHostRef } from '@core/primitives/projects/api';
 import type { HostReachabilityProbe } from '@core/primitives/ssh/api';
 import { AppDbKeyValueStore } from '@core/services/app-db/node/key-value-store';
-import { conversations } from '@core/services/app-db/node/schema';
+import { conversations, tasks } from '@core/services/app-db/node/schema';
 import { createNotificationService } from '@core/services/notifications/node';
 import { LegacyAccountImports } from '@core/services/provider-accounts/node/migrations/legacy-account-imports';
 import { listProviderAccountSummaries } from '@core/services/provider-accounts/node/provider-account-service';
@@ -690,7 +700,8 @@ export async function bootServices(
     emit: (event) => memoryEvents.emit(undefined, event),
   });
   // Agent control: Emdash's own MCP tools for every local agent (see agent-control).
-  const coordinationRuntime: { service?: CoordinatorService } = {};
+  const coordinationRuntime: { service?: CoordinatorService; background?: BackgroundAgentControl } =
+    {};
   const taskDelegation: { service?: TaskDelegationService } = {};
   const assertActiveAgentCaller = async (caller: AgentCaller) => {
     const actual = await resolveAgentCaller(
@@ -708,6 +719,21 @@ export async function bootServices(
   };
   const agentControl = createAgentControlDispatcher({
     backend: async (caller, action) => {
+      if (
+        [
+          'list_projects',
+          'list_tasks',
+          'get_task_status',
+          'list_conversations',
+          'send_message',
+          'archive_task',
+          'delete_task',
+        ].includes(action.kind)
+      ) {
+        if (!coordinationRuntime.background)
+          throw new Error('Background agent control is starting.');
+        return coordinationRuntime.background.dispatch(caller, action);
+      }
       if (
         ['submit_task_result', 'acknowledge_task_results', 'review_task_result'].includes(
           action.kind
@@ -1104,8 +1130,8 @@ export async function bootServices(
       if (!started.success)
         throw new Error(`Agent startup failed: ${JSON.stringify(started.error)}`);
     },
-    onPrepared: async (caller, params) => {
-      await coordinationRuntime.service?.registerDelegation(caller, params);
+    onPrepared: async (caller, params, request) => {
+      await coordinationRuntime.service?.registerDelegation(caller, params, request.projectGrants);
     },
     getDelegationDefaults: async (caller) => {
       const defaults = await coordinationRuntime.service?.defaultsForCaller(caller);
@@ -1121,10 +1147,17 @@ export async function bootServices(
     },
     getAgentSettings: (id) => providerOverrideSettings.getItem(id),
     getBranchDefaults: () => appSettingsService.get('project'),
-    authorize: async (caller, targetProjectId) => {
+    authorize: async (caller, targetProjectId, request) => {
       await assertActiveAgentCaller(caller);
-      if (targetProjectId !== caller.projectId)
-        throw new Error('Cross-project delegation requires a coordinator project grant.');
+      if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+      if (
+        !(await coordinationRuntime.service.mayAccessProject(caller, targetProjectId, 'delegate'))
+      )
+        throw new Error(`Project permission denied: ${targetProjectId}`);
+      await coordinationRuntime.service.assertDelegationGrants(
+        caller,
+        request?.projectGrants ?? []
+      );
       const project = await getProjectById(db, targetProjectId);
       if (!project || project.archivedAt)
         throw new Error('The target project is unavailable or archived.');
@@ -1208,6 +1241,124 @@ export async function bootServices(
     },
   });
   coordinationRuntime.service = coordinatorService;
+  const taskBranchFacts = (workspaceId?: string) => {
+    const workspace = workspaceId ? createWorkspaceRegistry(db).getLive(workspaceId) : undefined;
+    return {
+      branch: workspace?.observedGit?.branch ?? null,
+      branchObservedAt: workspace?.observedAt ?? null,
+    };
+  };
+  coordinationRuntime.background = new BackgroundAgentControl({
+    access: coordinatorService,
+    assertCaller: assertActiveAgentCaller,
+    projects: async () =>
+      Promise.all(
+        (await getProjects(db)).map(async (project) => {
+          const attached = projectManager.requireAttached(project.id);
+          const effective = attached.success
+            ? await resolveProjectEffectiveSettings({
+                settings: attached.data.settings,
+                repoFacts: attached.data.repoFacts,
+                projectId: project.id,
+              })
+            : undefined;
+          return {
+            id: project.id,
+            name: project.name,
+            host: projectHostRef(project),
+            availability: project.archivedAt
+              ? ('archived' as const)
+              : attached.success
+                ? ('available' as const)
+                : ('not-attached' as const),
+            baseline: effective?.defaultBranch.value ?? null,
+          };
+        })
+      ),
+    assertProject: async (projectId) => {
+      const project = await getProjectById(db, projectId);
+      if (!project) throw new Error(`Unknown project: ${projectId}`);
+      if (project.archivedAt) throw new Error(`The target project is archived: ${projectId}`);
+    },
+    tasks: async (projectId) =>
+      (await taskService.getTasks(projectId)).map((task) => ({
+        ...task,
+        ...taskBranchFacts(task.workspaceId),
+      })),
+    task: async (id) => {
+      const [row] = await db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.id, id), isNull(tasks.deletedAt)))
+        .limit(1);
+      return row
+        ? { ...mapTaskRowToTask(row), ...taskBranchFacts(row.workspaceId ?? undefined) }
+        : null;
+    },
+    conversations: (projectId) => getConversationsForProject(db, projectId),
+    conversation: async (id) => {
+      const row = createConversationRegistry(db).getLive(id);
+      return row && !row.deletionTombstone ? mapConversationRowToConversation(row) : null;
+    },
+    messages: new AppDbKeyValueStore<Record<string, AgentMessageRecord>>(db, 'agent-messages'),
+    deliver: async (conversation, promptId, text) => {
+      if (conversation.type !== 'acp')
+        return {
+          status: 'pending',
+          reason:
+            'The terminal conversation requires explicit delivery in Emdash. No input was injected.',
+        };
+      const ready = await (async () => {
+        try {
+          await taskDelegation.service?.resources.activate(
+            conversation.taskId,
+            conversation.projectId
+          );
+          const target = await resolveConversationRuntimeTarget(
+            conversation.id,
+            workspaceIdentity,
+            db,
+            async (agentId, override) => (await effectiveAgentConfig(agentId, override))?.env,
+            sessionLaunchContexts,
+            prepareAgentLaunch
+          );
+          if (!target.acpInput) throw new Error('The target structured chat has no runtime input.');
+          const runtime = await runtimes.client(target.host);
+          if (!runtime.success)
+            throw new Error(`The target host is unavailable: ${runtime.error.type}`);
+          const attached = await runtime.data.acp.attach(target.acpInput);
+          if (!attached.success)
+            throw new Error(
+              `Could not attach target conversation: ${JSON.stringify(attached.error)}`
+            );
+          const context = await coordinatorService.instructionsForTask(conversation.taskId);
+          return { success: true as const, runtime: runtime.data, context };
+        } catch (error) {
+          return {
+            success: false as const,
+            reason: error instanceof Error ? error.message : String(error),
+          };
+        }
+      })();
+      if (!ready.success) return { status: 'pending', reason: ready.reason };
+      const sent = await ready.runtime.acp.sendPrompt(
+        {
+          conversationId: conversation.id,
+          promptId,
+          placement: 'queue',
+          prompt: { text, ...(ready.context && { hiddenContext: ready.context }) },
+        },
+        { timeoutMs: 0 }
+      );
+      if (!sent.success)
+        return {
+          status: 'pending',
+          reason: `The target did not accept the message: ${JSON.stringify(sent.error)}`,
+        };
+      return { status: 'accepted', queued: sent.data.queued };
+    },
+  });
+
   appScope.add(
     projectEvents.on('project:created', async (project) => {
       await coordinatorService.ensureProject(project.id);
