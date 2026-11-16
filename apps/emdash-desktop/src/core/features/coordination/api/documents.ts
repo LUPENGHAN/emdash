@@ -59,6 +59,12 @@ export const documentCommitSchema = z.object({
   expectedRevision: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/),
 });
 export type DocumentCommit = z.infer<typeof documentCommitSchema>;
+export const documentWriteSchema = z.object({
+  path: documentPathSchema,
+  content: z.string().max(512 * 1024),
+  expectedRevision: z.string().startsWith('disk:').max(300).optional(),
+});
+export type DocumentWrite = z.infer<typeof documentWriteSchema>;
 
 export const documentPushOptionsSchema = z.object({
   targets: z.array(pushTargetSchema),

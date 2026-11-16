@@ -9,6 +9,7 @@ import {
   type ManagementDocumentReference,
   type ManagementDocument,
   type DocumentCommit,
+  type DocumentWrite,
 } from '../api/documents';
 import {
   taskResultSchema,
@@ -32,7 +33,9 @@ type Dependencies = {
     retry(caller: AgentCaller, taskId: string): Promise<AgentControlResult>;
   };
   documents?: Pick<CoordinatorDocuments, 'describe' | 'create' | 'read'> &
-    Partial<Pick<CoordinatorDocuments, 'commit' | 'pushTargets' | 'pushTarget' | 'preparePush'>>;
+    Partial<
+      Pick<CoordinatorDocuments, 'commit' | 'pushTargets' | 'pushTarget' | 'preparePush' | 'write'>
+    >;
   store: {
     getOrThrow(id: string): Promise<Coordinator | null>;
     setOrThrow(id: string, value: Coordinator): Promise<void>;
@@ -94,7 +97,7 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '7',
+        version: '8',
         id,
         kind: 'project',
         name: 'Main agent',
@@ -150,7 +153,7 @@ export class CoordinatorService {
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '7',
+        version: '8',
         id,
         name,
         kind: 'cross-project',
@@ -216,6 +219,7 @@ export class CoordinatorService {
     if (main)
       return `${instruction}
 Management document push target: ${JSON.stringify(main.documentPushTarget ?? null)}.
+Management document storage: ${JSON.stringify(main.documentStorage ? { projectId: main.documentStorage.projectId, taskId: main.documentStorage.taskId, state: main.documentStorage.state } : null)}. Use read_management_document and write_management_document to access the configured storage; it may be outside your conversation's working directory. Updating a file requires the returned disk version as expected_revision. Creating or editing a document does not commit or push it.
 Keep management documents local until a personal fork is explicitly configured. A saved target does not trigger a push. When a push is requested, check get_task_status for this main task to obtain its current documentPushTarget; never substitute a default code remote or push code baseline refs.`;
     const assignment = records.find((record) => record.tasks[taskId])?.tasks[taskId];
     if (assignment)
@@ -315,14 +319,101 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   }
   private async documentRecord(id: string) {
     const saved = await this.get(id);
-    await this.deps.assertProjectAvailable(saved.projectId);
+    await this.assertDocumentAvailable(saved);
     return saved.params ? saved : this.open(id);
+  }
+  private async assertDocumentAvailable(saved: Coordinator) {
+    await this.deps.assertProjectAvailable(saved.projectId);
+    if (saved.documentStorage) {
+      await this.deps.assertProjectAvailable(saved.documentStorage.projectId);
+      if (saved.documentStorage.state !== 'ready')
+        throw new Error(
+          'Document storage setup is incomplete. Retry setup using the saved project.'
+        );
+      const state = await this.deps
+        .resources()
+        .findTask(saved.documentStorage.taskId, saved.documentStorage.projectId);
+      if (state !== 'available')
+        throw new Error('The saved document workspace is unavailable. Its binding is preserved.');
+    }
+  }
+  async createDocumentStorage(id: string, projectId: string): Promise<Coordinator> {
+    if (!(await this.get(id)).params) await this.open(id);
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      await this.deps.assertProjectAvailable(record.projectId);
+      await this.deps.assertProjectAvailable(projectId);
+      const runtime = this.deps.resources();
+      let storage = record.documentStorage;
+      if (storage && storage.projectId !== projectId)
+        throw new Error('Use document migration to change the saved storage project.');
+      if (!storage) {
+        if (record.params?.workspaceConfig.git.kind !== 'none')
+          throw new Error('Use document migration to preserve the documents in this workspace.');
+        const taskId = randomUUID();
+        const params = await runtime.prepare(
+          {
+            taskId: record.taskId,
+            conversationId: record.conversationId,
+            projectId: record.projectId,
+            providerId: record.primary.agent ?? (await this.deps.defaultAgent()),
+            title: record.name,
+            cwd: null,
+          },
+          { kind: 'create_task', projectId, name: `${record.name} documents` },
+          { taskId, conversationId: randomUUID(), role: 'coordination' }
+        );
+        if (
+          params.workspaceConfig.git.kind !== 'management' ||
+          params.workspaceConfig.workspace.kind !== 'new-worktree'
+        )
+          throw new Error('Choose a Git repository for management document storage.');
+        params.taskConfig.role = 'coordination';
+        params.taskConfig.initialConversation = undefined;
+        storage = { projectId, taskId, params, state: 'preparing' };
+        record.documentStorage = storage;
+        await this.save(record);
+      }
+      const state = await runtime.findTask(storage.taskId, storage.projectId);
+      if (state === 'deleted')
+        throw new Error(
+          'The document storage task was removed or archived. Its binding is preserved.'
+        );
+      if (state === 'missing') await runtime.create(storage.params);
+      await runtime.activate(storage.taskId, storage.projectId);
+      if (storage.state !== 'ready') {
+        storage.state = 'ready';
+        record.projectIds = [...new Set([...record.projectIds, storage.projectId])];
+        await this.save(record);
+      }
+      return record;
+    });
   }
   async documentWorkspace(id: string) {
     return this.documentService().describe(await this.documentRecord(id));
   }
   async createDocument(id: string, path: string) {
     return this.documentService().create(await this.documentRecord(id), path);
+  }
+  async writeDocument(id: string, input: DocumentWrite, caller?: AgentCaller) {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      await this.assertDocumentAvailable(record);
+      if (
+        caller &&
+        (caller.taskId !== record.taskId || caller.conversationId !== record.conversationId)
+      )
+        throw new Error('Only the designated main conversation can write management documents.');
+      const documents = this.documentService();
+      if (!documents.write) throw new Error('Management document writes are unavailable.');
+      const result = await documents.write(record, input);
+      this.deps.emit({
+        coordinatorId: record.id,
+        projectId: record.projectId,
+        taskId: record.taskId,
+      });
+      return result;
+    });
   }
   async documentPushOptions(id: string) {
     const documents = this.documentService();
@@ -336,6 +427,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       await this.deps.assertProjectAvailable(record.projectId);
       if (remote === null) record.documentPushTarget = undefined;
       else {
+        await this.assertDocumentAvailable(record);
         const documents = this.documentService();
         if (!documents.pushTarget)
           throw new Error('Management document push configuration is unavailable.');
@@ -353,7 +445,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   async prepareDocumentPush(id: string, expectedRevision: string, expectedFingerprint: string) {
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
-      await this.deps.assertProjectAvailable(record.projectId);
+      await this.assertDocumentAvailable(record);
       const documents = this.documentService();
       if (!documents.preparePush) throw new Error('Management document push is unavailable.');
       if (record.documentPushTarget?.fingerprint !== expectedFingerprint)
@@ -368,7 +460,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       const documents = this.documentService();
       if (!documents.commit) throw new Error('Management document commits are unavailable.');
       const record = await this.get(id);
-      await this.deps.assertProjectAvailable(record.projectId);
+      await this.assertDocumentAvailable(record);
       if (!record.params)
         throw new Error('Open the main agent document workspace before committing.');
       return documents.commit(record, input);
@@ -490,6 +582,14 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       assignment: record.tasks[taskId] ?? null,
       ...(record.taskId === taskId &&
         record.documentPushTarget && { documentPushTarget: record.documentPushTarget }),
+      ...(record.taskId === taskId &&
+        record.documentStorage && {
+          documentStorage: {
+            projectId: record.documentStorage.projectId,
+            taskId: record.documentStorage.taskId,
+            state: record.documentStorage.state,
+          },
+        }),
     };
   }
   private async accessRecords(caller: AgentCaller, targetTaskId?: string): Promise<Coordinator[]> {

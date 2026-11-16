@@ -1,6 +1,9 @@
 import { defineContract, eventStream, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
-import type { ManagementDocumentReference } from '@core/features/coordination/api/documents';
+import type {
+  ManagementDocumentReference,
+  DocumentWrite,
+} from '@core/features/coordination/api/documents';
 import type { TaskResult } from '@core/features/coordination/api/types';
 import { pendingAgentMessageSchema } from './pending-messages';
 
@@ -67,6 +70,7 @@ export const NAVIGATION_COMMAND_IDS = [
 export type NavigationCommandId = (typeof NAVIGATION_COMMAND_IDS)[number];
 
 export type AgentControlAction =
+  | ({ kind: 'write_management_document'; coordinatorId?: string } & DocumentWrite)
   | { kind: 'read_management_document'; coordinatorId?: string; path: string; revision?: string }
   | { kind: 'cancel_pending_task'; taskId: string }
   | { kind: 'retry_task'; taskId: string }

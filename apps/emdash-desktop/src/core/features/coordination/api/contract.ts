@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { delegationStatusSchema } from '@core/features/agent-control/api/delegations';
 import {
   documentCommitSchema,
+  documentWriteSchema,
   documentPushOptionsSchema,
   documentPushPlanSchema,
   documentPathSchema,
@@ -21,6 +22,14 @@ import {
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  writeDocument: procedure({
+    input: documentWriteSchema.extend({ id: z.string() }),
+    output: managementDocumentSchema,
+  }),
+  createDocumentStorage: procedure({
+    input: z.object({ id: z.string(), projectId: z.string() }),
+    output: z.custom<Coordinator>(),
+  }),
   delegationStatus: procedure({
     input: z.object({ id: z.string(), taskId: z.string() }),
     output: delegationStatusSchema.nullable(),

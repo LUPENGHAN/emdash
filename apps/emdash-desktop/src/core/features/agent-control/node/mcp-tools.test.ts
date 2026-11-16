@@ -68,6 +68,20 @@ it('retries a saved task by stable ID without taking replacement startup paramet
   expect(Object.keys(tool.config.inputSchema ?? {})).toEqual(['task_id']);
 });
 
+it('carries a management document write and its expected disk version to the backend', async () => {
+  const registered = registeredTools();
+  const tool = registered.tool('write_management_document');
+  if (!tool) throw new Error('Missing management document write tool');
+  await tool.handler({ path: 'plan.md', content: 'updated', expected_revision: 'disk:etag' });
+  expect(registered.dispatch).toHaveBeenCalledWith({
+    kind: 'write_management_document',
+    coordinatorId: undefined,
+    path: 'plan.md',
+    content: 'updated',
+    expectedRevision: 'disk:etag',
+  });
+});
+
 it('carries explicit supplier, model and effort through task and conversation tools', async () => {
   const registered = registeredTools();
   const task = registered.tool('create_task')!;

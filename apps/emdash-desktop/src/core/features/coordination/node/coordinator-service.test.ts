@@ -469,11 +469,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('7');
+    expect((await test.service.ensureProject('project')).version).toBe('8');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('7');
+    expect(test.records.get(record.id)?.version).toBe('8');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -914,7 +914,7 @@ it('preserves a legacy main checkout until its separate document migration runs'
   vi.mocked(test.resources.prepare).mockClear();
   vi.mocked(test.resources.create).mockClear();
   const reopened = await new CoordinatorService(test.deps).open(first.id);
-  expect(reopened.version).toBe('7');
+  expect(reopened.version).toBe('8');
   expect(reopened.params?.workspaceConfig.git).toEqual(saved.params.workspaceConfig.git);
   expect(reopened.taskId).toBe(first.taskId);
   expect(reopened.conversationId).toBe(first.conversationId);
@@ -946,6 +946,106 @@ it('preserves a directory main workspace and its conversation across opening and
 });
 
 describe('management document authorization', () => {
+  it('sets up independent Git storage for a directory main, resuming the same resources after interruption', async () => {
+    const test = setup();
+    const main = await test.service.openProject('directory');
+    const saved = test.records.get(main.id);
+    if (!saved?.params) throw new Error('Missing main runtime');
+    saved.params.workspaceConfig = {
+      version: '2',
+      git: { kind: 'none' },
+      workspace: { kind: 'repository-instance', workspaceId: 'directory-root' },
+    };
+    test.records.set(saved.id, saved);
+    const original = structuredClone(saved);
+    vi.mocked(test.resources.prepare).mockImplementation(async (_caller, request, ids) => ({
+      id: ids.taskId,
+      projectId: request.projectId!,
+      taskConfig: { version: '1', name: request.name },
+      workspaceConfig: {
+        version: '2',
+        git: { kind: 'management', branchName: `emdash/manage/${ids.taskId}` },
+        workspace: { kind: 'new-worktree' },
+      },
+    }));
+    vi.mocked(test.resources.activate).mockRejectedValueOnce(new Error('Host disconnected'));
+    await expect(test.service.createDocumentStorage(main.id, 'git-project')).rejects.toThrow(
+      'Host disconnected'
+    );
+    const pending = test.records.get(main.id)?.documentStorage;
+    expect(pending?.state).toBe('preparing');
+    await expect(test.service.createDocumentStorage(main.id, 'other-project')).rejects.toThrow(
+      'migration'
+    );
+    const restarted = new CoordinatorService(test.deps);
+    const restored = await restarted.createDocumentStorage(main.id, 'git-project');
+    expect(restored.documentStorage).toMatchObject({
+      projectId: 'git-project',
+      taskId: pending?.taskId,
+      state: 'ready',
+    });
+    expect(restored.documentStorage?.params.taskConfig.role).toBe('coordination');
+    expect(restored.documentStorage?.params.taskConfig.initialConversation).toBeUndefined();
+    expect(restored.params).toEqual(original.params);
+    expect(restored.taskId).toBe(original.taskId);
+    expect(restored.conversationId).toBe(original.conversationId);
+    expect(restored.tasks).toEqual(original.tasks);
+    expect(test.resources.create).toHaveBeenCalledTimes(2);
+    expect(test.resources.prepare).toHaveBeenCalledTimes(2);
+    expect(test.resources.start).not.toHaveBeenCalled();
+    await restarted.createDocumentStorage(main.id, 'git-project');
+    expect(test.resources.create).toHaveBeenCalledTimes(2);
+    test.deps.assertProjectAvailable.mockImplementation(async (id?: string) => {
+      if (id === 'git-project') throw new Error('Storage project archived');
+    });
+    const describe = vi.fn();
+    const documentService = new CoordinatorService({
+      ...test.deps,
+      documents: { describe, create: vi.fn(), read: vi.fn() },
+    });
+    await expect(documentService.documentWorkspace(main.id)).rejects.toThrow(
+      'Storage project archived'
+    );
+    expect(describe).not.toHaveBeenCalled();
+    expect(test.records.get(main.id)?.documentStorage?.projectId).toBe('git-project');
+  });
+
+  it('allows only the designated main conversation to write shared documents', async () => {
+    const test = setup();
+    const main = await assigned(test);
+    const write = vi.fn(async () => ({
+      coordinatorId: main.id,
+      workspaceId: 'docs',
+      path: 'plan.md',
+      content: 'saved',
+      revision: 'disk:etag',
+    }));
+    const service = new CoordinatorService({
+      ...test.deps,
+      documents: { write, read: vi.fn(), create: vi.fn(), describe: vi.fn() },
+    });
+    const input = { path: 'plan.md', content: 'saved' };
+    await expect(
+      service.writeDocument(main.id, input, caller(main, 'worker-task'))
+    ).rejects.toThrow('designated main');
+    await expect(
+      service.writeDocument(main.id, input, { ...caller(main), conversationId: 'superseded' })
+    ).rejects.toThrow('designated main');
+    await service.writeDocument(main.id, input, caller(main));
+    expect(write).toHaveBeenCalledOnce();
+  });
+
+  it('requires migration rather than replacing a management checkout with empty storage', async () => {
+    const test = setup();
+    const main = await test.service.openProject('project');
+    const prepared = vi.mocked(test.resources.prepare).mock.calls.length;
+    await expect(test.service.createDocumentStorage(main.id, 'other-project')).rejects.toThrow(
+      'migration'
+    );
+    expect(test.resources.prepare).toHaveBeenCalledTimes(prepared);
+    expect((await test.service.getByTask(main.taskId))?.documentStorage).toBeUndefined();
+  });
+
   it('checks worker grants before reading and keeps them bounded by the responsible main scope', async () => {
     const { records, deps } = setup();
     const read = vi.fn(async () => ({

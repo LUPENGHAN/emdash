@@ -11,6 +11,8 @@ import { localBranchRefSchema } from '@emdash/core/runtimes/git/api';
 import type { HostRuntimesClient } from '@emdash/core/services/runtime-broker/api';
 import {
   documentCommitSchema,
+  documentWriteSchema,
+  type DocumentWrite,
   type DocumentCommit,
   documentPathSchema,
   documentRevisionSchema,
@@ -28,7 +30,9 @@ export type DocumentRuntime = {
 export class CoordinatorDocuments {
   constructor(private readonly resolve: (record: Coordinator) => Promise<DocumentRuntime>) {}
   private async storage(record: Coordinator) {
-    const config = record.params?.workspaceConfig.git;
+    const config = (record.documentStorage?.params ?? record.params)?.workspaceConfig.git;
+    if (record.documentStorage && record.documentStorage.state !== 'ready')
+      throw new Error('Document storage setup is incomplete. Retry its saved project.');
     if (config?.kind === 'none')
       throw new Error(
         'Management document Git history is not applicable to this directory project.'
@@ -93,6 +97,42 @@ export class CoordinatorDocuments {
     });
     if (!result.success) throw new Error(result.error.message);
     return result.data;
+  }
+  async write(record: Coordinator, input: DocumentWrite): Promise<ManagementDocument> {
+    const selected = documentWriteSchema.parse(input);
+    if (
+      Buffer.byteLength(selected.content, 'utf8') > MAX_DOCUMENT_BYTES ||
+      selected.content.includes('\0')
+    )
+      throw new Error('Choose a text document no larger than 512 KiB.');
+    const storage = await this.storage(record);
+    const { path } = this.path(storage.root, selected.path);
+    const exists = await storage.runtime.files.fs.exists({ path });
+    if (!exists.success) throw new Error('The document destination is unavailable.');
+    if (exists.data.exists && !selected.expectedRevision)
+      throw new Error('Read the document and provide its disk version before replacing it.');
+    if (!exists.data.exists) {
+      if (selected.expectedRevision) throw new Error('The document no longer exists.');
+      const realParent = await this.checkedPath(storage, path, true);
+      const root = await storage.runtime.files.fs.realPath({ path: storage.root.path });
+      if (!root.success) throw new Error('The document storage root is unavailable.');
+      const expectedParent = absoluteDirname(
+        this.path({ ...storage.root, path: root.data.path }, selected.path).path
+      );
+      if (!expectedParent || !absoluteEquals(expectedParent, realParent))
+        throw new Error('Write document files directly instead of through symbolic links.');
+      const created = await storage.runtime.files.fs.createFile({ path });
+      if (!created.success) throw new Error(`Could not create document: ${created.error.type}`);
+    }
+    const before = await this.read(record, selected.path, selected.expectedRevision);
+    const written = await storage.runtime.files.fs.writeFile({
+      path,
+      content: selected.content,
+      encoding: 'utf8',
+      precondition: { kind: 'etag', etag: before.revision.slice('disk:'.length) },
+    });
+    if (!written.success) throw new Error(`Could not save document: ${written.error.type}`);
+    return this.read(record, selected.path);
   }
   async pushTargets(record: Coordinator) {
     const storage = await this.storage(record);

@@ -5,7 +5,7 @@ import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordin
 
 function main(id = 'a'): Coordinator {
   return {
-    version: '7',
+    version: '8',
     id,
     kind: 'project',
     name: 'Main',

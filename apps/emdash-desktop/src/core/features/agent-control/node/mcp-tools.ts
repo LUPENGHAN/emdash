@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   documentPathSchema,
   documentRevisionSchema,
+  documentWriteSchema,
 } from '@core/features/coordination/api/documents';
 import { taskResultSchema } from '@core/features/coordination/api/types';
 import { formatMemoryList, formatMemoryRecord } from '@core/features/memory/api/format';
@@ -378,6 +379,28 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         ...(connection && { connection }),
         ...(effort !== undefined && { effort }),
         ...(ui && { ui }),
+      })
+  );
+
+  server.registerTool(
+    'write_management_document',
+    {
+      description:
+        'Designated main conversation: create or update a management text document in its configured storage, including a different repository or host. Paths are relative to management storage. To update, read first and pass its returned disk version as expected_revision. Omit expected_revision only for a new file. This does not commit or push documents. Workers cannot write shared management documents.',
+      inputSchema: {
+        coordinator_id: z.string().min(1).optional(),
+        path: documentWriteSchema.shape.path,
+        content: documentWriteSchema.shape.content,
+        expected_revision: documentWriteSchema.shape.expectedRevision,
+      },
+    },
+    ({ coordinator_id, path, content, expected_revision }) =>
+      dispatch({
+        kind: 'write_management_document',
+        coordinatorId: coordinator_id,
+        path,
+        content,
+        expectedRevision: expected_revision,
       })
   );
 

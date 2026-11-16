@@ -777,6 +777,7 @@ export async function bootServices(
       if (
         [
           'read_management_document',
+          'write_management_document',
           'submit_task_result',
           'acknowledge_task_results',
           'review_task_result',
@@ -785,7 +786,10 @@ export async function bootServices(
         ].includes(action.kind)
       )
         await assertActiveAgentCaller(caller);
-      if (action.kind === 'read_management_document') {
+      if (
+        action.kind === 'read_management_document' ||
+        action.kind === 'write_management_document'
+      ) {
         const service = coordinationRuntime.service;
         if (!service) throw new Error('Main agent coordination is starting.');
         const id =
@@ -793,7 +797,17 @@ export async function bootServices(
         if (!id) throw new Error('Choose a main agent document source.');
         return {
           text: JSON.stringify(
-            await service.readDocument(id, action.path, action.revision, caller)
+            action.kind === 'write_management_document'
+              ? await service.writeDocument(
+                  id,
+                  {
+                    path: action.path,
+                    content: action.content,
+                    expectedRevision: action.expectedRevision,
+                  },
+                  caller
+                )
+              : await service.readDocument(id, action.path, action.revision, caller)
           ),
         };
       }
@@ -1328,10 +1342,22 @@ export async function bootServices(
       },
     },
     documents: new CoordinatorDocuments(async (record) => {
+      const source = record.documentStorage ?? record;
+      const storageProject = await getProjectById(db, source.projectId);
+      if (!storageProject || storageProject.archivedAt)
+        throw new Error(
+          'The document storage project is unavailable or archived. Its binding is preserved.'
+        );
       const [task] = await db
         .select()
         .from(tasks)
-        .where(and(eq(tasks.id, record.taskId), isNull(tasks.deletedAt)))
+        .where(
+          and(
+            eq(tasks.id, source.taskId),
+            eq(tasks.projectId, source.projectId),
+            isNull(tasks.deletedAt)
+          )
+        )
         .limit(1);
       if (!task?.workspaceId) throw new Error('The management workspace is unavailable.');
       const identity = await workspaceIdentity.resolve(task.workspaceId);

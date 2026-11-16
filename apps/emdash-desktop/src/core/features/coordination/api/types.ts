@@ -60,7 +60,7 @@ export type ResultEvent = {
   error?: string;
 };
 export type Coordinator = {
-  version: '7';
+  version: '8';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -76,6 +76,13 @@ export type Coordinator = {
   events: ResultEvent[];
   creationFingerprint?: string;
   documentPushTarget?: PushTarget;
+  documentStorage?: DocumentStorage;
+};
+export type DocumentStorage = {
+  projectId: string;
+  taskId: string;
+  params: CreateTaskParams;
+  state: 'preparing' | 'ready';
 };
 export type CoordinationEvent = { coordinatorId: string; projectId: string; taskId?: string };
 export type TakeoverPreview = {
@@ -174,6 +181,11 @@ const coordinatorV6 = coordinatorV1.extend({
   ),
 });
 
+const coordinatorV7 = coordinatorV6.extend({
+  version: z.literal('7'),
+  documentPushTarget: pushTargetSchema.optional(),
+});
+
 export const coordinatorRecord = defineVersionedSchema()
   .initial('1', coordinatorV1)
   .version('2', coordinatorV1.extend({ version: z.literal('2') }), (record) => ({
@@ -188,12 +200,20 @@ export const coordinatorRecord = defineVersionedSchema()
     (record) => ({ ...record, version: '5' as const })
   )
   .version('6', coordinatorV6, (record) => ({ ...record, version: '6' as const }))
+  .version('7', coordinatorV7, (record) => ({ ...record, version: '7' as const }))
   .version(
-    '7',
-    coordinatorV6.extend({
-      version: z.literal('7'),
-      documentPushTarget: pushTargetSchema.optional(),
+    '8',
+    coordinatorV7.extend({
+      version: z.literal('8'),
+      documentStorage: z
+        .object({
+          projectId: z.string(),
+          taskId: z.string(),
+          params: z.custom<CreateTaskParams>(),
+          state: z.enum(['preparing', 'ready']),
+        })
+        .optional(),
     }),
-    (record) => ({ ...record, version: '7' as const })
+    (record) => ({ ...record, version: '8' as const })
   )
   .build();

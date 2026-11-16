@@ -80,7 +80,7 @@ async function setup() {
     git: client(gitContract, connect(gp.left)),
   };
   const record: Coordinator = {
-    version: '7',
+    version: '8',
     id: 'project:project',
     kind: 'project',
     name: 'Main agent',
@@ -112,6 +112,72 @@ async function setup() {
 }
 
 describe('management documents over host Wire runtimes', () => {
+  it('writes new documents and requires a current disk version before updating', async () => {
+    const { service, record, repo } = await setup();
+    const created = await service.write(record, { path: 'draft.md', content: 'first draft' });
+    expect(created.content).toBe('first draft');
+    await expect(
+      service.write(record, { path: 'draft.md', content: 'unversioned overwrite' })
+    ).rejects.toThrow('provide its disk version');
+    const updated = await service.write(record, {
+      path: 'draft.md',
+      content: 'second draft',
+      expectedRevision: created.revision,
+    });
+    expect(updated.revision).not.toBe(created.revision);
+    await writeFile(join(repo, 'draft.md'), 'concurrent edit');
+    await expect(
+      service.write(record, {
+        path: 'draft.md',
+        content: 'stale overwrite',
+        expectedRevision: updated.revision,
+      })
+    ).rejects.toThrow('changed');
+    expect(await readFile(join(repo, 'draft.md'), 'utf8')).toBe('concurrent edit');
+    await expect(
+      service.write(record, {
+        path: 'draft.md',
+        content: 'binary\0',
+        expectedRevision: updated.revision,
+      })
+    ).rejects.toThrow('text document');
+  });
+
+  it('uses independent storage while preserving the directory main config and rejecting links', async () => {
+    const { service, record, repo, dir } = await setup();
+    if (!record.params) throw new Error('Missing main params');
+    const params = structuredClone(record.params);
+    record.params.workspaceConfig = {
+      version: '2',
+      git: { kind: 'none' },
+      workspace: { kind: 'repository-instance', workspaceId: 'directory' },
+    };
+    record.documentStorage = {
+      projectId: 'storage-project',
+      taskId: 'storage-task',
+      state: 'ready',
+      params,
+    };
+    const directoryConfig = structuredClone(record.params);
+    expect((await service.read(record, 'plan.md')).content).toBe('second plan');
+    const saved = await service.write(record, {
+      path: 'linked-plan.md',
+      content: 'stored outside the conversation directory',
+    });
+    expect(saved.workspaceId).toBe('workspace');
+    expect(record.params).toEqual(directoryConfig);
+    await writeFile(join(dir, 'outside.md'), 'keep');
+    await symlink(join(dir, 'outside.md'), join(repo, 'escape.md'));
+    await expect(
+      service.write(record, {
+        path: 'escape.md',
+        content: 'overwrite',
+        expectedRevision: 'disk:etag',
+      })
+    ).rejects.toThrow('links');
+    expect(await readFile(join(dir, 'outside.md'), 'utf8')).toBe('keep');
+  });
+
   it('creates without overwriting and returns content versions that reject stale reads', async () => {
     const { service, record, repo } = await setup();
     await service.create(record, 'decision.md');

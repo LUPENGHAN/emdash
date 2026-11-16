@@ -135,6 +135,7 @@ export async function executeAgentAction(
     }
 
     case 'read_management_document':
+    case 'write_management_document':
     case 'list_projects':
     case 'get_task_status':
     case 'cancel_pending_task':
