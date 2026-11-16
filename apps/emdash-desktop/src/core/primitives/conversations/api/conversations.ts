@@ -37,6 +37,9 @@ export type Conversation = {
   /** Model provider source: provider id, null = the agent's own login, absent = agent default. */
   modelSource?: string | null;
   sourceModel?: string;
+  /** Frozen session effort; null follows the adapter default without inheriting agent settings. */
+  effort?: string | null;
+  supplierId?: string;
   agentStatus?: AgentStatus | null;
   agentStatusSeen?: boolean;
   /** Transport type: 'pty' (default) uses the terminal/PTY path; 'acp' uses the Agent Client Protocol. */
@@ -126,6 +129,9 @@ export type CreateConversationParams = {
   modelSource?: string | null;
   /** Model on that provider. */
   sourceModel?: string;
+  /** Frozen session effort; null follows the adapter default without inheriting agent settings. */
+  effort?: string | null;
+  supplierId?: string;
   /**
    * Resume this existing provider session instead of starting a new one. Used to adopt
    * sessions that were started outside Emdash (terminal: --resume; chat UI: session/load).

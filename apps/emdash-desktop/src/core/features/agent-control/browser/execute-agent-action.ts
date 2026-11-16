@@ -35,6 +35,7 @@ import { commitRef } from '@core/primitives/git/api';
 import { getNavigation } from '@core/primitives/navigation/browser/navigation-selectors';
 import { resolveTaskBranchName } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult, OpenTarget } from '../api';
+import { delegationModelSelection } from '../api/model-selection';
 import { runBrowserOp, type AutomatableBrowser } from './browser-automation';
 import { deleteDecisionPrompt } from './delete-decision-prompt';
 import { deleteRequirementPrompt } from './delete-requirement-prompt';
@@ -78,7 +79,7 @@ export async function executeAgentAction(
           Array.from(manager.conversations.values(), (store) => store.data)
         ),
         type,
-        ...(action.model && { model: action.model }),
+        ...delegationModelSelection(action),
         ...(type === 'acp'
           ? { initialQueue: [{ text: action.prompt }] }
           : { initialPrompt: action.prompt }),
@@ -272,6 +273,7 @@ async function createTaskForAgent(
         initialConversation: {
           id: crypto.randomUUID(),
           provider: providerId as AgentProviderId,
+          ...delegationModelSelection(action),
           title: nextDefaultConversationTitle(providerId, []),
           type,
           ...(type === 'acp'

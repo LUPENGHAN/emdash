@@ -52,10 +52,14 @@ export class AppDbKeyValueStore<TSchema extends Record<string, unknown>> {
 
   async del<K extends keyof TSchema & string>(key: K): Promise<void> {
     try {
-      await this.db.delete(kv).where(eq(kv.key, this.prefixed(key)));
+      await this.delOrThrow(key);
     } catch (error) {
       this.logger?.error('Failed to delete KV', { key, error });
     }
+  }
+
+  async delOrThrow<K extends keyof TSchema & string>(key: K): Promise<void> {
+    await this.db.delete(kv).where(eq(kv.key, this.prefixed(key)));
   }
 
   async clear(): Promise<void> {

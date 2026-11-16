@@ -97,6 +97,7 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
   constructor(
     private readonly dependencies: {
       db: AppDb;
+      getDefaultEffort?: (agentId: string) => Promise<string | undefined>;
       projects: Pick<ProjectAttachmentManager, 'requireAttached'>;
       sessions: TaskSessionManager;
       workspacePlacement: WorkspacePlacementResolver;
@@ -115,6 +116,19 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
   }
 
   async createTask(params: CreateTaskParams): Promise<Result<CreateTaskSuccess, CreateTaskError>> {
+    const initial = params.taskConfig.initialConversation;
+    if (initial && initial.effort === undefined && this.dependencies.getDefaultEffort) {
+      params = {
+        ...params,
+        taskConfig: {
+          ...params.taskConfig,
+          initialConversation: {
+            ...initial,
+            effort: (await this.dependencies.getDefaultEffort(initial.provider)) ?? null,
+          },
+        },
+      };
+    }
     const result = await createTask(
       this.dependencies.db,
       this.dependencies.projects,

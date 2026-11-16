@@ -59,6 +59,45 @@ function registeredTools() {
   };
 }
 
+it('carries explicit supplier, model and effort through task and conversation tools', async () => {
+  const registered = registeredTools();
+  const task = registered.tool('create_task')!;
+  await task.handler({
+    name: 'Review',
+    prompt: 'Check code',
+    agent: 'codex',
+    supplier_id: 'internal',
+    model: 'code-v1',
+    connection: 'gateway',
+    effort: 'high',
+  });
+  expect(registered.dispatch).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      kind: 'create_task',
+      supplierId: 'internal',
+      model: 'code-v1',
+      effort: 'high',
+      connection: 'gateway',
+    })
+  );
+  const conversation = registered.tool('create_conversation')!;
+  await conversation.handler({
+    agent: 'claude',
+    prompt: 'Review',
+    supplier_id: 'alternate',
+    model: 'reasoner',
+    effort: null,
+  });
+  expect(registered.dispatch).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      kind: 'create_conversation',
+      supplierId: 'alternate',
+      model: 'reasoner',
+      effort: null,
+    })
+  );
+});
+
 function requirement(id: string, extra: Partial<Requirement> = {}): Requirement {
   return {
     id,

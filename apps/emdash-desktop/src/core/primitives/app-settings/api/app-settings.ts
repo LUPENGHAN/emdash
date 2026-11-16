@@ -69,6 +69,8 @@ export type ProviderCustomConfig = {
   modelSource?: string;
   /** Model to use on that provider; absent = the agent's default. */
   sourceModel?: string;
+  /** Default reasoning effort for sessions launched with this agent. */
+  effort?: string;
   /** Codex on its own or an official login: context window in tokens; absent = Codex's default. */
   contextWindow?: number;
 };

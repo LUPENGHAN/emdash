@@ -11,6 +11,7 @@ import {
 } from '../api';
 import type { CodexModelCatalog, CodexModelInfo } from '../api/node/codex-launch';
 import { buildSourceLaunch, type ExtensionProviderAgent } from '../api/node/source-launch';
+import { withAgentEffort } from './agent-effort';
 import { ACCOUNT_HOME_ENV } from './official-accounts';
 
 export type EffectiveAgentConfigDeps = {
@@ -20,6 +21,12 @@ export type EffectiveAgentConfigDeps = {
   ) => Promise<boolean>;
   getAgentConfig: (agentId: string) => Promise<ProviderCustomConfig | undefined>;
   getProviders: () => Promise<ModelProvider[]>;
+  prepareTaskGateway?: (
+    supplierId: string,
+    model: string,
+    conversationId: string,
+    agentId: string
+  ) => Promise<{ provider: ModelProvider; apiKey: string; compatibility?: boolean }>;
   prepareGateway?: (
     sourceId: string,
     model: string | undefined,
@@ -47,9 +54,14 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
     agentId: string,
     override?: ModelSourceOverride
   ): Promise<ProviderCustomConfig | undefined> => {
-    const config = await deps.getAgentConfig(agentId);
-    const sourceId =
-      override?.modelSource !== undefined ? override.modelSource : config?.modelSource;
+    const saved = await deps.getAgentConfig(agentId);
+    const config =
+      override?.effort !== undefined ? { ...saved, effort: override.effort ?? undefined } : saved;
+    const sourceId = override?.supplierId
+      ? 'gateway:models'
+      : override?.modelSource !== undefined
+        ? override.modelSource
+        : config?.modelSource;
     if (
       override?.modelSource === null &&
       ['claude', 'codex'].includes(agentId) &&
@@ -62,21 +74,41 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
     }
     if (sourceId === 'gateway:models' && !isProviderCapableAgent(agentId))
       throw new ModelSourceUnavailableError('This agent has no gateway launch integration.');
-    if (!sourceId || !isProviderCapableAgent(agentId)) return withCodexContext(agentId, config);
+    if (!sourceId || !isProviderCapableAgent(agentId))
+      return withAgentEffort(agentId, withCodexContext(agentId, config));
 
     // A chosen provider that cannot be used stops the launch: falling back to the
     // agent's own login would silently spend the user's subscription instead.
     const gateway = sourceId.startsWith('gateway:');
     if (gateway && !deps.prepareGateway)
       throw new ModelSourceUnavailableError('This agent cannot use the local gateway.');
-    const target = gateway
-      ? await deps.prepareGateway!(
-          sourceId,
-          override?.modelSource !== undefined ? override.sourceModel : config?.sourceModel,
-          override?.conversationId,
-          ...(sourceId === 'gateway:models' ? [agentId] : [])
+    if (
+      override?.supplierId &&
+      (!override.sourceModel ||
+        !override.conversationId ||
+        override.modelSource === null ||
+        !deps.prepareTaskGateway)
+    ) {
+      throw new ModelSourceUnavailableError(
+        'A task supplier requires gateway access, a model and a conversation.'
+      );
+    }
+    const target = override?.supplierId
+      ? await deps.prepareTaskGateway!(
+          override.supplierId,
+          override.sourceModel!,
+          override.conversationId!,
+          agentId
         )
-      : undefined;
+      : gateway
+        ? await deps.prepareGateway!(
+            sourceId,
+            override?.sourceModel ??
+              (override?.modelSource === undefined ? config?.sourceModel : undefined),
+            override?.conversationId,
+            ...(sourceId === 'gateway:models' ? [agentId] : [])
+          )
+        : undefined;
     const provider =
       target?.provider ??
       (await deps.getProviders()).find((candidate) => candidate.id === sourceId);
@@ -91,10 +123,13 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
         throw new ModelSourceUnavailableError(`“${provider.name}” is an account of another agent.`);
       }
       const home = await deps.prepareAccountHome(provider);
-      return withCodexContext(agentId, {
-        ...config,
-        env: { ...config?.env, [ACCOUNT_HOME_ENV[provider.account.agent]]: home },
-      });
+      return withAgentEffort(
+        agentId,
+        withCodexContext(agentId, {
+          ...config,
+          env: { ...config?.env, [ACCOUNT_HOME_ENV[provider.account.agent]]: home },
+        })
+      );
     }
     const keyProtocol = providerProtocolForAgent(provider, agentId);
     const apiKey =
@@ -111,7 +146,8 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
     // or GPT id the provider may not serve).
     const model = target
       ? provider.models[0]
-      : (override?.modelSource !== undefined ? override.sourceModel : config?.sourceModel) ||
+      : (override?.sourceModel ??
+          (override?.modelSource === undefined ? config?.sourceModel : undefined)) ||
         provider.models[0];
     const known = agentId === 'codex' ? await deps.readKnownCodexModels?.() : undefined;
     const launch = buildSourceLaunch(
@@ -138,11 +174,16 @@ export function createEffectiveAgentConfig(deps: EffectiveAgentConfigDeps) {
         providerId: provider.id,
       });
     }
-    return {
-      ...config,
-      env: { ...config?.env, ...launch.env },
-      extraArgs: [config?.extraArgs?.trim(), ...launch.args].filter(Boolean).join(' '),
-    };
+    return withAgentEffort(
+      agentId,
+      {
+        ...config,
+        env: { ...config?.env, ...launch.env },
+        extraArgs: [config?.extraArgs?.trim(), ...launch.args].filter(Boolean).join(' '),
+      },
+      provider,
+      model
+    );
   };
 }
 

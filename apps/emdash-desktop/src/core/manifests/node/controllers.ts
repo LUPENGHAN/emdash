@@ -15,6 +15,7 @@ import type { AgentControlDispatcher } from '@core/features/agent-control/node/a
 import { createAgentControlWireController } from '@core/features/agent-control/node/wire-controller';
 import type { AgentLibraryService } from '@core/features/agent-library/node/agent-library-service';
 import { createAgentLibraryWireController } from '@core/features/agent-library/node/wire-controller';
+import { getPlugin } from '@core/features/agents/api/node/plugin-registry';
 import { createAgentOperations } from '@core/features/agents/node/controller';
 import { createAgentsWireController } from '@core/features/agents/node/wire-controller';
 import type { AutomationsService } from '@core/features/automations/api/node/automations-service';
@@ -52,10 +53,12 @@ import { createMachinesWireController } from '@core/features/machines/node/wire-
 import { createMcpWireController } from '@core/features/mcp/node/wire-controller';
 import type { MemoryService } from '@core/features/memory/node/memory-service';
 import { createMemoryWireController } from '@core/features/memory/node/wire-controller';
+import { catalogProvider } from '@core/features/model-gateway/api/model-catalog';
 import type { ModelGatewayService } from '@core/features/model-gateway/node/gateway-service';
 import { createModelGatewayWireController } from '@core/features/model-gateway/node/wire-controller';
 import type { ModelProviderKeys, UsageLimitsService } from '@core/features/model-providers/api';
 import { isOfficialAccount, type OfficialAccount } from '@core/features/model-providers/api';
+import { assertModelEffort } from '@core/features/model-providers/api/model-effort';
 import type { EffectiveAgentConfig } from '@core/features/model-providers/node/effective-agent-config';
 import {
   openOfficialAccountLogin,
@@ -272,6 +275,21 @@ export const desktopNodeControllers = {
         }),
         runtimes,
         modelProviderKeys,
+        validateSettings: async (agentId, config) => {
+          const provider =
+            config.modelSource === 'gateway:models'
+              ? catalogProvider((await appSettings.get('gatewayModels')).models, agentId)
+              : (await appSettings.get('modelProviders')).providers.find(
+                  (p) => p.id === config.modelSource
+                );
+          assertModelEffort(
+            config.effort,
+            getPlugin(agentId).capabilities.effort,
+            agentId,
+            provider,
+            config.sourceModel
+          );
+        },
         providerTransfer: createProviderTransfer({
           getProviders: async () => (await appSettings.get('modelProviders')).providers,
           saveProviders: (providers) => appSettings.update('modelProviders', { providers }),
@@ -509,6 +527,7 @@ export const desktopNodeControllers = {
       logger,
       projects,
       effectiveAgentConfig,
+      providerSettings,
       priceCatalog,
       runtimes,
       sessionLaunchContexts,
@@ -521,6 +540,7 @@ export const desktopNodeControllers = {
       createConversationsWireController({
         terminalFileSources,
         db,
+        getDefaultEffort: async (agentId) => (await providerSettings.getItem(agentId))?.effort,
         logger,
         projects,
         getProviderEnv: async (providerId, override) =>

@@ -168,11 +168,23 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         agent: agentSchema,
         prompt: z.string().min(1).describe('The first message the new agent receives'),
         model: z.string().optional().describe("Model id; omit for the agent's default"),
+        supplier_id: z.string().min(1).optional(),
+        connection: z.enum(['gateway', 'official']).optional(),
+        effort: z.string().min(1).nullable().optional(),
         ui: z.enum(['terminal', 'chat']).optional(),
       },
     },
-    ({ agent, prompt, model, ui }) =>
-      dispatch({ kind: 'create_conversation', providerId: agent, prompt, model, ui })
+    ({ agent, prompt, model, supplier_id, connection, effort, ui }) =>
+      dispatch({
+        kind: 'create_conversation',
+        providerId: agent,
+        prompt,
+        model,
+        supplierId: supplier_id,
+        connection,
+        effort,
+        ui,
+      })
   );
 
   server.registerTool(
@@ -190,7 +202,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'handoff',
     {
       description:
-        "Hand this conversation's work to another agent: it starts with the original ask, your last reply, the git state and a transcript path. Use when your quota is nearly out or another agent suits the work better. The user confirms in Emdash.",
+        "Hand this conversation's work to another agent: it starts with the original ask, your last reply, the git state and a transcript path. Use when your quota is nearly out or another agent suits the work better. Task creation and startup run in the background. Reuse request_id when retrying.",
       inputSchema: {
         agent: agentSchema,
         model: z.string().optional(),
@@ -217,27 +229,72 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'create_task',
     {
       description:
-        "Create a git worktree through Emdash, as a new task in this project: use this instead of `git worktree add` (or a worktree tool of your own), so the worktree lands where Emdash keeps them and the user can see and review its code in Emdash. Returns the worktree's path and branch; work there yourself, or pass `prompt` to start an agent in it. The user confirms in Emdash.",
+        "Create a git worktree through Emdash, as a task in the target project: use this instead of `git worktree add` (or a worktree tool of your own), so the worktree lands where Emdash keeps them and the user can see and review its code in Emdash. Returns the worktree's path and branch; work there yourself, or pass `prompt` to start an agent in it. Task creation and startup run in the background. Reuse request_id when retrying.",
       inputSchema: {
+        project_id: z
+          .string()
+          .optional()
+          .describe('Target project ID; omit for the calling project'),
+        request_id: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('Stable request ID; reuse exactly when retrying the same task'),
         name: z.string().min(1).max(80).describe('Task name, e.g. "fix-login-timeout"'),
         base_branch: z
           .string()
           .optional()
-          .describe("Branch to start from; omit for this task's current branch"),
+          .describe('Code branch to start from; omit for the target project baseline'),
         prompt: z
           .string()
           .optional()
           .describe('Start an agent in the new task with this first message'),
         agent: agentSchema.optional().describe('Agent for `prompt`; omit for yourself'),
+        model: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Public model alias, or supplier model when supplier_id is specified'),
+        supplier_id: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Configured API supplier ID; used through the gateway'),
+        connection: z.enum(['gateway', 'official']).optional(),
+        effort: z
+          .string()
+          .min(1)
+          .nullable()
+          .optional()
+          .describe('Supported reasoning effort; null follows the adapter default'),
         ui: z.enum(['terminal', 'chat']).optional(),
       },
     },
-    ({ name, base_branch, prompt, agent, ui }) =>
+    ({
+      name,
+      project_id,
+      request_id,
+      base_branch,
+      prompt,
+      agent,
+      model,
+      supplier_id,
+      connection,
+      effort,
+      ui,
+    }) =>
       dispatch({
         kind: 'create_task',
         name,
+        ...(project_id && { projectId: project_id }),
+        ...(request_id && { requestId: request_id }),
         ...(base_branch && { baseBranch: base_branch }),
         ...(prompt && { prompt, providerId: agent ?? caller.providerId }),
+        ...(model && { model }),
+        ...(supplier_id && { supplierId: supplier_id }),
+        ...(connection && { connection }),
+        ...(effort !== undefined && { effort }),
         ...(ui && { ui }),
       })
   );

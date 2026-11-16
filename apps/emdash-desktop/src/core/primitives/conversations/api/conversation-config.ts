@@ -27,6 +27,8 @@ const ptyConfigV1 = z.object({
   modelSource: z.string().nullable().optional(),
   /** Model on that provider. */
   sourceModel: z.string().optional(),
+  effort: z.string().nullable().optional(),
+  supplierId: z.string().optional(),
 });
 
 const acpConfigV1 = z.object({
@@ -41,6 +43,8 @@ const acpConfigV1 = z.object({
   modelSource: z.string().nullable().optional(),
   /** Model on that provider. */
   sourceModel: z.string().optional(),
+  effort: z.string().nullable().optional(),
+  supplierId: z.string().optional(),
 });
 
 export const conversationConfig = defineVersionedSchema()

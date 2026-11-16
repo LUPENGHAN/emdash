@@ -457,18 +457,46 @@ export type ModelSourceOverride = {
   modelSource?: string | null;
   sourceModel?: string;
   conversationId?: string;
+  supplierId?: string;
+  effort?: string | null;
 };
 
 /** The conversation's own source choice, or undefined to use the agent's default. */
 export function sourceOverrideOf(
-  config: { modelSource?: string | null; sourceModel?: string } | null | undefined,
+  config:
+    | {
+        modelSource?: string | null;
+        sourceModel?: string;
+        supplierId?: string;
+        effort?: string | null;
+        options?: Record<string, string | boolean>;
+      }
+    | null
+    | undefined,
   conversationId?: string
 ): ModelSourceOverride | undefined {
-  if (!config || config.modelSource === undefined)
-    return conversationId ? { conversationId } : undefined;
+  const optionEffort = config?.options?.effort ?? config?.options?.reasoning_effort;
+  const effort =
+    typeof optionEffort === 'string'
+      ? optionEffort === 'default'
+        ? null
+        : optionEffort
+      : config?.effort;
+  if (
+    config?.modelSource === undefined &&
+    !config?.supplierId &&
+    effort === undefined &&
+    !conversationId
+  )
+    return undefined;
   return {
-    modelSource: config.modelSource,
-    sourceModel: config.sourceModel,
+    ...(config?.modelSource !== undefined && {
+      modelSource: config.modelSource,
+      sourceModel: config.sourceModel,
+    }),
+    ...(config?.sourceModel && { sourceModel: config.sourceModel }),
+    ...(config?.supplierId && { supplierId: config.supplierId }),
+    ...(effort !== undefined && { effort }),
     ...(conversationId ? { conversationId } : {}),
   };
 }

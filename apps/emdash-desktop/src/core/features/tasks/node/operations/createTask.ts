@@ -268,6 +268,8 @@ export async function prepareCreateTask(
             ...(ic.model && { model: ic.model }),
             ...(ic.modelSource !== undefined && { modelSource: ic.modelSource }),
             ...(ic.sourceModel && { sourceModel: ic.sourceModel }),
+            ...(ic.effort !== undefined && { effort: ic.effort }),
+            ...(ic.supplierId && { supplierId: ic.supplierId }),
           }
         : {
             version: '1',
@@ -277,6 +279,8 @@ export async function prepareCreateTask(
             ...(ic.model && { model: ic.model }),
             ...(ic.modelSource !== undefined && { modelSource: ic.modelSource }),
             ...(ic.sourceModel && { sourceModel: ic.sourceModel }),
+            ...(ic.effort !== undefined && { effort: ic.effort }),
+            ...(ic.supplierId && { supplierId: ic.supplierId }),
           };
     if (conversationWorkspacePath === null) {
       return err({

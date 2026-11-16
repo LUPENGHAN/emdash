@@ -13,6 +13,7 @@ import type {
   OwnSource,
   UsageLimitsService,
 } from '@core/features/model-providers/api';
+import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import { forwardLiveModel } from '@core/services/runtime-clients/node/forward-live-model';
 import { agentsContract } from '../api';
 import {
@@ -25,6 +26,7 @@ import {
 
 export type CreateAgentsWireControllerOptions = Readonly<{
   operations: AgentOperations;
+  validateSettings?: (agentId: string, config: Partial<ProviderCustomConfig>) => Promise<void>;
   runtimes: AgentsRuntimeBroker;
   modelProviderKeys?: ModelProviderKeys;
   providerTransfer?: ModelProviderTransfer;
@@ -98,7 +100,10 @@ export function createAgentsWireController(options: CreateAgentsWireControllerOp
     getSettings: ({ host, id }) =>
       withHostRuntime(options.runtimes, host, () => agentOperations.getSettings(id)),
     updateSettings: ({ host, id, config }) =>
-      withHostRuntime(options.runtimes, host, () => agentOperations.updateSettings(id, config)),
+      withHostRuntime(options.runtimes, host, async () => {
+        await options.validateSettings?.(id, config);
+        await agentOperations.updateSettings(id, config);
+      }),
     setUsedInstallation: ({ host, id, selection }) =>
       withHostResult(options.runtimes, host, (runtime) =>
         agentOperations.setUsedInstallation(

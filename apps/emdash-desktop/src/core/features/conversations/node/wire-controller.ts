@@ -1,7 +1,5 @@
 import { formatHostRef } from '@emdash/core/primitives/host/api';
 import {
-  isLocalHostRef,
-  LOCAL_HOST_REF,
   parseHostRef,
   type HostRef,
   type SerializedHostRef,
@@ -12,17 +10,12 @@ import { createKeyedLanes } from '@emdash/shared/concurrency';
 import type { Logger } from '@emdash/shared/logger';
 import type { LiveSource } from '@emdash/wire/rpc';
 import { createController, type CallMeta, type Controller } from '@emdash/wire/rpc';
-import { and, eq } from 'drizzle-orm';
-import { conversationRegistryTable as conversations } from '@core/features/conversations/api/node/registry';
 import { createConversationOperations } from '@core/features/conversations/node/controller';
 import type { CompensationRunner } from '@core/features/conversations/node/createConversation';
-import {
-  deleteAgentSession,
-  piFamilySessionId,
-} from '@core/features/conversations/node/delete-agent-session';
+import { deleteAgentSession } from '@core/features/conversations/node/delete-agent-session';
 import { localConversation } from '@core/features/conversations/node/handoff/prepare-conversation-handoff';
 import { sessionCost, type PriceCatalog } from '@core/features/conversations/node/session-cost';
-import { sourceOverrideOf, type ModelSourceOverride } from '@core/features/model-providers/api';
+import type { ModelSourceOverride } from '@core/features/model-providers/api';
 import type { ProjectAttachmentError } from '@core/features/projects/api';
 import {
   requireAttachedProjectOrThrow,
@@ -33,7 +26,6 @@ import type { TaskSessionLaunchContextResolver } from '@core/features/tasks/api/
 import type { TaskSessionManager } from '@core/features/tasks/api/node/task-session-manager';
 import type { TelemetryService } from '@core/primitives/telemetry/api/telemetry';
 import type { AppDb } from '@core/services/app-db/node/db';
-import { tasks } from '@core/services/app-db/node/schema';
 import {
   prepareTerminalFiles,
   type TerminalFileSources,
@@ -47,24 +39,13 @@ import {
   type ConversationsRuntimeBroker,
   type ConversationsRuntimeResolveError as RuntimeResolveError,
 } from '../api/runtime-adapter';
+import {
+  resolveConversationRuntimeTarget,
+  type ConversationRuntimeTarget,
+  type WorkspaceIdentityResolver,
+} from './conversation-runtime-target';
 import { conversationWireEvents } from './event-host';
 import { getProviderSettingsService } from './provider-settings-service';
-
-type ConversationRuntimeTarget = Readonly<{
-  conversationId: string;
-  projectId: string;
-  taskId: string;
-  conversationType: 'pty' | 'acp';
-  providerId: string | null;
-  sessionId: string | null;
-  workspacePath?: string;
-  host: HostRef;
-  acpInput?: ConversationsAcpStartInput;
-}>;
-
-type WorkspaceIdentityResolver = Readonly<{
-  resolve(workspaceId: string): Promise<{ host: HostRef; path: string } | null>;
-}>;
 
 type ConversationRuntimeHooks = Readonly<{
   recordTuiInput(target: ConversationRuntimeTarget): Promise<void>;
@@ -72,6 +53,7 @@ type ConversationRuntimeHooks = Readonly<{
 
 export type CreateConversationsWireControllerOptions = Readonly<{
   db: AppDb;
+  getDefaultEffort?: (agentId: string) => Promise<string | undefined>;
   /** Moves a file or folder to the system trash (agent session files). */
   trashItem?: (target: string) => Promise<void>;
   terminalFileSources: TerminalFileSources;
@@ -197,7 +179,15 @@ export function createConversationsWireController(
     getConversations: () => conversationOperations.getConversations(),
     createConversation: (input) =>
       withAttachedProject(options.projects, input.projectId, async () =>
-        ok(await conversationOperations.createConversation(input))
+        ok(
+          await conversationOperations.createConversation({
+            ...input,
+            ...(input.effort === undefined &&
+              options.getDefaultEffort && {
+                effort: (await options.getDefaultEffort(input.provider)) ?? null,
+              }),
+          })
+        )
       ),
     deleteConversation: ({ projectId, taskId, conversationId }) =>
       conversationOperations.deleteConversation(projectId, taskId, conversationId),
@@ -487,109 +477,6 @@ function missingAcpInputError(target: ConversationRuntimeTarget): Error {
     );
   }
   return new Error(`Conversation '${target.conversationId}' is not an ACP conversation`);
-}
-
-async function resolveConversationRuntimeTarget(
-  conversationId: string,
-  workspaceIdentity: WorkspaceIdentityResolver,
-  db: AppDb,
-  getProviderEnv:
-    | ((
-        providerId: string,
-        override?: ModelSourceOverride
-      ) => Promise<Record<string, string> | undefined>)
-    | undefined,
-  sessionLaunchContexts: Pick<TaskSessionLaunchContextResolver, 'resolve'>,
-  prepareAgentLaunch?: CreateConversationsWireControllerOptions['prepareAgentLaunch']
-): Promise<ConversationRuntimeTarget> {
-  const [row] = await db
-    .select({
-      projectId: conversations.projectId,
-      taskId: conversations.taskId,
-      providerId: conversations.provider,
-      sessionId: conversations.providerSessionId,
-      config: conversations.config,
-      type: conversations.type,
-      workspaceId: tasks.workspaceId,
-    })
-    .from(conversations)
-    .leftJoin(
-      tasks,
-      and(eq(tasks.id, conversations.taskId), eq(tasks.projectId, conversations.projectId))
-    )
-    .where(eq(conversations.id, conversationId))
-    .limit(1);
-  if (!row) throw new Error(`Conversation '${conversationId}' was not found`);
-  if (row.projectId === null || row.taskId === null) {
-    // Sessions run inside task surfaces; unlinked mirror rows have no runtime target.
-    throw new Error(`Conversation '${conversationId}' has no task link`);
-  }
-
-  const identity = row.workspaceId ? await workspaceIdentity.resolve(row.workspaceId) : null;
-  const acpConfig = row.config?.type === 'acp' ? row.config : undefined;
-  // The runtime owns consumption. A provider pointer alone does not prove dispatch.
-  const initialQueue = acpConfig?.initialQueue?.length ? acpConfig.initialQueue : undefined;
-  const workspacePath = identity?.path;
-  // Resolve the ACP agent environment in main from provider and project/task settings. The
-  // renderer supplies only a conversation id and cannot inject spawn variables.
-  const [providerEnv, launchContext] = await Promise.all([
-    row.providerId && getProviderEnv
-      ? getProviderEnv(row.providerId, sourceOverrideOf(row.config, conversationId))
-      : undefined,
-    row.type === 'acp' && workspacePath
-      ? sessionLaunchContexts.resolve({
-          projectId: row.projectId,
-          taskId: row.taskId,
-          ...(row.workspaceId ? { workspaceId: row.workspaceId } : {}),
-        })
-      : undefined,
-  ]);
-  if (launchContext && !launchContext.success) {
-    throw new Error(`Could not resolve task session launch context: ${launchContext.error.type}`);
-  }
-  // Emdash's skills and MCP servers reach agents on this computer only.
-  const extraMcpServers =
-    row.type === 'acp' && workspacePath && (!identity?.host || isLocalHostRef(identity.host))
-      ? await prepareAgentLaunch?.({
-          conversationId,
-          projectId: row.projectId,
-          workspacePath,
-        }).catch(() => undefined)
-      : undefined;
-  const processEnv = {
-    ...(providerEnv ?? {}),
-    ...(launchContext?.success ? launchContext.data.env : {}),
-  };
-  const acpInput =
-    row.type === 'acp' && workspacePath && row.providerId
-      ? {
-          conversationId,
-          providerId: row.providerId,
-          cwd: workspacePath,
-          // A Pi-family terminal session recorded by path loads in chat by its id.
-          sessionId:
-            !identity?.host || isLocalHostRef(identity.host)
-              ? await piFamilySessionId(row.providerId, row.sessionId)
-              : row.sessionId,
-          options: acpConfig?.options,
-          autoApprove: acpConfig?.autoApprove === true,
-          ...(initialQueue && { initialQueue }),
-          ...(Object.keys(processEnv).length > 0 ? { env: processEnv } : {}),
-          ...(extraMcpServers?.length ? { extraMcpServers } : {}),
-        }
-      : undefined;
-
-  return {
-    conversationId,
-    projectId: row.projectId,
-    taskId: row.taskId,
-    conversationType: row.type === 'acp' ? 'acp' : 'pty',
-    providerId: row.providerId,
-    sessionId: row.sessionId,
-    workspacePath,
-    host: identity?.host ?? LOCAL_HOST_REF,
-    acpInput,
-  };
 }
 
 async function withConversationRuntime<T, E>(

@@ -69,6 +69,9 @@ export type AgentControlAction =
       kind: 'create_conversation';
       providerId: string;
       model?: string;
+      supplierId?: string;
+      connection?: 'gateway' | 'official';
+      effort?: string | null;
       prompt: string;
       ui?: 'terminal' | 'chat';
     }
@@ -78,11 +81,17 @@ export type AgentControlAction =
   | {
       kind: 'create_task';
       name: string;
-      /** The branch the new worktree starts from; the caller's own branch when absent. */
+      projectId?: string;
+      requestId?: string;
+      /** The explicit code base branch; absent resolves the target project baseline. */
       baseBranch?: string;
       /** An agent to start in the new task with this first message. */
       prompt?: string;
       providerId?: string;
+      model?: string;
+      supplierId?: string;
+      connection?: 'gateway' | 'official';
+      effort?: string | null;
       ui?: 'terminal' | 'chat';
     }
   | { kind: 'list_tasks'; includeArchived: boolean }

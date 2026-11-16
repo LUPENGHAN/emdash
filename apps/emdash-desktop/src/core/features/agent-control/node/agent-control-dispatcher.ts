@@ -21,6 +21,10 @@ type Pending = {
 export type AgentControlDispatcherDeps = {
   emit: (request: AgentControlRequest) => void;
   now?: () => number;
+  backend?: (
+    caller: AgentCaller,
+    action: AgentControlAction
+  ) => Promise<AgentControlResult | undefined>;
 };
 
 /**
@@ -54,7 +58,11 @@ export function createAgentControlDispatcher(deps: AgentControlDispatcherDeps) {
       });
     },
 
-    dispatch(caller: AgentCaller, action: AgentControlAction): Promise<AgentControlResult> {
+    async dispatch(caller: AgentCaller, action: AgentControlAction): Promise<AgentControlResult> {
+      if (deps.backend) {
+        const backend = await deps.backend(caller, action);
+        if (backend) return backend;
+      }
       const rendererId = pickRenderer();
       if (!rendererId) {
         return Promise.reject(

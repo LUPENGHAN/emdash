@@ -119,6 +119,8 @@ export async function createConversation(
           ...(params.autoApprove && { autoApprove: true }),
           ...(params.modelSource !== undefined && { modelSource: params.modelSource }),
           ...(params.sourceModel && { sourceModel: params.sourceModel }),
+          ...(params.effort !== undefined && { effort: params.effort }),
+          ...(params.supplierId && { supplierId: params.supplierId }),
           ...(initialQueue?.length && { initialQueue }),
         }
       : {
@@ -129,6 +131,8 @@ export async function createConversation(
           ...(params.initialPrompt && { initialPrompt: params.initialPrompt }),
           ...(params.modelSource !== undefined && { modelSource: params.modelSource }),
           ...(params.sourceModel && { sourceModel: params.sourceModel }),
+          ...(params.effort !== undefined && { effort: params.effort }),
+          ...(params.supplierId && { supplierId: params.supplierId }),
         };
   const config = configObj;
 

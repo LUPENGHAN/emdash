@@ -34,6 +34,8 @@ export function mapConversationRowToConversation(row: ConversationRow): Conversa
     options: config?.type === 'acp' ? config.options : undefined,
     ...(config?.modelSource !== undefined && { modelSource: config.modelSource }),
     ...(config?.sourceModel && { sourceModel: config.sourceModel }),
+    ...(config?.effort !== undefined && { effort: config.effort }),
+    ...(config?.supplierId && { supplierId: config.supplierId }),
     initialQueue: initialQueueFromRow(row),
     lastInteractedAt: row.lastSessionActivityAt ?? null,
     isInitialConversation: row.isInitialConversation,

@@ -10,6 +10,7 @@ import {
   migrationPreview,
   runtimeCatalog,
   snapshotCatalog,
+  taskModelCatalog,
 } from './model-catalog';
 import { gatewayProviders } from './provider-inventory';
 
@@ -36,6 +37,24 @@ const model: GatewayModel = {
 };
 
 describe('model-first routing', () => {
+  it('builds private task routes without changing public aliases or inferring unknown mappings', () => {
+    const before = structuredClone(model);
+    const snapshot = taskModelCatalog(provider, 'native-claude', 'claude', [model]);
+    expect(snapshot.models[0]).toMatchObject({
+      alias: 'task-model',
+      providerId: 'p',
+      protocolModels: model.protocolModels,
+    });
+    expect(model).toEqual(before);
+    expect(() => taskModelCatalog(provider, 'unknown', 'claude', [])).toThrow('protocol mappings');
+    const single = { ...provider, endpoints: undefined, protocol: 'anthropic' as const };
+    expect(taskModelCatalog(single, 'unlisted', 'claude', []).models[0].protocolModels).toEqual({
+      anthropic: { upstreamModel: 'unlisted' },
+    });
+    expect(() =>
+      taskModelCatalog({ ...single, protocol: 'openai-responses' }, 'unlisted', 'claude', [])
+    ).toThrow('compatible agent protocol');
+  });
   it('prefers each agent’s native protocol and converts only supported directions', () => {
     expect(upstreamProtocol(model, 'anthropic')).toBe('anthropic');
     expect(upstreamProtocol(model, 'openai-responses')).toBe('openai-responses');

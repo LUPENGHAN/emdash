@@ -14,6 +14,8 @@ import { observer } from 'mobx-react-lite';
 import { useEffect, useState } from 'react';
 import { getAgentsClient, hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgentSettings } from '@core/features/agents/api/browser/use-agent-settings';
+import { useAgent } from '@core/features/agents/api/browser/use-agents';
+import { catalogProvider } from '@core/features/model-gateway/api/model-catalog';
 import { GatewayModelsPanel } from '@core/features/model-gateway/contributions/browser/models-panel';
 import { GatewayProvidersPanel } from '@core/features/model-gateway/contributions/browser/providers-panel';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
@@ -45,6 +47,7 @@ import {
   type ModelSourceValue,
   type ProviderProtocol,
 } from '../api';
+import { assertModelEffort, modelEffortOptions } from '../api/model-effort';
 import { ModelSourceSelect } from '../contributions/browser/model-source-select';
 import {
   applyContextWindowToSelected,
@@ -1295,16 +1298,46 @@ function AgentDefaults() {
   );
 }
 
-const AgentDefaultRow = observer(function AgentDefaultRow({ agentId }: { agentId: string }) {
-  const { value: config, update, reset } = useAgentSettings(agentId, hostRefFromConnectionId());
+export const AgentDefaultRow = observer(function AgentDefaultRow({ agentId }: { agentId: string }) {
+  const {
+    value: config,
+    updateAsync,
+    isSaving,
+  } = useAgentSettings(agentId, hostRefFromConnectionId());
+  const { data: agent } = useAgent(agentId, hostRefFromConnectionId());
+  const { value: providerSettings } = useAppSettingsKey('modelProviders');
+  const { value: modelSettings } = useAppSettingsKey('gatewayModels');
+  const providerFor = (source?: string) =>
+    source === 'gateway:models'
+      ? catalogProvider(modelSettings?.models ?? [], agentId)
+      : providerSettings?.providers.find((provider) => provider.id === source);
+  const effortOptions = modelEffortOptions(
+    agent?.capabilities.effort,
+    agentId,
+    providerFor(config?.modelSource),
+    config?.sourceModel
+  );
+  const persist = async (next: NonNullable<typeof config>) => {
+    try {
+      assertModelEffort(
+        next.effort,
+        agent?.capabilities.effort,
+        agentId,
+        providerFor(next.modelSource),
+        next.sourceModel
+      );
+      await updateAsync(next);
+    } catch (error) {
+      toast.error('Could not save agent defaults', { description: String(error) });
+    }
+  };
   const save = (value: ModelSourceValue) => {
     const next = {
       ...config,
       modelSource: value.modelSource ?? undefined,
       sourceModel: value.sourceModel,
     };
-    if (!next.extraArgs && !next.env && !next.modelSource) reset(undefined);
-    else update(next);
+    void persist(next);
   };
   return (
     <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3 px-3 py-3">
@@ -1316,6 +1349,43 @@ const AgentDefaultRow = observer(function AgentDefaultRow({ agentId }: { agentId
           onChange={save}
           showReset={false}
         />
+        <Field.Root>
+          <Field.Label>Default model effort</Field.Label>
+          <Select.Root
+            value={config?.effort ?? 'inherit'}
+            disabled={isSaving || (!config?.effort && Object.keys(effortOptions).length === 0)}
+            onValueChange={(value) => {
+              if (value)
+                void persist({ ...config, effort: value === 'inherit' ? undefined : value });
+            }}
+          >
+            <Select.Trigger aria-label={`Default model effort for ${AGENT_NAMES[agentId]}`}>
+              <Select.Value>
+                {config?.effort
+                  ? (effortOptions[config.effort]?.label ?? config.effort)
+                  : 'Follow model / agent default'}
+              </Select.Value>
+            </Select.Trigger>
+            <Select.Content>
+              <Select.Item value="inherit">Follow model / agent default</Select.Item>
+              {config?.effort && !effortOptions[config.effort] && (
+                <Select.Item value={config.effort} disabled>
+                  {config.effort} (unavailable)
+                </Select.Item>
+              )}
+              {Object.entries(effortOptions).map(([id, option]) => (
+                <Select.Item key={id} value={id}>
+                  {option.label}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+          <Field.Description>
+            {Object.keys(effortOptions).length > 0
+              ? 'Applies to new sessions. The selected model must support this effort.'
+              : 'This agent has no default effort integration.'}
+          </Field.Description>
+        </Field.Root>
       </div>
     </div>
   );

@@ -27,6 +27,16 @@ export const plugin = definePlugin(
     websiteUrl: 'https://code.claude.com/docs/en/quickstart',
   },
   {
+    effort: {
+      kind: 'selectable',
+      effortOptions: {
+        low: { label: 'Low', level: 1 },
+        medium: { label: 'Medium', level: 2 },
+        high: { label: 'High', level: 3 },
+        xhigh: { label: 'Xhigh', level: 4 },
+        max: { label: 'Max', level: 5 },
+      },
+    },
     usageLimits: { kind: 'supported' },
     acp: {
       kind: 'supported',

@@ -10,6 +10,7 @@ import {
 import { createInterface } from 'node:readline';
 import { Readable } from 'node:stream';
 import { secret } from '@emdash/shared';
+import { KeyedMutex } from '@emdash/shared/concurrency';
 import type { ModelProvider } from '@core/features/model-providers/api';
 import type { SecretStore } from '@core/primitives/secrets/api/secret-store';
 import {
@@ -35,11 +36,13 @@ import {
   migrationPreview,
   runtimeCatalog,
   snapshotCatalog,
+  taskModelCatalog,
   type CatalogSnapshot,
 } from './model-catalog';
 import { gatewayProviders, type ProviderCredential } from './provider-inventory';
 
 export type GatewayRoute = {
+  taskBinding?: { supplierId: string; model: string };
   catalog?: CatalogSnapshot;
   restartReason?: string;
   requiresNewSession?: boolean;
@@ -61,6 +64,7 @@ type KeyStore<T> = {
   setOrThrow(key: string, value: T): Promise<void>;
   getAll(): Promise<Record<string, T | undefined>>;
   clear(): Promise<void>;
+  delOrThrow?(key: string): Promise<void>;
 };
 export type GatewayDependencies = {
   getModels?(): Promise<GatewayModelsSettings>;
@@ -94,6 +98,7 @@ function json(res: ServerResponse, status: number, value: unknown): void {
 }
 
 export class ModelGatewayService {
+  private readonly taskLaunches = new KeyedMutex();
   private state: GatewayStatus['state'] = 'stopped';
   private error?: string;
   private usageError?: string;
@@ -262,8 +267,8 @@ export class ModelGatewayService {
         ...runtimeCatalog(
           {
             ...snapshot,
-            models: snapshot.models.filter((m) =>
-              published.some((p) => p.id === m.id && p.enabled)
+            models: snapshot.models.filter(
+              (m) => snapshot.scope === 'task' || published.some((p) => p.id === m.id && p.enabled)
             ),
           },
           [...this.definitions.values()],
@@ -636,7 +641,7 @@ export class ModelGatewayService {
     this.switching.add(id);
     try {
       const route = await this.deps.routes.getOrThrow(id);
-      if (!route?.catalog) {
+      if (!route?.catalog || route.taskBinding) {
         this.pendingCatalogs.delete(id);
         return;
       }
@@ -729,6 +734,77 @@ export class ModelGatewayService {
     this.pending.add(input.conversationId);
     await this.applyPending(input.conversationId);
   }
+  async prepareTaskLaunch(
+    supplierId: string,
+    model: string,
+    conversationId: string,
+    agentId: string
+  ): Promise<{ provider: ModelProvider; apiKey: string; compatibility?: boolean }> {
+    return this.taskLaunches.runExclusive(conversationId, () =>
+      this.prepareTaskLaunchLocked(supplierId, model, conversationId, agentId)
+    );
+  }
+  private async prepareTaskLaunchLocked(
+    supplierId: string,
+    model: string,
+    conversationId: string,
+    agentId: string
+  ): Promise<{ provider: ModelProvider; apiKey: string; compatibility?: boolean }> {
+    if (!(await this.deps.conversationLocal(conversationId)))
+      throw new Error('Task gateway routes support local conversations only.');
+    await this.ensure();
+    await this.syncProviders();
+    const supplier = this.definitions.get(supplierId);
+    if (!supplier) throw new Error('The selected task supplier is unavailable.');
+    const saved = await this.deps.routes.getOrThrow(conversationId);
+    if (
+      saved &&
+      (!saved.taskBinding ||
+        saved.taskBinding.supplierId !== supplierId ||
+        saved.taskBinding.model !== model ||
+        saved.catalog?.agent !== agentId)
+    ) {
+      throw new Error('Start a new session to change its task supplier or model binding.');
+    }
+    const snapshot =
+      saved?.catalog ??
+      taskModelCatalog(supplier, model, agentId, (await this.deps.getModels?.())?.models ?? []);
+    const diagnosticId = `task-validation:${randomBytes(16).toString('hex')}`;
+    this.activeCatalogs.set(diagnosticId, { snapshot, requests: 1 });
+    try {
+      const runtime = runtimeCatalog(
+        snapshot,
+        [...this.definitions.values()],
+        await this.configuredProviders()
+      );
+      const target = runtime.providers.find((p) => p.id === runtime.models['task-model']);
+      const selected = snapshot.models[0];
+      const inbound = agentId === 'claude' ? 'anthropic' : 'openai-responses';
+      const protocol = selected && upstreamProtocol(selected, inbound);
+      if (!target || !protocol || !(target.protocolKeys?.[protocol] || target.apiKey)) {
+        throw new Error('The task supplier credentials or connection scope are unavailable.');
+      }
+      if (!saved)
+        await this.deps.routes.setOrThrow(conversationId, {
+          sourceId: catalogSourceId,
+          model: 'task-model',
+          catalog: snapshot,
+          taskBinding: { supplierId, model },
+        });
+      await this.syncProviders();
+      return {
+        provider: {
+          ...catalogProvider(snapshot.models, agentId),
+          protocol: inbound,
+          baseUrl: `${this.address}/sessions/${encodeURIComponent(conversationId)}${inbound === 'anthropic' ? '' : '/v1'}`,
+        },
+        apiKey: this.capability(conversationId),
+        compatibility: agentId === 'claude' && protocol !== 'anthropic',
+      };
+    } finally {
+      this.activeCatalogs.delete(diagnosticId);
+    }
+  }
   async prepareLaunch(
     sourceId: string,
     model: string | undefined,
@@ -739,6 +815,17 @@ export class ModelGatewayService {
       throw new Error('The model gateway supports local conversations only.');
     await this.ensure();
     await this.syncProviders();
+    if (conversationId) {
+      const saved = await this.deps.routes.getOrThrow(conversationId);
+      if (saved?.taskBinding) {
+        return this.prepareTaskLaunch(
+          saved.taskBinding.supplierId,
+          saved.taskBinding.model,
+          conversationId,
+          agentId ?? saved.catalog?.agent ?? ''
+        );
+      }
+    }
     if (sourceId === catalogSourceId) {
       if (!agentId) throw new Error('The gateway needs the agent protocol.');
       const models = (await this.deps.getModels?.())?.models ?? [];
@@ -854,6 +941,14 @@ export class ModelGatewayService {
           }),
         }
       : null;
+  }
+  async forgetConversation(id: string): Promise<void> {
+    await this.taskLaunches.runExclusive(id, async () => {
+      if (!this.deps.routes.delOrThrow) throw new Error('Gateway route deletion is unavailable.');
+      await this.deps.routes.delOrThrow(id);
+      this.pendingCatalogs.delete(id);
+      if (this.state === 'ready') await this.syncProviders();
+    });
   }
   async routes() {
     await this.load();

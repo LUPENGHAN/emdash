@@ -8,6 +8,7 @@ import {
 import type { ApiProvider } from './config';
 
 export type CatalogSnapshot = {
+  scope?: 'task';
   agent: string;
   models: GatewayModel[];
   providers: ModelProvider[];
@@ -142,4 +143,61 @@ export function migrationPreview(providers: ModelProvider[]): GatewayModel[] {
         };
       })
     );
+}
+
+/** Builds a private catalog without publishing or changing any global alias. */
+export function taskModelCatalog(
+  provider: ModelProvider,
+  model: string,
+  agent: string,
+  published: GatewayModel[]
+): CatalogSnapshot {
+  if (provider.account) throw new Error('Select an API supplier for a task gateway route.');
+  if (!model.trim()) throw new Error('Specify a supplier model for this task.');
+  const matches = published.filter(
+    (entry) =>
+      entry.providerId === provider.id &&
+      Object.values(entry.protocolModels).some((mapping) => mapping.upstreamModel === model)
+  );
+  if (
+    matches.length > 1 &&
+    matches.some(
+      (entry) => fingerprint(entry.protocolModels) !== fingerprint(matches[0].protocolModels)
+    )
+  ) {
+    throw new Error('The model has multiple protocol mappings. Select a public model alias.');
+  }
+  const protocols = configuredProtocols(provider);
+  if (!matches.length && !provider.models.includes(model) && protocols.length !== 1) {
+    throw new Error(
+      'Configure protocol mappings for this supplier model or select a single-protocol supplier.'
+    );
+  }
+  const binding: GatewayModel = {
+    ...(matches[0] ?? {
+      protocolModels: Object.fromEntries(
+        protocols.map((protocol) => [
+          protocol,
+          { upstreamModel: provider.modelAliases?.[model] ?? model },
+        ])
+      ),
+      protocolPolicy: { mode: 'auto' as const },
+    }),
+    id: `task:${fingerprint([provider.id, model])}`,
+    alias: 'task-model',
+    name: model,
+    enabled: true,
+    revision: 1,
+    providerId: provider.id,
+    contextWindow: matches[0]?.contextWindow ?? provider.contextWindows?.[model],
+    nonReasoning: matches[0]?.nonReasoning ?? provider.nonReasoningModels?.includes(model),
+    codexReasoning:
+      matches[0]?.codexReasoning ??
+      provider.codexReasoningByModel?.[model] ??
+      provider.codexReasoning,
+  };
+  const snapshot = snapshotCatalog([binding], [provider], agent);
+  if (!snapshot.models.length)
+    throw new Error('This supplier model has no compatible agent protocol.');
+  return { ...snapshot, scope: 'task' };
 }

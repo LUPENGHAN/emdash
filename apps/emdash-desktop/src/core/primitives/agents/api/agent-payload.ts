@@ -200,7 +200,7 @@ export type AgentCapabilities = {
   auth: AgentAuthDescriptor;
   hostDependency: AgentHostDependencyInfo;
   models: AgentModelsCapability;
-  effort: { kind: string };
+  effort: { kind: string; effortOptions?: Record<string, { label: string; level: number }> };
   prompt: { kind: string };
   sessions: { kind: string };
   autoApprove: { kind: string };

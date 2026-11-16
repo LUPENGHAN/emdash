@@ -3,6 +3,7 @@ import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import {
   hostRef,
+  formatHostRef,
   isLocalHostRef,
   LOCAL_HOST_REF,
   type HostRef,
@@ -23,8 +24,10 @@ import { ProviderTokenDispatcher } from '@core/features/account/node/services/pr
 import type { AgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
 import { createAgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
 import { startAgentControlServer } from '@core/features/agent-control/node/agent-control-server';
+import { createBackendTaskDelegation } from '@core/features/agent-control/node/backend-task-delegation';
 import { agentControlEvents } from '@core/features/agent-control/node/event-host';
 import { resolveAgentCaller } from '@core/features/agent-control/node/resolve-caller';
+import type { TaskDelegationService } from '@core/features/agent-control/node/task-delegation-service';
 import type { LaunchMcpServer } from '@core/features/agent-library/api';
 import {
   createAgentLibraryService,
@@ -45,6 +48,9 @@ import { SKILL_LIBRARY_DIRNAME } from '@core/features/agent-library/node/skill-l
 import { getPluginMetadata } from '@core/features/agents/api/node/plugin-registry';
 import { AutomationsService } from '@core/features/automations/api/node/automations-service';
 import { buildAutomationDeployment } from '@core/features/automations/node/deployment-builder';
+import { conversationEvents } from '@core/features/conversations/api/node/conversation-events';
+import { resolveConversationRuntimeTarget } from '@core/features/conversations/node/conversation-runtime-target';
+import { launchTuiConversation } from '@core/features/conversations/node/launch-tui-conversation';
 import { resumeLegacyCursorConversation } from '@core/features/conversations/node/legacy-cursor-sessions';
 import { getProviderSettingsService } from '@core/features/conversations/node/provider-settings-service';
 import {
@@ -187,7 +193,7 @@ import { startPeriodicSweep } from '@core/primitives/periodic-sweep/node/periodi
 import { DEFAULT_AGENT_GIT_CREDENTIALS } from '@core/primitives/project-settings/api';
 import type { HostReachabilityProbe } from '@core/primitives/ssh/api';
 import { AppDbKeyValueStore } from '@core/services/app-db/node/key-value-store';
-import { conversations } from '@core/services/app-db/node/schema';
+import { conversations, tasks } from '@core/services/app-db/node/schema';
 import { createNotificationService } from '@core/services/notifications/node';
 import { LegacyAccountImports } from '@core/services/provider-accounts/node/migrations/legacy-account-imports';
 import { listProviderAccountSummaries } from '@core/services/provider-accounts/node/provider-account-service';
@@ -610,6 +616,9 @@ export async function bootServices(
     },
   });
   appScope.add(() => modelGateway.dispose());
+  appScope.add(
+    conversationEvents.on('conversation:deleted', (id) => modelGateway.forgetConversation(id))
+  );
   void modelGateway
     .restore()
     .catch(() => log.warn('Could not restore the model gateway. Retry from settings.'));
@@ -625,6 +634,8 @@ export async function bootServices(
         )?.official !== false
       );
     },
+    prepareTaskGateway: (supplierId, model, conversationId, agentId) =>
+      modelGateway.prepareTaskLaunch(supplierId, model, conversationId, agentId),
     prepareGateway: (sourceId, model, conversationId, agentId) =>
       modelGateway.prepareLaunch(sourceId, model, conversationId, agentId),
     getAgentConfig: (agentId) => providerOverrideSettings.getItem(agentId),
@@ -671,7 +682,14 @@ export async function bootServices(
     emit: (event) => memoryEvents.emit(undefined, event),
   });
   // Agent control: Emdash's own MCP tools for every local agent (see agent-control).
+  const taskDelegation: { service?: TaskDelegationService } = {};
   const agentControl = createAgentControlDispatcher({
+    backend: async (caller, action) => {
+      if (action.kind !== 'create_task') return undefined;
+      if (!taskDelegation.service)
+        throw new Error('Task delegation is still starting. Retry after startup.');
+      return taskDelegation.service.dispatch(caller, action);
+    },
     emit: (request) => agentControlEvents.emit(undefined, request),
   });
   appScope.add(() => agentControl.dispose());
@@ -948,6 +966,7 @@ export async function bootServices(
   const hostIsReachable = createHostReachabilityProbe(infrastructure.ssh.manager);
   const taskService = new TaskService({
     db,
+    getDefaultEffort: async (agentId) => (await providerOverrideSettings.getItem(agentId))?.effort,
     projects: projectManager,
     sessions: taskSessionManager,
     workspacePlacement,
@@ -970,6 +989,81 @@ export async function bootServices(
         database.editorBuffer.clearBuffersUnderLocalPath(path),
     },
   });
+  taskDelegation.service = createBackendTaskDelegation({
+    db,
+    scope: appScope,
+    projects: projectManager,
+    taskService,
+    getAcpOptions: async (host, agentId) =>
+      (
+        await getProviderSettingsService(db).read({
+          host: formatHostRef(host),
+          providerId: agentId,
+        })
+      ).acp.options,
+    startConversation: async (params) => {
+      const conversation = params.taskConfig.initialConversation;
+      if (!conversation) return;
+      if (conversation.type !== 'acp') {
+        await launchTuiConversation({
+          projectId: params.projectId,
+          taskId: params.id,
+          conversationId: conversation.id,
+          database: db,
+          telemetry: telemetryService,
+          taskSessions: taskSessionManager,
+          initialSize: { cols: 120, rows: 36 },
+        });
+        return;
+      }
+      const target = await resolveConversationRuntimeTarget(
+        conversation.id,
+        workspaceIdentity,
+        db,
+        async (agentId, override) => (await effectiveAgentConfig(agentId, override))?.env,
+        sessionLaunchContexts,
+        prepareAgentLaunch
+      );
+      if (!target.acpInput) throw new Error('The delegated ACP session has no runtime target.');
+      const runtime = await runtimes.client(target.host);
+      if (!runtime.success) throw new Error(`Agent host unavailable: ${runtime.error.type}`);
+      const started = await runtime.data.acp.startSession(
+        { ...target.acpInput, mode: target.sessionId ? 'resume' : 'fresh' },
+        { timeoutMs: 0 }
+      );
+      if (!started.success)
+        throw new Error(`Agent startup failed: ${JSON.stringify(started.error)}`);
+    },
+    getAgentSettings: (id) => providerOverrideSettings.getItem(id),
+    getBranchDefaults: () => appSettingsService.get('project'),
+    authorize: async (caller, targetProjectId) => {
+      const actual = await resolveAgentCaller(
+        db,
+        async (workspaceId) => (await workspaceIdentity.resolve(workspaceId))?.path ?? null,
+        caller.conversationId
+      );
+      if (!actual || actual.projectId !== caller.projectId || actual.taskId !== caller.taskId)
+        throw new Error('The calling conversation is no longer available.');
+      const [sourceTask] = await db
+        .select({ deletedAt: tasks.deletedAt, archivedAt: tasks.archivedAt })
+        .from(tasks)
+        .where(eq(tasks.id, actual.taskId))
+        .limit(1);
+      if (!sourceTask || sourceTask.deletedAt || sourceTask.archivedAt)
+        throw new Error('The calling task is no longer active.');
+      if (targetProjectId !== actual.projectId)
+        throw new Error('Cross-project delegation requires a coordinator project grant.');
+      const project = await getProjectById(db, targetProjectId);
+      if (!project || project.archivedAt)
+        throw new Error('The target project is unavailable or archived.');
+    },
+  });
+  const delegationRecoveryTimer = setTimeout(() => {
+    const report = (error: unknown) =>
+      log.warn('Could not recover task delegation', { error: String(error) });
+    void taskDelegation.service?.resumePending(report).catch(report);
+  }, 1000);
+  appScope.add(() => clearTimeout(delegationRecoveryTimer));
   const searchService = createSearchService({
     db,
     sqlite,

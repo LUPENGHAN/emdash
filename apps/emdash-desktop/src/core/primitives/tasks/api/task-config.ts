@@ -25,6 +25,8 @@ const v1Schema = z.object({
       /** Model provider source: id, null = the agent's own login, absent = agent default. */
       modelSource: z.string().nullable().optional(),
       sourceModel: z.string().optional(),
+      effort: z.string().nullable().optional(),
+      supplierId: z.string().optional(),
       type: z.enum(['pty', 'acp']).optional(),
     })
     .optional(),

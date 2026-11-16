@@ -27,6 +27,16 @@ export const plugin = definePlugin(
     websiteUrl: 'https://github.com/openai/codex',
   },
   {
+    effort: {
+      kind: 'selectable',
+      effortOptions: {
+        minimal: { label: 'Minimal', level: 1 },
+        low: { label: 'Low', level: 2 },
+        medium: { label: 'Medium', level: 3 },
+        high: { label: 'High', level: 4 },
+        xhigh: { label: 'Xhigh', level: 5 },
+      },
+    },
     usageLimits: { kind: 'supported' },
     acp: {
       kind: 'supported',

@@ -14,6 +14,22 @@ const caller = {
 describe('createAgentControlDispatcher', () => {
   afterEach(() => vi.useRealTimers());
 
+  it('executes supported backend operations without an open window', async () => {
+    const emit = vi.fn();
+    const dispatcher = createAgentControlDispatcher({
+      emit,
+      backend: async (_caller, action) =>
+        action.kind === 'create_task' ? { text: 'created' } : undefined,
+    });
+    await expect(
+      dispatcher.dispatch(caller, { kind: 'create_task', name: 'work' })
+    ).resolves.toEqual({ text: 'created' });
+    expect(emit).not.toHaveBeenCalled();
+    await expect(dispatcher.dispatch(caller, { kind: 'notify', message: 'hello' })).rejects.toThrow(
+      'No Emdash window'
+    );
+  });
+
   it('sends each action to the window focused most recently and resolves with its answer', async () => {
     let now = 1_000;
     const emitted: AgentControlRequest[] = [];
