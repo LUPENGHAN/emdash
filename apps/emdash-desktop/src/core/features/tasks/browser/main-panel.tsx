@@ -356,7 +356,7 @@ const SIDEBAR_CLOSE_THRESHOLD = 1;
 // semantic close.
 const SIDEBAR_MIN_SIZE = '280px';
 
-const ReadyTaskMainPanel = observer(function ReadyTaskMainPanel() {
+export const ReadyTaskMainPanel = observer(function ReadyTaskMainPanel() {
   const taskView = useTaskComposition();
   // Zen is workspace-chrome data; the task sidebar hides while zen is active
   // as a derived condition — no task-chrome mutation, no task-side restore.

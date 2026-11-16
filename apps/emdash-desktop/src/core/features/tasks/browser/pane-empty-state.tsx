@@ -10,6 +10,13 @@ import { cn } from '@core/primitives/styling/browser/cn';
 import { usePaneContext } from '@core/primitives/workbench-shell/browser/tabs/pane-context';
 
 export function PaneEmptyState() {
+  const { purpose } = useTaskViewContext();
+  if (purpose === 'documents')
+    return <p className="p-6 text-sm text-foreground-muted">Choose a document in the file tree.</p>;
+  return <TaskPaneEmptyState />;
+}
+
+function TaskPaneEmptyState() {
   const { projectId, taskId } = useTaskViewContext();
   const workspaceId = useWorkspaceId();
   const { pane } = usePaneContext();

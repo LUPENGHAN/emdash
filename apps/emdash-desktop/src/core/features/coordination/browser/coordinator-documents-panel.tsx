@@ -6,6 +6,8 @@ import { useState, type ReactNode } from 'react';
 import { openFileInTaskEditor } from '@core/features/editor/api/browser/open-file-in-file-editor';
 import type { FileTabResource } from '@core/features/editor/api/browser/task-editor/stores/file-tab-resource';
 import { EditorFileTree } from '@core/features/editor/contributions/browser/editor-file-tree';
+import { tasksBrowserContributions } from '@core/features/tasks/contributions/browser';
+import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
 import { useTaskComposition } from '@core/features/workbench/api/browser/task-composition-context';
 import { taskTabView } from '@core/features/workbench/api/browser/task-tab-registry';
 import { relativePathWithin } from '@core/primitives/desktop-runtime/api';
@@ -13,6 +15,7 @@ import { getCoordinationClient } from '../api/browser/client';
 import { documentPathSchema } from '../api/documents';
 import type { Coordinator } from '../api/types';
 import { CoordinatorDocumentPush } from './coordinator-document-push';
+import { DocumentStorageSetup } from './document-storage-setup';
 
 export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsPanel({
   record,
@@ -21,13 +24,38 @@ export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsP
   record: Coordinator;
   children: ReactNode;
 }) {
+  if (record.documentStorage?.state === 'preparing')
+    return <DocumentStorageSetup record={record} />;
+  if (record.documentStorage)
+    return (
+      <tasksBrowserContributions.embeddedWorkspace
+        projectId={record.documentStorage.projectId}
+        taskId={record.documentStorage.taskId}
+      >
+        {(workspace) => (
+          <CoordinatorDocumentEditor record={record}>{workspace}</CoordinatorDocumentEditor>
+        )}
+      </tasksBrowserContributions.embeddedWorkspace>
+    );
+  return <CoordinatorDocumentEditor record={record}>{children}</CoordinatorDocumentEditor>;
+});
+
+const CoordinatorDocumentEditor = observer(function CoordinatorDocumentEditor({
+  record,
+  children,
+}: {
+  record: Coordinator;
+  children: ReactNode;
+}) {
+  const { projectId, taskId } = useTaskViewContext();
   const composition = useTaskComposition();
   const [path, setPath] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState('');
   const [lastCommit, setLastCommit] = useState<string>();
-  const directoryProject = record.params?.workspaceConfig.git.kind === 'none';
+  const directoryProject =
+    !record.documentStorage && record.params?.workspaceConfig.git.kind === 'none';
   const activeFile =
     composition.paneLayout.focusedPane.activeResourceOfKind<FileTabResource>('file');
   const workspace = useQuery({
@@ -46,7 +74,7 @@ export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsP
     setError(undefined);
     try {
       await (await getCoordinationClient()).createDocument({ id: record.id, path: parsed.data });
-      await openFileInTaskEditor(record.projectId, record.taskId, parsed.data);
+      await openFileInTaskEditor(projectId, taskId, parsed.data);
       composition.revealWorkspaceFile(parsed.data);
       setPath('');
     } catch (cause) {
@@ -103,6 +131,7 @@ export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsP
           Main agent conversations are available. Management branches, document pushes and code
           baseline synchronization do not apply to this directory.
         </p>
+        <DocumentStorageSetup record={record} />
       </div>
     );
   if (workspace.error)

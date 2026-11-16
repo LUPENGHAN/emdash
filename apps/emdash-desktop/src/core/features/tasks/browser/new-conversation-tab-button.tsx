@@ -14,7 +14,7 @@ import { usePaneContext } from '@core/primitives/workbench-shell/browser/tabs/pa
  * terminal, which otherwise only had shortcuts and the palette.
  */
 export const NewConversationTabButton = observer(function NewConversationTabButton() {
-  const { projectId, taskId } = useTaskViewContext();
+  const { projectId, taskId, purpose } = useTaskViewContext();
   const { pane } = usePaneContext();
   const openCreateConversationModal = useOpenModal('createConversationModal');
 
@@ -31,6 +31,7 @@ export const NewConversationTabButton = observer(function NewConversationTabButt
     })();
   };
 
+  if (purpose === 'documents') return null;
   return (
     <div className="flex items-center">
       <Tooltip.Root>

@@ -12,6 +12,9 @@ import { SubjectProvider } from '@core/primitives/mementos/react';
 interface TaskViewContext {
   projectId: string;
   taskId: string;
+  purpose?: 'documents';
+  /** Visible navigation owner when a workspace is embedded in another task page. */
+  navigationTaskId?: string;
 }
 
 const TaskViewContext = createContext<TaskViewContext | null>(null);
@@ -20,15 +23,19 @@ export const TaskViewWrapper = observer(function TaskViewWrapper({
   children,
   projectId,
   taskId,
+  purpose,
+  navigationTaskId,
 }: {
   children: ReactNode;
   projectId: string;
   taskId: string;
+  purpose?: 'documents';
+  navigationTaskId?: string;
 }) {
   return (
     <ProjectViewWrapper projectId={projectId}>
       <SubjectProvider subject={taskSubject({ taskId })}>
-        <TaskViewContext.Provider value={{ projectId, taskId }}>
+        <TaskViewContext.Provider value={{ projectId, taskId, purpose, navigationTaskId }}>
           {children}
         </TaskViewContext.Provider>
       </SubjectProvider>

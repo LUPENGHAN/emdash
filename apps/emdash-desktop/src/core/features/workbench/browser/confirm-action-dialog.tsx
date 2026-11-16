@@ -44,6 +44,7 @@ export function ConfirmActionDialog({
           Cancel
         </Button>
         <ConfirmButton
+          data-testid="confirm-action-submit"
           variant={variant === 'default' ? 'primary' : variant}
           onClick={() => controller.complete(checkbox ? { checked } : undefined)}
         >

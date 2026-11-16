@@ -44,12 +44,12 @@ export const EditorProvider = observer(function EditorProvider({
 }: {
   children: ReactNode;
 }) {
-  const { projectId, taskId } = useTaskViewContext();
+  const { projectId, taskId, navigationTaskId } = useTaskViewContext();
   const taskView = useTaskComposition();
   const { editorView, paneLayout } = taskView;
   const { paneId, pane: paneTabManager } = usePaneContext();
   const { effectiveTheme } = useTheme();
-  const isActive = useIsActiveTask(taskId);
+  const isActive = useIsActiveTask(navigationTaskId ?? taskId);
   const liveActionDisabledReason = projectAvailabilityUi.getLiveActionDisabledReason(projectId);
   const editorScopeImplementation = {
     'editor.save': () => ({

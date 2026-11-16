@@ -224,7 +224,24 @@ async function quitApplication(application) {
   const exited =
     child.exitCode === null && child.signalCode === null ? once(child, 'exit') : Promise.resolve();
   await application.evaluate(({ app }) => app.quit()).catch(() => {});
-  const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
+  const timer = setTimeout(() => child.kill('SIGKILL'), 15000);
+  const window = application.windows().find((window) => !window.isClosed());
+  if (window) {
+    await Promise.race([
+      exited,
+      (async () => {
+        const quit = window.getByTestId('confirm-action-submit');
+        const save = window.getByRole('button', { name: /^(Save All|保存全部|全部保存)$/ });
+        const action = await Promise.race([
+          quit.waitFor({ state: 'visible', timeout: 5000 }).then(() => 'quit'),
+          save.waitFor({ state: 'visible', timeout: 5000 }).then(() => 'save'),
+        ]);
+        if (action === 'save') await save.click();
+        await window.screenshot({ path: join(profile, 'quit-confirmation.png') });
+        await quit.click();
+      })(),
+    ]).catch(() => {});
+  }
   await exited;
   clearTimeout(timer);
   return { exitCode: child.exitCode, signal: child.signalCode };
@@ -1327,6 +1344,7 @@ try {
   );
   await page.screenshot({ path: join(profile, 'task-startup-retried-after-restart.png') });
 
+  let directoryStorage;
   for (const directory of [true, false]) {
     const root = join(profile, directory ? 'directory-project' : 'empty-repository');
     await mkdir(root);
@@ -1382,6 +1400,93 @@ try {
         JSON.stringify(denied.content),
         directory ? /needs a Git repository/ : /code baseline/
       );
+      if (directory) {
+        const originalMain = (await page.evaluate(() => window.allCoordinatorSnapshots())).find(
+          (record) => record.taskId === special.taskId
+        );
+        await page.getByTestId('coordinator-documents-tab').click();
+        const setup = page.getByTestId('document-storage-setup');
+        await setup.getByTestId('document-storage-project').click();
+        await page.getByRole('option', { name: 'Delegation acceptance', exact: true }).click();
+        await setup.getByTestId('configure-document-storage').click();
+        const associatedDocuments = page.getByTestId('coordinator-documents-panel');
+        await associatedDocuments.getByRole('textbox', { name: 'Document path' }).waitFor();
+        const stored = (await page.evaluate(() => window.allCoordinatorSnapshots())).find(
+          (record) => record.taskId === special.taskId
+        );
+        assert.equal(stored.documentStorage.projectId, coordinator.projectId);
+        assert.equal(stored.documentStorage.state, 'ready');
+        assert.notEqual(stored.documentStorage.taskId, stored.taskId);
+        assert.equal(stored.documentStorage.params.taskConfig.initialConversation, undefined);
+        assert.deepEqual(stored.params, originalMain.params);
+        assert.equal(stored.conversationId, special.conversationId);
+        const storageBlock = (await git('worktree', 'list', '--porcelain'))
+          .split('\n\n')
+          .find((block) =>
+            block.includes(`branch refs/heads/emdash/manage/${stored.documentStorage.taskId}`)
+          );
+        assert.ok(storageBlock, 'The independent document worktree was not created');
+        const storagePath = storageBlock.split('\n')[0].slice('worktree '.length);
+        await associatedDocuments
+          .getByRole('textbox', { name: 'Document path' })
+          .fill('directory-plan.md');
+        await associatedDocuments
+          .getByRole('button', { name: 'Create document', exact: true })
+          .click();
+        await associatedDocuments.getByRole('button', { name: /^(Raw|原始)$/ }).click();
+        await associatedDocuments.locator('.monaco-editor .view-lines').first().click();
+        await page.keyboard.insertText('# Directory plan\n\nSaved in associated Git storage.\n');
+        await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s');
+        await waitForDocumentSave(
+          join(storagePath, 'directory-plan.md'),
+          'Saved in associated Git storage.'
+        );
+        const storedDocument = JSON.parse(
+          await call(specialClient, 'read_management_document', { path: 'directory-plan.md' })
+        );
+        assert.ok(storedDocument.content.includes('Saved in associated Git storage.'));
+        const updated = JSON.parse(
+          await call(specialClient, 'write_management_document', {
+            path: 'directory-plan.md',
+            content: storedDocument.content + '\nUpdated by the main agent through MCP.\n',
+            expected_revision: storedDocument.revision,
+          })
+        );
+        assert.ok(updated.content.includes('Updated by the main agent through MCP.'));
+        const staleWrite = await specialClient.callTool({
+          name: 'write_management_document',
+          arguments: {
+            path: 'directory-plan.md',
+            content: 'stale write',
+            expected_revision: storedDocument.revision,
+          },
+        });
+        assert.equal(staleWrite.isError, true);
+        const foreignWrite = await specialClient.callTool({
+          name: 'write_management_document',
+          arguments: { coordinator_id: owner.id, path: 'plan.md', content: 'foreign write' },
+        });
+        assert.equal(foreignWrite.isError, true);
+        await assert.rejects(readFile(join(root, 'directory-plan.md')), { code: 'ENOENT' });
+        assert.equal(await git('rev-parse', 'HEAD'), baseline);
+        await page.screenshot({ path: join(profile, 'directory-associated-document-storage.png') });
+        await page.getByTestId('coordinator-conversation-tab').click();
+        await call(specialClient, 'send_message', {
+          conversation_id: special.conversationId,
+          request_id: 'after-document-storage',
+          text: 'Conversation stays in its directory after configuring document storage.',
+        });
+        await waitForPrompt(
+          'Conversation stays in its directory after configuring document storage.',
+          specialCapture.sessionId
+        );
+        directoryStorage = {
+          ...special,
+          storage: stored.documentStorage,
+          content: updated.content,
+          root,
+        };
+      }
     } finally {
       await specialClient.close();
     }
@@ -1394,6 +1499,60 @@ try {
       ),
     });
   }
+
+  assert.ok(directoryStorage);
+  const beforeStorageRestart = directoryStorage;
+  const stoppedWithStorage = await quitApplication(app);
+  assert.equal(stoppedWithStorage.exitCode, 0);
+  app = undefined;
+  app = await _electron.launch({
+    executablePath: electronPath,
+    args: [appRoot],
+    env,
+    timeout: 30000,
+  });
+  page = await app.firstWindow();
+  page.setDefaultTimeout(20000);
+  await page.waitForLoadState('domcontentloaded');
+  await page.getByRole('button', { name: /^(Settings|设置)$/ }).waitFor();
+  await page.addScriptTag({
+    type: 'module',
+    content: `import { allCoordinatorSnapshots, readCoordinatorDocument } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument });`,
+  });
+  await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
+  const restoredDirectory = (await page.evaluate(() => window.allCoordinatorSnapshots())).find(
+    (record) => record.taskId === beforeStorageRestart.taskId
+  );
+  assert.deepEqual(restoredDirectory.documentStorage, beforeStorageRestart.storage);
+  assert.equal(restoredDirectory.conversationId, beforeStorageRestart.conversationId);
+  const restoredStoredDocument = await page.evaluate(
+    ({ taskId }) => window.readCoordinatorDocument(taskId, 'directory-plan.md'),
+    beforeStorageRestart
+  );
+  assert.equal(restoredStoredDocument.content, beforeStorageRestart.content);
+  const expandDirectory = page.getByRole('button', {
+    name: /^(Expand|展开) Directory coordination$/,
+  });
+  if (await expandDirectory.isVisible()) await expandDirectory.click();
+  await page
+    .locator(
+      `[data-testid="project-main-agent"][data-project-id="${beforeStorageRestart.projectId}"]`
+    )
+    .click();
+  await page
+    .locator(`[data-testid="coordinator-panel"][data-task-id="${beforeStorageRestart.taskId}"]`)
+    .waitFor();
+  await page.getByTestId('coordinator-documents-tab').click();
+  const restoredStoragePanel = page.getByTestId('coordinator-documents-panel');
+  await restoredStoragePanel.getByText('directory-plan.md', { exact: true }).last().dblclick();
+  await restoredStoragePanel.getByRole('button', { name: /^(Raw|原始)$/ }).click();
+  await page.waitForFunction(() =>
+    Array.from(document.querySelectorAll('.monaco-editor .view-lines')).some((element) =>
+      element.textContent.replace(/\u00a0/g, ' ').includes('Updated by the main agent through MCP.')
+    )
+  );
+  await page.screenshot({ path: join(profile, 'associated-document-storage-restarted.png') });
+  await assert.rejects(readFile(join(beforeStorageRestart.root, '.git')), { code: 'ENOENT' });
 
   await writeFile(
     join(profile, 'result.json'),
@@ -1418,6 +1577,9 @@ try {
           'task startup retry preserved task, conversation, branch commit and frozen document inputs',
           'directory main opened and exchanged an ACP turn without initializing Git or allowing code delegation',
           'empty repository main created management documents without inventing a code baseline',
+          'directory main explicitly selected another Git project for independent document storage without moving its active conversation',
+          'associated storage reused Monaco saving and controlled MCP reads and writes; stale and foreign writes refused',
+          'independent document storage binding and content survived another complete application restart and reopened in the editor',
           'task worktree contained no copied management documents',
           'real ACP protocol with a simulated OpenCode executable',
           'authenticated main and worker MCP identities',
@@ -1464,6 +1626,10 @@ try {
   );
   console.log(`Cross-project coordination acceptance passed: ${profile}`);
 } catch (error) {
+  await writeFile(
+    join(profile, 'failure-error.json'),
+    JSON.stringify({ name: error.name, message: error.message, stack: error.stack }, null, 2)
+  );
   await page?.screenshot({ path: join(profile, 'failure.png') }).catch(() => {});
   await writeFile(join(profile, 'failure.html'), (await page?.content().catch(() => '')) ?? '');
   console.error(`Acceptance evidence: ${profile}`);
@@ -1475,6 +1641,6 @@ try {
   await replacementClient?.close().catch(() => {});
   await workerClient?.close().catch(() => {});
   await client?.close().catch(() => {});
-  if (app) await quitApplication(app);
+  if (app) await quitApplication(app).catch(() => {});
   await renderer.close();
 }
