@@ -14,9 +14,11 @@ import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-s
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
 import { useTaskComposition } from '@core/features/workbench/api/browser/task-composition-context';
+import { useMemento } from '@core/primitives/mementos/react';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
 import type { AgentSelection, AssignedTask, Coordinator, ProjectAccess } from '../api/types';
+import { coordinatorViewMemento } from '../contributions/mementos';
 import { CoordinatorDocumentsPanel } from './coordinator-documents-panel';
 import { CreateCrossProjectMainAgent } from './cross-project-main-agents';
 import { TakeOverTaskForm } from './take-over-task-form';
@@ -39,9 +41,9 @@ const CoordinatorContent = observer(function CoordinatorContent({
   taskId: string;
   children: ReactNode;
 }) {
-  const [tab, setTab] = useState<'conversation' | 'tasks' | 'documents' | 'settings'>(
-    'conversation'
-  );
+  const [view, setView] = useMemento(coordinatorViewMemento);
+  const { tab } = view;
+  const setTab = (tab: typeof view.tab) => setView({ version: '1', tab });
   const composition = useTaskComposition();
   const queryClient = useQueryClient();
   const key = ['coordinator', taskId];
