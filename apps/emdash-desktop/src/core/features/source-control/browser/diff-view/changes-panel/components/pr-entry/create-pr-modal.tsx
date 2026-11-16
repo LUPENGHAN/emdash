@@ -2,6 +2,7 @@ import { parseRepositoryRef } from '@emdash/core/primitives/repository/api';
 import type { GitBranchRef } from '@emdash/core/runtimes/git/api';
 import {
   Alert,
+  Button,
   Combobox,
   Dialog,
   Field,
@@ -29,6 +30,7 @@ import { RemoteSelector } from '@core/features/source-control/contributions/brow
 import { gitCheckoutStoreToken } from '@core/features/source-control/contributions/browser/workspace-store-tokens';
 import { workspaceRegistry } from '@core/features/workspaces/api/browser/stores/workspace-registry';
 import { useModalController, useOpenModal } from '@core/manifests/browser/modal-api';
+import { openExternal } from '@core/primitives/desktop-host/browser/host-client';
 import { ConfirmButton } from '@core/primitives/keybindings/browser/confirm-button';
 import { log } from '@core/primitives/logging/browser/logger';
 import { defineModal } from '@core/primitives/modals/react';
@@ -66,6 +68,7 @@ export const CreatePrModal = observer(function CreatePrModal({
   const [isCreating, setIsCreating] = useState(false);
   const [createActionId, setCreateActionId] = useState('push-and-create');
   const [error, setError] = useState<string | null>(null);
+  const [candidates, setCandidates] = useState<{ url: string; number: number }[]>([]);
   const [accountOverride, setAccountOverride] = useState<ProviderAccountSummary | null>(null);
   const [accountSaveState, setAccountSaveState] = useState<'idle' | 'saving' | 'failed'>('idle');
   const accountSaveInFlight = useRef(false);
@@ -162,6 +165,7 @@ export const CreatePrModal = observer(function CreatePrModal({
     }
     if (!title.trim() || !targetRepositoryUrl) return;
     setError(null);
+    setCandidates([]);
     setIsCreating(true);
     try {
       if (push) {
@@ -177,6 +181,10 @@ export const CreatePrModal = observer(function CreatePrModal({
 
       const baseRepository = parseRepositoryRef(targetRepositoryUrl);
       const headRepository = repo?.pushRemote?.url ? parseRepositoryRef(repo.pushRemote.url) : null;
+      if (!headRepository) {
+        setError(`Select a valid push remote before creating the ${noun}.`);
+        return;
+      }
       const head =
         provider === 'github' &&
         baseRepository &&
@@ -186,9 +194,9 @@ export const CreatePrModal = observer(function CreatePrModal({
           : branchName;
 
       const client = await getPullRequestsRuntimeClient();
-      const result = await client.createPullRequest({
+      const result = await client.ensurePullRequest({
         repositoryUrl: targetRepositoryUrl,
-        headRepositoryUrl: headRepository?.repositoryUrl,
+        headRepositoryUrl: headRepository.repositoryUrl,
         head,
         base: selectedBase.branch,
         title: title.trim(),
@@ -200,6 +208,8 @@ export const CreatePrModal = observer(function CreatePrModal({
         complete();
       } else {
         setError(pullRequestErrorMessage(result.error));
+        if (result.error.type === 'pull_request_match_ambiguous')
+          setCandidates(result.error.candidates);
       }
     } finally {
       setIsCreating(false);
@@ -334,6 +344,15 @@ export const CreatePrModal = observer(function CreatePrModal({
           <Alert.Root status="destructive">
             <Alert.Title>Failed to create {noun}</Alert.Title>
             <Alert.Description>{error}</Alert.Description>
+            {candidates.map((candidate) => (
+              <Button
+                key={candidate.url}
+                variant="secondary"
+                onClick={() => void openExternal(candidate.url)}
+              >
+                {candidate.url}
+              </Button>
+            ))}
           </Alert.Root>
         )}
       </Dialog.Body>

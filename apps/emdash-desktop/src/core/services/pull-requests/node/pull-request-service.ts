@@ -9,7 +9,7 @@ import type {
   PullRequestRepositoryClient,
 } from '@emdash/plugins/pull-requests/types';
 import { err, ok, type Result } from '@emdash/shared';
-import type { Run, Scope } from '@emdash/shared/concurrency';
+import { KeyedMutex, type Run, type Scope } from '@emdash/shared/concurrency';
 import type { Logger } from '@emdash/shared/logger';
 import { requestPriorities } from '@emdash/shared/requests';
 import { waitWithSignal } from '@emdash/shared/scheduling';
@@ -37,6 +37,7 @@ import {
   type RefreshPullRequestInput,
 } from '../api';
 import type { PullRequestError } from '../api/errors';
+import type { EnsurePullRequestInput } from '../api/schemas';
 import { PullRequestEngine } from './engine';
 import type { PullRequestStore } from './store';
 
@@ -96,6 +97,7 @@ export class PullRequestService {
     { sequence: number; generation: number }
   >();
   private readonly engine: PullRequestEngine;
+  private readonly creationLocks = new KeyedMutex();
   private readonly details = new Map<string, DetailEntry>();
 
   constructor(private readonly options: PullRequestServiceOptions) {
@@ -583,6 +585,48 @@ export class PullRequestService {
     }
     signal?.throwIfAborted();
     return this.startHistory(normalized, true, requestPriorities.task, signal);
+  }
+
+  async ensurePullRequest(
+    input: EnsurePullRequestInput,
+    signal: AbortSignal
+  ): Promise<Result<{ url: string; number: number }, PullRequestError>> {
+    const headRefName = input.head.slice(input.head.lastIndexOf(':') + 1).trim();
+    if (isManagementBranch(headRefName))
+      return err({
+        type: 'management_branch',
+        branch: headRefName,
+        message: 'Management documents cannot be used as a code pull request source.',
+      });
+    const repositoryUrl = normalizeRepositoryUrl(input.repositoryUrl);
+    if (!repositoryUrl) return err({ type: 'invalid_repository', input: input.repositoryUrl });
+    const headRepositoryUrl = normalizeRepositoryUrl(input.headRepositoryUrl);
+    if (!headRepositoryUrl)
+      return err({ type: 'invalid_repository', input: input.headRepositoryUrl });
+    if (!this.options.store.getRegisteredRepository(repositoryUrl))
+      return err({ type: 'repository_not_registered', repositoryUrl });
+    const key = JSON.stringify([repositoryUrl, headRepositoryUrl, headRefName, input.base]);
+    return this.creationLocks.runExclusive(key, async () => {
+      signal.throwIfAborted();
+      const matches = await this.engine.findOpenPullRequests(
+        { repositoryUrl, headRepositoryUrl, headRefName, base: input.base },
+        signal
+      );
+      if (!matches.success) return matches;
+      const candidates = [...new Map(matches.data.prs.map((pr) => [pr.url, pr])).values()];
+      if (!matches.data.complete || candidates.length > 1)
+        return err({
+          type: 'pull_request_match_ambiguous',
+          candidates,
+          message: matches.data.complete
+            ? 'Multiple matching pull requests were found. Choose an existing pull request.'
+            : 'Matching pull requests could not be checked completely. No pull request was created.',
+        });
+      const candidate = candidates[0];
+      if (candidate) return ok(candidate);
+      signal.throwIfAborted();
+      return this.createPullRequest({ ...input, repositoryUrl, headRepositoryUrl }, signal);
+    });
   }
 
   async createPullRequest(

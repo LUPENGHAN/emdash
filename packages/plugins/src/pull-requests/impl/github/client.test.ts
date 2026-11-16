@@ -33,6 +33,120 @@ async function repository(provider: GitHubPullRequestClient) {
 }
 
 describe('GitHub pull request provider (without persistence)', () => {
+  it.each([false, true])(
+    'looks up the exact fork and base without traversing pages (%s)',
+    async (more) => {
+      const headRepositoryUrl = 'https://github.com/personal/emdash';
+      const candidate = {
+        state: 'open',
+        number: 7,
+        html_url: `${repositoryUrl}/pull/7`,
+        head: { ref: 'feature', repo: { html_url: 'https://github.com/Personal/Emdash' } },
+        base: { ref: 'develop', repo: { html_url: repositoryUrl } },
+      };
+      const list = vi.fn(async () => ({
+        data: [
+          candidate,
+          {
+            ...candidate,
+            number: 8,
+            head: { ...candidate.head, repo: { html_url: 'https://github.com/other/emdash' } },
+          },
+          { ...candidate, number: 9, base: { ...candidate.base, ref: 'main' } },
+        ],
+        headers: more ? { link: '<https://api.github.com/next>; rel="next"' } : {},
+      }));
+      const { logger } = createStubLogger();
+      const provider = createProvider({
+        githubAuth: fakeGitHubAuth(),
+        logger,
+        createOctokit: () => ({ rest: { pulls: { list } } }) as unknown as Octokit,
+      });
+      expect(
+        await provider.findOpenPullRequests(
+          {
+            repositoryUrl,
+            headRepositoryUrl,
+            headRefName: 'feature',
+            base: 'develop',
+          },
+          new AbortController().signal
+        )
+      ).toEqual(
+        ok({
+          prs: [{ url: candidate.html_url, number: 7 }],
+          complete: !more,
+        })
+      );
+      expect(list).toHaveBeenCalledOnce();
+      expect(list).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'emdash',
+          repo: 'emdash',
+          head: 'personal:feature',
+          base: 'develop',
+          state: 'open',
+        })
+      );
+    }
+  );
+  it('derives the native fork head from the explicit source repository', async () => {
+    const create = vi.fn(async () => ({
+      data: { html_url: `${repositoryUrl}/pull/7`, number: 7 },
+    }));
+    const { logger } = createStubLogger();
+    const provider = createProvider({
+      githubAuth: fakeGitHubAuth(),
+      logger,
+      createOctokit: () => ({ rest: { pulls: { create } } }) as unknown as Octokit,
+    });
+    expect(
+      await provider.createPullRequest(
+        {
+          repositoryUrl,
+          headRepositoryUrl: 'https://github.com/personal/emdash',
+          head: 'feature',
+          base: 'develop',
+          title: 'Feature',
+          draft: false,
+        },
+        new AbortController().signal
+      )
+    ).toMatchObject({ success: true });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ head: 'personal:feature', base: 'develop' })
+    );
+  });
+  it('marks an unresolved source repository as incomplete rather than proving absence', async () => {
+    const list = vi.fn(async () => ({
+      data: [
+        {
+          state: 'open',
+          number: 7,
+          html_url: `${repositoryUrl}/pull/7`,
+          head: { ref: 'feature', repo: null },
+          base: { ref: 'develop', repo: { html_url: repositoryUrl } },
+        },
+      ],
+      headers: {},
+    }));
+    const provider = createProvider({
+      githubAuth: fakeGitHubAuth(),
+      logger: createStubLogger().logger,
+      createOctokit: () => ({ rest: { pulls: { list } } }) as unknown as Octokit,
+    });
+    expect(
+      await provider.findOpenPullRequests(
+        {
+          repositoryUrl,
+          headRepositoryUrl: 'https://github.com/personal/emdash',
+          headRefName: 'feature',
+          base: 'develop',
+        },
+        new AbortController().signal
+      )
+    ).toEqual(ok({ prs: [], complete: false }));
+  });
   it('returns mapped metadata and pagination evidence without a cache', async () => {
     const graphql = vi.fn(async () => ({
       repository: {

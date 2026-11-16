@@ -85,6 +85,68 @@ async function open(client: GitLabPullRequestClient) {
 const project = { '/api/v4/projects/acme%2Fplatform%2Fapp': { data: { id: 99 } } };
 
 describe('GitLab pull request client', () => {
+  it('marks an unresolved source project as incomplete rather than proving absence', async () => {
+    const { client } = setup({
+      ...project,
+      '/api/v4/projects/99/merge_requests': {
+        data: [{ ...mr, source_project_id: null, target_project_id: 99 }],
+      },
+    });
+    expect(
+      await client.findOpenPullRequests(
+        {
+          repositoryUrl: url,
+          headRepositoryUrl: url,
+          headRefName: 'feature',
+          base: 'main',
+        },
+        new AbortController().signal
+      )
+    ).toEqual(ok({ prs: [], complete: false }));
+  });
+  it.each([false, true])(
+    'finds only the explicit fork and target without traversing pages (%s)',
+    async (more) => {
+      const { client, requests } = setup({
+        ...project,
+        '/api/v4/projects/acme%2Fforks%2Fapp': { data: { id: 100 } },
+        '/api/v4/projects/99/merge_requests': {
+          data: [
+            { ...mr, source_project_id: 100, target_project_id: 99, target_branch: 'develop' },
+            {
+              ...mr,
+              iid: 43,
+              source_project_id: 101,
+              target_project_id: 99,
+              target_branch: 'develop',
+            },
+            { ...mr, iid: 44, source_project_id: 100, target_project_id: 99 },
+          ],
+          headers: more ? { 'x-next-page': '2' } : {},
+        },
+      });
+      expect(
+        await client.findOpenPullRequests(
+          {
+            repositoryUrl: url,
+            headRepositoryUrl: 'https://gitlab.com/acme/forks/app',
+            headRefName: 'feature',
+            base: 'develop',
+          },
+          new AbortController().signal
+        )
+      ).toEqual(
+        ok({
+          prs: [{ url: mr.web_url, number: 42 }],
+          complete: !more,
+        })
+      );
+      const lookup = requests.find((request) => request.pathname.endsWith('/merge_requests'));
+      expect(lookup?.searchParams.get('source_branch')).toBe('feature');
+      expect(lookup?.searchParams.get('target_branch')).toBe('develop');
+      expect(requests).toHaveLength(3);
+    }
+  );
   it.each([
     [
       'an access token',

@@ -46,6 +46,18 @@ export type PullRequestCredentials = {
   credentials: IntegrationCredentials;
 };
 
+export type PullRequestSource = {
+  repositoryUrl: string;
+  headRepositoryUrl: string;
+  headRefName: string;
+  base: string;
+};
+export type MatchingPullRequests = {
+  prs: { url: string; number: number }[];
+  /** A bounded response with more pages cannot prove that the match is unique. */
+  complete: boolean;
+};
+
 /**
  * Host services for a pull-request client. Credentials are resolved per
  * repository on every request because one client serves every repository of
@@ -95,6 +107,10 @@ export interface PullRequestRepositoryClient {
 
 /** A single git hosting platform's PR/MR I/O: fetches and mutates, never cache persistence or refresh policy. */
 export interface PullRequestClient {
+  findOpenPullRequests?(
+    input: PullRequestSource,
+    signal: AbortSignal
+  ): Promise<Result<MatchingPullRequests, PullRequestError>>;
   openRepository(
     repositoryUrl: string,
     signal: AbortSignal

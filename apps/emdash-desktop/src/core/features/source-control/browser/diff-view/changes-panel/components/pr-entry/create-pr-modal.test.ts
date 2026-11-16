@@ -78,7 +78,7 @@ vi.mock('@core/manifests/browser/modal-api', () => ({
 }));
 vi.mock('@core/primitives/modals/react', () => ({ defineModal: () => (value: unknown) => value }));
 vi.mock('@core/services/pull-requests/api/client', () => ({
-  getPullRequestsRuntimeClient: async () => ({ createPullRequest: mocks.create }),
+  getPullRequestsRuntimeClient: async () => ({ ensurePullRequest: mocks.create }),
 }));
 vi.mock('@core/features/source-control/contributions/browser/project-branch-selector', () => ({
   ProjectBranchSelector: () => null,
@@ -196,6 +196,25 @@ describe('CreatePrModal provider routing', () => {
     expect(button('Create MR').disabled).toBe(true);
     await act(async () => button('Create MR').click());
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+  it('shows matching PR candidates and keeps the creation dialog open on ambiguity', async () => {
+    mocks.create.mockImplementationOnce(async () => ({
+      success: false,
+      error: {
+        type: 'pull_request_match_ambiguous',
+        message: 'Choose an existing pull request.',
+        candidates: [
+          { number: 7, url: 'https://github.com/acme/app/pull/7' },
+          { number: 8, url: 'https://github.com/acme/app/pull/8' },
+        ],
+      },
+    }));
+    await render('github');
+    await act(async () => button('Create PR').click());
+    expect(container.textContent).toContain('Choose an existing pull request.');
+    expect(button('https://github.com/acme/app/pull/7')).toBeDefined();
+    expect(button('https://github.com/acme/app/pull/8')).toBeDefined();
+    expect(mocks.complete).not.toHaveBeenCalled();
   });
 
   it('blocks GitLab creation without an account', async () => {

@@ -109,6 +109,11 @@ export const createPullRequestInputSchema = z.object({
   draft: z.boolean(),
 });
 
+export const ensurePullRequestInputSchema = createPullRequestInputSchema.extend({
+  headRepositoryUrl: z.string().min(1),
+});
+export type EnsurePullRequestInput = z.infer<typeof ensurePullRequestInputSchema>;
+
 export const mergePullRequestInputSchema = pullRequestNumberInputSchema.extend({
   options: pullRequestMergeOptionsSchema,
 });

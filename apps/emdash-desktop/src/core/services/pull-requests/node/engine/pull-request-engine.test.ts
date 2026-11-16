@@ -195,6 +195,26 @@ describe('PullRequestEngine (client dispatch)', () => {
     });
   }
 
+  it('refuses ensure support for a provider without an authoritative matching read', async () => {
+    const client = fakeClient();
+    const engine = createDispatchEngine({ createClient: () => client });
+    expect(
+      await engine.findOpenPullRequests(
+        {
+          repositoryUrl,
+          headRepositoryUrl: repositoryUrl,
+          headRefName: 'feature',
+          base: 'develop',
+        },
+        new AbortController().signal
+      )
+    ).toMatchObject({
+      success: false,
+      error: { type: 'unsupported_provider' },
+    });
+    expect(client.createPullRequest).not.toHaveBeenCalled();
+  });
+
   it('creates one client per integration and reuses it across repositories', async () => {
     const client = fakeClient();
     const createClient = vi.fn(() => client);

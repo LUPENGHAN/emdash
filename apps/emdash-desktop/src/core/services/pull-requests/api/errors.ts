@@ -5,6 +5,11 @@ import { z } from 'zod';
 export const pullRequestErrorSchema = z.discriminatedUnion('type', [
   pullRequestPluginErrorSchema,
   z.object({ type: z.literal('management_branch'), branch: z.string(), message: z.string() }),
+  z.object({
+    type: z.literal('pull_request_match_ambiguous'),
+    candidates: z.array(z.object({ url: z.string(), number: z.number() })),
+    message: z.string(),
+  }),
   z.object({ type: z.literal('remote_not_ready'), status: z.string() }),
   z.object({ type: z.literal('unsupported_provider'), host: z.string(), reason: z.string() }),
   z.object({ type: z.literal('list_failed'), message: z.string() }),

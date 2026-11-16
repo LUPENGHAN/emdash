@@ -5,6 +5,7 @@ import { pullRequestErrorSchema } from './errors';
 import {
   branchPullRequestsInputSchema,
   createPullRequestInputSchema,
+  ensurePullRequestInputSchema,
   headPullRequestsInputSchema,
   listPullRequestsInputSchema,
   listPullRequestsResultSchema,
@@ -94,6 +95,11 @@ export const pullRequestsContract = defineContract({
   }),
   createPullRequest: fallible({
     input: createPullRequestInputSchema,
+    data: z.object({ url: z.string(), number: z.number().int().positive() }),
+    error: pullRequestErrorSchema,
+  }),
+  ensurePullRequest: fallible({
+    input: ensurePullRequestInputSchema,
     data: z.object({ url: z.string(), number: z.number().int().positive() }),
     error: pullRequestErrorSchema,
   }),

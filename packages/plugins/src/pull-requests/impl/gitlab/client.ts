@@ -28,6 +28,8 @@ import type {
   PullRequestOperationErrorType,
   PullRequestPage,
   PullRequestRepositoryClient,
+  PullRequestSource,
+  MatchingPullRequests,
 } from '../../types';
 
 type User = { id: number; username: string; name?: string; avatar_url?: string; web_url?: string };
@@ -476,6 +478,72 @@ export class GitLabPullRequestClient implements PullRequestClient {
       return err(
         mapError(error, repo.host, 'Unable to read merge request discussions', 'comments_failed')
       );
+    }
+  }
+
+  async findOpenPullRequests(
+    input: PullRequestSource,
+    signal: AbortSignal
+  ): Promise<Result<MatchingPullRequests, PullRequestError>> {
+    const target = parseRepositoryRef(input.repositoryUrl);
+    const source = parseRepositoryRef(input.headRepositoryUrl);
+    if (!target || !source)
+      return err({ type: 'invalid_repository', input: input.headRepositoryUrl });
+    if (target.host !== source.host)
+      return err({ type: 'cross_host_pr', baseHost: target.host, headHost: source.host });
+    const resolved = await this.resolveRepository(input.repositoryUrl, signal);
+    if (!resolved.success) return resolved;
+    const repo = resolved.data;
+    try {
+      const sourceRemote = resolveInstanceRemote(source.repositoryUrl, repo.instanceUrl, 'GitLab');
+      if (!sourceRemote.success)
+        return err({ type: 'invalid_repository', input: source.repositoryUrl });
+      const sourceId =
+        source.repositoryUrl === target.repositoryUrl
+          ? repo.projectId
+          : (
+              await this.request<{ id: number }>(
+                repo,
+                `projects/${encodeURIComponent(sourceRemote.data.slug)}`,
+                signal,
+                requestPriorities.interactive
+              )
+            ).data.id;
+      const query = new URLSearchParams({
+        state: 'opened',
+        source_branch: input.headRefName,
+        target_branch: input.base,
+        per_page: '100',
+      });
+      const response = await this.request<MergeRequest[]>(
+        repo,
+        `projects/${repo.projectId}/merge_requests?${query}`,
+        signal,
+        requestPriorities.interactive
+      );
+      return ok({
+        prs: response.data
+          .filter(
+            (mr) =>
+              mr.state === 'opened' &&
+              mr.source_project_id === sourceId &&
+              mr.target_project_id === repo.projectId &&
+              mr.source_branch === input.headRefName &&
+              mr.target_branch === input.base
+          )
+          .map((mr) => ({ url: mr.web_url, number: mr.iid })),
+        complete:
+          response.next === null &&
+          response.data.every(
+            (mr) =>
+              mr.state !== 'opened' ||
+              mr.source_branch !== input.headRefName ||
+              mr.target_branch !== input.base ||
+              (mr.source_project_id != null && mr.target_project_id != null)
+          ),
+      });
+    } catch (error) {
+      return err(mapError(error, repo.host, 'Unable to find merge requests', 'refresh_failed'));
     }
   }
 

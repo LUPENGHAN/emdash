@@ -30,6 +30,8 @@ import type {
   PullRequestOperationErrorType,
   PullRequestPage,
   PullRequestRepositoryClient,
+  PullRequestSource,
+  MatchingPullRequests,
 } from '../../types';
 import { mapApiError, mapGitHubAuthError } from './errors';
 import {
@@ -390,6 +392,65 @@ export class GitHubPullRequestClient implements PullRequestClient {
     }
   }
 
+  async findOpenPullRequests(
+    input: PullRequestSource,
+    signal: AbortSignal
+  ): Promise<Result<MatchingPullRequests, PullRequestError>> {
+    const target = this.parseRepository(input.repositoryUrl);
+    if (!target.success) return target;
+    const source = parseRepositoryRef(input.headRepositoryUrl);
+    if (!source) return err({ type: 'invalid_repository', input: input.headRepositoryUrl });
+    if (source.host !== target.data.host)
+      return err({ type: 'cross_host_pr', baseHost: target.data.host, headHost: source.host });
+    const github = await this.getOctokit(target.data, signal);
+    if (!github.success) return github;
+    try {
+      const response = await this.request(
+        github.data.lane,
+        signal,
+        { priority: requestPriorities.interactive },
+        (requestSignal) =>
+          github.data.octokit.rest.pulls.list({
+            owner: target.data.owner,
+            repo: target.data.repo,
+            state: 'open',
+            head: `${source.owner}:${input.headRefName}`,
+            base: input.base,
+            per_page: 100,
+            request: { signal: requestSignal },
+          })
+      );
+      return ok({
+        prs: response.data
+          .filter(
+            (pr) =>
+              pr.state === 'open' &&
+              pr.head.ref === input.headRefName &&
+              pr.base.ref === input.base &&
+              parseRepositoryRef(pr.head.repo?.html_url ?? '')?.repositoryUrl.toLowerCase() ===
+                source.repositoryUrl.toLowerCase() &&
+              parseRepositoryRef(pr.base.repo.html_url)?.repositoryUrl.toLowerCase() ===
+                target.data.repositoryUrl.toLowerCase()
+          )
+          .map((pr) => ({ url: pr.html_url, number: pr.number })),
+        complete:
+          !response.headers.link?.includes('rel="next"') &&
+          response.data.every(
+            (pr) =>
+              pr.state !== 'open' ||
+              pr.head.ref !== input.headRefName ||
+              pr.base.ref !== input.base ||
+              Boolean(
+                parseRepositoryRef(pr.head.repo?.html_url ?? '') &&
+                parseRepositoryRef(pr.base.repo.html_url)
+              )
+          ),
+      });
+    } catch (error) {
+      return this.handleError(error, target.data, 'Unable to find pull requests', 'refresh_failed');
+    }
+  }
+
   async createPullRequest(
     input: {
       repositoryUrl: string;
@@ -404,16 +465,14 @@ export class GitHubPullRequestClient implements PullRequestClient {
   ): Promise<Result<{ url: string; number: number }, PullRequestError>> {
     const repository = this.parseRepository(input.repositoryUrl);
     if (!repository.success) return repository;
-    if (input.headRepositoryUrl) {
-      const head = parseRepositoryRef(input.headRepositoryUrl);
-      if (head && head.host !== repository.data.host) {
-        return err({
-          type: 'cross_host_pr',
-          baseHost: repository.data.host,
-          headHost: head.host,
-        });
-      }
-    }
+    const source = parseRepositoryRef(input.headRepositoryUrl ?? input.repositoryUrl);
+    if (!source)
+      return err({
+        type: 'invalid_repository',
+        input: input.headRepositoryUrl ?? input.repositoryUrl,
+      });
+    if (source.host !== repository.data.host)
+      return err({ type: 'cross_host_pr', baseHost: repository.data.host, headHost: source.host });
     const github = await this.getOctokit(repository.data, signal);
     if (!github.success) return github;
     const { lane, octokit } = github.data;
@@ -426,7 +485,10 @@ export class GitHubPullRequestClient implements PullRequestClient {
           octokit.rest.pulls.create({
             owner: repository.data.owner,
             repo: repository.data.repo,
-            head: input.head,
+            head:
+              input.headRepositoryUrl && source.repositoryUrl !== repository.data.repositoryUrl
+                ? `${source.owner}:${input.head.slice(input.head.lastIndexOf(':') + 1)}`
+                : input.head,
             base: input.base,
             title: input.title,
             body: input.body,

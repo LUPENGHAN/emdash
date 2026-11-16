@@ -8,6 +8,8 @@ import type {
   PullRequestClient,
   PullRequestHostContext,
   PullRequestRepositoryClient,
+  PullRequestSource,
+  MatchingPullRequests,
 } from '@emdash/plugins/pull-requests/types';
 import { err, ok, type Result } from '@emdash/shared';
 import type { Scope } from '@emdash/shared/concurrency';
@@ -45,6 +47,21 @@ export class PullRequestEngine {
     const client = await this.clientFor(repositoryUrl, signal);
     if (!client.success) return client;
     return await client.data.openRepository(repositoryUrl, signal);
+  }
+
+  async findOpenPullRequests(
+    input: PullRequestSource,
+    signal: AbortSignal
+  ): Promise<Result<MatchingPullRequests, PullRequestError>> {
+    const client = await this.clientFor(input.repositoryUrl, signal);
+    if (!client.success) return client;
+    if (!client.data.findOpenPullRequests)
+      return err({
+        type: 'unsupported_provider',
+        host: parseRepositoryRef(input.repositoryUrl)?.host ?? 'unknown',
+        reason: 'This provider cannot check matching pull requests before creation.',
+      });
+    return client.data.findOpenPullRequests(input, signal);
   }
 
   async createPullRequest(

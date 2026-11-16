@@ -58,6 +58,9 @@ async function harness(maxSyncCount = 300) {
     ),
   };
   const engine = {
+    findOpenPullRequests: vi.fn<PullRequestEngine['findOpenPullRequests']>(async () =>
+      ok({ prs: [], complete: true })
+    ),
     openRepository: vi.fn<PullRequestEngine['openRepository']>(async () =>
       ok(context as PullRequestRepositoryClient)
     ),
@@ -89,6 +92,105 @@ async function harness(maxSyncCount = 300) {
 }
 
 describe('PullRequestService ownership', () => {
+  const creation = {
+    repositoryUrl,
+    headRepositoryUrl: 'https://github.com/personal/emdash',
+    head: 'personal:feature',
+    base: 'develop',
+    title: 'Feature',
+    draft: false,
+  };
+  it('returns the exact matching PR without creating another one', async () => {
+    const h = await harness();
+    const existing = { url: `${repositoryUrl}/pull/7`, number: 7 };
+    h.engine.findOpenPullRequests.mockResolvedValue(ok({ prs: [existing], complete: true }));
+    expect(await h.service.ensurePullRequest(creation, new AbortController().signal)).toEqual(
+      ok(existing)
+    );
+    expect(h.engine.findOpenPullRequests).toHaveBeenCalledWith(
+      {
+        repositoryUrl,
+        headRepositoryUrl: creation.headRepositoryUrl,
+        headRefName: 'feature',
+        base: 'develop',
+      },
+      expect.any(AbortSignal)
+    );
+    expect(h.engine.createPullRequest).not.toHaveBeenCalled();
+  });
+  it.each([true, false])(
+    'refuses ambiguous or incomplete matching inventory (%s)',
+    async (complete) => {
+      const h = await harness();
+      const candidates = [7, 8].map((number) => ({
+        url: `${repositoryUrl}/pull/${number}`,
+        number,
+      }));
+      h.engine.findOpenPullRequests.mockResolvedValue(ok({ prs: candidates, complete }));
+      expect(
+        await h.service.ensurePullRequest(creation, new AbortController().signal)
+      ).toMatchObject({
+        success: false,
+        error: { type: 'pull_request_match_ambiguous', candidates },
+      });
+      expect(h.engine.createPullRequest).not.toHaveBeenCalled();
+    }
+  );
+  it('does not create when the authoritative matching read fails', async () => {
+    const h = await harness();
+    h.engine.findOpenPullRequests.mockResolvedValue(
+      err({ type: 'refresh_failed', message: 'Offline' })
+    );
+    expect(await h.service.ensurePullRequest(creation, new AbortController().signal)).toMatchObject(
+      {
+        success: false,
+        error: { type: 'refresh_failed' },
+      }
+    );
+    expect(h.engine.createPullRequest).not.toHaveBeenCalled();
+  });
+  it('refuses an incomplete response even when its first page contains no matches', async () => {
+    const h = await harness();
+    h.engine.findOpenPullRequests.mockResolvedValue(ok({ prs: [], complete: false }));
+    expect(await h.service.ensurePullRequest(creation, new AbortController().signal)).toMatchObject(
+      {
+        success: false,
+        error: { type: 'pull_request_match_ambiguous', candidates: [] },
+      }
+    );
+    expect(h.engine.createPullRequest).not.toHaveBeenCalled();
+  });
+  it('rejects a management source before matching or creating on the hosting platform', async () => {
+    const h = await harness();
+    expect(
+      await h.service.ensurePullRequest(
+        {
+          ...creation,
+          head: 'personal:emdash/manage/documents',
+        },
+        new AbortController().signal
+      )
+    ).toMatchObject({
+      success: false,
+      error: { type: 'management_branch' },
+    });
+    expect(h.engine.findOpenPullRequests).not.toHaveBeenCalled();
+    expect(h.engine.createPullRequest).not.toHaveBeenCalled();
+  });
+  it('serializes matching reads and recovers a created PR after a lost creation response', async () => {
+    const h = await harness();
+    const created = { url: `${repositoryUrl}/pull/42`, number: 42 };
+    h.engine.createPullRequest.mockImplementationOnce(async () => {
+      h.engine.findOpenPullRequests.mockResolvedValue(ok({ prs: [created], complete: true }));
+      throw new Error('Response disconnected');
+    });
+    const first = h.service.ensurePullRequest(creation, new AbortController().signal);
+    const rejected = expect(first).rejects.toThrow('Response disconnected');
+    const second = h.service.ensurePullRequest(creation, new AbortController().signal);
+    await rejected;
+    expect(await second).toEqual(ok(created));
+    expect(h.engine.createPullRequest).toHaveBeenCalledOnce();
+  });
   it('stores GitLab details and comments under the merge request web URL', async () => {
     const h = await harness();
     const mrUrl = `${repositoryUrl}/-/merge_requests/42`;

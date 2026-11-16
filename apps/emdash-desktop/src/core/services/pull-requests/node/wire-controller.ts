@@ -49,6 +49,10 @@ export function createPullRequestsWireController(
       service.runOperation('create-pull-request', meta.signal, (signal) =>
         service.createPullRequest(input, signal)
       ),
+    ensurePullRequest: (input, meta) =>
+      service.runOperation('ensure-pull-request', meta.signal, (signal) =>
+        service.ensurePullRequest(input, signal)
+      ),
     mergePullRequest: (input, meta) =>
       service.runOperation('merge-pull-request', meta.signal, (signal) =>
         service.mergePullRequest(input.repositoryUrl, input.number, input.options, signal)
