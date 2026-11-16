@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { KeyedMutex } from '@emdash/shared/concurrency';
-import type { AgentCaller } from '@core/features/agent-control/api';
+import type { AgentCaller, AgentControlResult } from '@core/features/agent-control/api';
+import type { TaskDelegationStatus } from '@core/features/agent-control/api/delegations';
 import type { DelegationResources } from '@core/features/agent-control/api/node/delegation-resources';
 import type { CreateTaskParams, Task } from '@core/primitives/tasks/api';
 import {
@@ -26,6 +27,10 @@ import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordin
 import type { CoordinatorDocuments } from './coordinator-documents';
 
 type Dependencies = {
+  delegations?: {
+    status(taskId: string): Promise<TaskDelegationStatus | null>;
+    retry(caller: AgentCaller, taskId: string): Promise<AgentControlResult>;
+  };
   documents?: Pick<CoordinatorDocuments, 'describe' | 'create' | 'read'> &
     Partial<Pick<CoordinatorDocuments, 'commit' | 'pushTargets' | 'pushTarget' | 'preparePush'>>;
   store: {
@@ -61,6 +66,7 @@ type Dependencies = {
 const instruction = `You are this project's main agent. Coordinate existing Emdash tasks through MCP.
 Delegate implementation into task worktrees; keep code changes on their own branches.
 Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort. Use depends_on for tasks that must wait for approved prerequisite results. Attach only relevant management documents with document_refs; their versions and content are frozen for that task.
+If a saved task fails to start, inspect get_task_status and use retry_task with its task ID after fixing the failure. This also works after a receiver switch or explicit task takeover; do not create a replacement task to recover startup.
 Workers must call submit_task_result with commits, checks and unresolved issues. Inspect their changes and evidence before reviewing a result.
 When a result notification arrives, call acknowledge_task_results with its event IDs before taking follow-up actions.
 Agent startup, an idle process and a created PR do not prove task completion. Do not automatically merge branches or PRs.`;
@@ -164,6 +170,45 @@ export class CoordinatorService {
   }
   async getByTask(taskId: string): Promise<Coordinator | null> {
     return (await this.list()).find((record) => record.taskId === taskId) ?? null;
+  }
+  async notifyTaskChanged(taskId: string): Promise<void> {
+    const owner = (await this.list()).find((record) => record.tasks[taskId]);
+    if (owner)
+      this.deps.emit({
+        coordinatorId: owner.id,
+        projectId: owner.projectId,
+        taskId: owner.taskId,
+      });
+  }
+  async delegationStatus(id: string, taskId: string) {
+    const record = await this.get(id);
+    if (!record.tasks[taskId]) throw new Error('This main agent does not own the task.');
+    return (await this.deps.delegations?.status(taskId)) ?? null;
+  }
+  async retryTask(id: string, taskId: string): Promise<void> {
+    const record = await this.get(id);
+    const assignment = record.tasks[taskId];
+    if (!assignment) throw new Error('This main agent does not own the task.');
+    if (assignment.state === 'cancelled') throw new Error('The task was cancelled.');
+    if (!this.deps.delegations) throw new Error('Task delegation is unavailable.');
+    const conversation = await this.deps.getConversation(record.conversationId);
+    if (
+      conversation?.taskId !== record.taskId ||
+      conversation.projectId !== record.projectId ||
+      !conversation.selection.agent
+    )
+      throw new Error('The responsible main conversation is unavailable.');
+    await this.deps.delegations.retry(
+      {
+        taskId: record.taskId,
+        conversationId: record.conversationId,
+        projectId: record.projectId,
+        providerId: conversation.selection.agent,
+        title: record.name,
+        cwd: null,
+      },
+      taskId
+    );
   }
   async instructionsForTask(taskId: string): Promise<string | undefined> {
     const records = await this.list();

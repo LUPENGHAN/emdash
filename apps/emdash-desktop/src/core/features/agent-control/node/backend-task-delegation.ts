@@ -42,6 +42,7 @@ type Dependencies = {
   getBlocker?(taskId: string): Promise<string | null>;
   onCreated?(taskId: string): Promise<void>;
   recoveryContext?: TaskDelegationDependencies['recoveryContext'];
+  onStateChange?: TaskDelegationDependencies['onStateChange'];
   onPrepared?(
     caller: AgentCaller,
     params: CreateTaskParams,
@@ -98,6 +99,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
     getBlocker: deps.getBlocker,
     onCreated: deps.onCreated,
     recoveryContext: deps.recoveryContext,
+    onStateChange: deps.onStateChange,
     prepare: async (caller, request, ids): Promise<CreateTaskParams> => {
       const defaults =
         ids.role === 'coordination' ? undefined : await deps.getDelegationDefaults?.(caller);

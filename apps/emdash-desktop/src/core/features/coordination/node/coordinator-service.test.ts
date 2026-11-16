@@ -107,6 +107,41 @@ async function assigned(test: ReturnType<typeof setup>) {
 }
 
 describe('main agent coordination', () => {
+  it('lets the desktop retry an owned startup through the bound receiver and reports its state', async () => {
+    const test = setup();
+    const main = await assigned(test);
+    vi.mocked(test.deps.getConversation).mockResolvedValue({
+      taskId: main.taskId,
+      projectId: main.projectId,
+      selection: { agent: 'opencode' },
+    });
+    const status = vi.fn(async () => ({
+      taskId: 'worker-task',
+      phase: 'starting' as const,
+      error: 'Disconnected',
+      canRetry: true,
+    }));
+    const retry = vi.fn(async () => ({ text: 'started' }));
+    const service = new CoordinatorService({ ...test.deps, delegations: { status, retry } });
+    expect(await service.delegationStatus(main.id, 'worker-task')).toMatchObject({
+      canRetry: true,
+    });
+    await service.retryTask(main.id, 'worker-task');
+    expect(retry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: main.taskId,
+        conversationId: main.conversationId,
+        providerId: 'opencode',
+      }),
+      'worker-task'
+    );
+    await expect(service.retryTask(main.id, 'other-task')).rejects.toThrow('does not own');
+    await expect(service.delegationStatus(main.id, 'other-task')).rejects.toThrow('does not own');
+    vi.mocked(test.deps.getConversation).mockResolvedValue(null);
+    await expect(service.retryTask(main.id, 'worker-task')).rejects.toThrow('unavailable');
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
   it('creates one stable identity on project creation without starting an agent', async () => {
     const test = setup();
     const [first, second] = await Promise.all([

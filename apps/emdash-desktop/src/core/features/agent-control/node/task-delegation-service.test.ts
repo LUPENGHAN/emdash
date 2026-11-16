@@ -75,6 +75,87 @@ function setup() {
 }
 
 describe('durable task delegation', () => {
+  it('retries a failed startup by task ID under its current owner without re-preparing inputs', async () => {
+    const test = setup();
+    const changed = vi.fn();
+    test.deps.onStateChange = changed;
+    vi.mocked(test.deps.start).mockRejectedValueOnce(new Error('Agent installation unavailable'));
+    await expect(test.service.dispatch(caller, request)).rejects.toThrow(
+      'installation unavailable'
+    );
+    const saved = structuredClone([...test.records.values()][0]);
+    const taskId = saved.params.id;
+    expect(await test.service.status(taskId)).toMatchObject({
+      phase: 'starting',
+      error: 'Agent installation unavailable',
+      canRetry: true,
+    });
+    const receiver = {
+      ...caller,
+      conversationId: 'replacement-conversation',
+      taskId: 'replacement-main',
+      providerId: 'opencode',
+    };
+    test.deps.recoveryContext = async () => ({ caller: receiver, projectGrants: ['permitted'] });
+    const recovered = new TaskDelegationService(test.deps);
+    await expect(recovered.retry(caller, taskId)).rejects.toThrow('current responsible');
+    expect(test.deps.start).toHaveBeenCalledOnce();
+    const [first, repeated] = await Promise.all([
+      recovered.retry(receiver, taskId),
+      recovered.retry(receiver, taskId),
+    ]);
+    expect(repeated).toEqual(first);
+    expect(JSON.parse(first.text)).toMatchObject({
+      task_id: taskId,
+      conversation_id: saved.params.taskConfig.initialConversation?.id,
+      configuration: saved.params.taskConfig.initialConversation,
+      request_id: saved.request.requestId,
+      status: 'agent_started',
+    });
+    expect(test.deps.prepare).toHaveBeenCalledOnce();
+    expect(test.deps.create).toHaveBeenCalledOnce();
+    expect(test.deps.start).toHaveBeenCalledTimes(2);
+    expect(test.deps.authorize).toHaveBeenLastCalledWith(
+      receiver,
+      saved.params.projectId,
+      expect.objectContaining({ projectGrants: ['permitted'] })
+    );
+    const stored = [...test.records.values()][0];
+    expect(stored.params).toEqual(saved.params);
+    expect(stored.fingerprint).toBe(saved.fingerprint);
+    expect(stored.request).toEqual(saved.request);
+    expect(await recovered.status(taskId)).toEqual({
+      taskId,
+      phase: 'started',
+      conversationId: saved.params.taskConfig.initialConversation?.id,
+      path: '/worktree',
+      error: undefined,
+      waitReason: undefined,
+      canRetry: false,
+    });
+    expect(changed).toHaveBeenCalledWith(taskId);
+  });
+
+  it('keeps failed delegations explicit and refuses deleted, unavailable or ambiguous retry targets', async () => {
+    const test = setup();
+    vi.mocked(test.deps.activate).mockRejectedValueOnce(new Error('Host disconnected'));
+    await expect(test.service.dispatch(caller, request)).rejects.toThrow('Host disconnected');
+    const [key, saved] = [...test.records][0];
+    await test.service.resumePending(() => {});
+    expect(test.deps.activate).toHaveBeenCalledOnce();
+    await expect(test.service.retry(caller, 'missing')).rejects.toThrow('no saved delegation');
+    expect(await test.service.status('missing')).toBeNull();
+    test.tasks.set(saved.params.id, 'deleted');
+    await expect(test.service.retry(caller, saved.params.id)).rejects.toThrow('deleted');
+    test.records.set('duplicate', saved);
+    await expect(test.service.retry(caller, saved.params.id)).rejects.toThrow('multiple');
+    test.records.delete('duplicate');
+    test.records.set(key, { ...saved, version: '100' } as unknown as DelegationRecord);
+    await expect(test.service.retry(caller, saved.params.id)).rejects.toThrow('Cannot read');
+    expect(test.deps.create).toHaveBeenCalledOnce();
+    expect(test.deps.start).not.toHaveBeenCalled();
+  });
+
   it('creates, activates and starts without any renderer, deduplicating concurrent requests', async () => {
     const test = setup();
     const [first, second] = await Promise.all([

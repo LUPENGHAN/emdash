@@ -408,6 +408,16 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
   );
 
   server.registerTool(
+    'retry_task',
+    {
+      description:
+        'Retry startup of a saved delegated task by task ID after fixing its failure. Only its current responsible main conversation (or its original caller when unowned) can retry. Preserves the task, branch, conversation, model configuration and document snapshots; never creates a replacement task.',
+      inputSchema: { task_id: z.string().min(1) },
+    },
+    ({ task_id }) => dispatch({ kind: 'retry_task', taskId: task_id })
+  );
+
+  server.registerTool(
     'cancel_pending_task',
     {
       description:

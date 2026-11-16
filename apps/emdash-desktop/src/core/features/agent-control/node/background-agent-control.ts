@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { Conversation } from '@core/primitives/conversations/api';
 import type { Task } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
+import type { TaskDelegationStatus } from '../api/delegations';
 import type { BackgroundAgentAccess } from '../api/node/background-access';
 import type { PendingAgentMessage } from '../api/pending-messages';
 
@@ -50,6 +51,7 @@ type Dependencies = {
   assertProject(projectId: string): Promise<void>;
   tasks(projectId: string): Promise<AgentTaskSnapshot[]>;
   task(taskId: string): Promise<AgentTaskSnapshot | null>;
+  delegationStatus?(taskId: string): Promise<TaskDelegationStatus | null>;
   conversations(projectId: string): Promise<Conversation[]>;
   conversation(id: string): Promise<Conversation | null>;
   messages: {
@@ -182,7 +184,11 @@ export class BackgroundAgentControl {
       }
       case 'get_task_status': {
         const task = await this.taskFor(caller, action.taskId, 'read');
-        return json({ task, coordination: await this.deps.access.getTaskCoordination(task.id) });
+        return json({
+          task,
+          coordination: await this.deps.access.getTaskCoordination(task.id),
+          delegation: (await this.deps.delegationStatus?.(task.id)) ?? null,
+        });
       }
       case 'list_conversations': {
         const task = action.taskId ? await this.taskFor(caller, action.taskId, 'read') : undefined;

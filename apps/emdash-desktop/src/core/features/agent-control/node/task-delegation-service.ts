@@ -4,6 +4,7 @@ import { KeyedMutex } from '@emdash/shared/concurrency';
 import { z } from 'zod';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
+import type { TaskDelegationStatus } from '../api/delegations';
 import type { DelegationResources } from '../api/node/delegation-resources';
 
 export type CreateDelegatedTask = Extract<AgentControlAction, { kind: 'create_task' }>;
@@ -54,6 +55,7 @@ export type TaskDelegationDependencies = {
     params: CreateTaskParams,
     fallback: AgentCaller
   ): Promise<{ caller: AgentCaller; projectGrants?: string[] }>;
+  onStateChange?(taskId: string): void;
   onPrepared?(
     caller: AgentCaller,
     params: CreateTaskParams,
@@ -107,6 +109,62 @@ export class TaskDelegationService {
     if (parsed.status !== 'ok') throw new Error(`Cannot read delegation record: ${parsed.status}`);
     return delegationRecord.schema.parse(parsed.data);
   }
+  private async saveRecord(key: string, record: DelegationRecord) {
+    await this.deps.store.setOrThrow(key, record);
+    this.deps.onStateChange?.(record.params.id);
+  }
+  private async forTask(taskId: string) {
+    const matches = Object.entries(await this.deps.store.getAll()).filter(
+      ([, value]) => value?.params?.id === taskId
+    );
+    if (matches.length > 1)
+      throw new Error('The task has multiple delegation records. Resolve them before retrying.');
+    const match = matches[0];
+    return match ? { key: match[0], record: this.parseRecord(match[1]) } : null;
+  }
+  async status(taskId: string): Promise<TaskDelegationStatus | null> {
+    const saved = await this.forTask(taskId);
+    if (!saved) return null;
+    return {
+      taskId,
+      phase: saved.record.phase,
+      conversationId: saved.record.params.taskConfig.initialConversation?.id,
+      path: saved.record.path,
+      error: saved.record.error,
+      waitReason: saved.record.waitReason,
+      canRetry: !!saved.record.error && saved.record.phase !== 'started',
+    };
+  }
+  private async context(record: DelegationRecord) {
+    const context = await this.deps.recoveryContext?.(record.params, record.caller);
+    return {
+      caller: context?.caller ?? record.caller,
+      request:
+        context?.projectGrants !== undefined
+          ? { ...record.request, projectGrants: context.projectGrants }
+          : record.request,
+    };
+  }
+  async retry(caller: AgentCaller, taskId: string): Promise<AgentControlResult> {
+    const saved = await this.forTask(taskId);
+    if (!saved) throw new Error('The task has no saved delegation to retry.');
+    return this.requests.runExclusive(saved.key, async () => {
+      const latest = await this.deps.store.getOrThrow(saved.key);
+      if (!latest) throw new Error('The task delegation no longer exists.');
+      const record = this.parseRecord(latest);
+      if (record.params.id !== taskId) throw new Error('The task delegation changed.');
+      const current = await this.context(record);
+      if (
+        caller.conversationId !== current.caller.conversationId ||
+        caller.taskId !== current.caller.taskId ||
+        caller.projectId !== current.caller.projectId ||
+        caller.providerId !== current.caller.providerId
+      )
+        throw new Error('Only the current responsible conversation can retry this task.');
+      await this.deps.authorize(caller, record.params.projectId, current.request);
+      return this.execute(saved.key, record, caller, current.request);
+    });
+  }
   async dispatch(caller: AgentCaller, request: CreateDelegatedTask): Promise<AgentControlResult> {
     const projectId = request.projectId ?? caller.projectId;
     await this.deps.authorize(caller, projectId, request);
@@ -136,7 +194,7 @@ export class TaskDelegationService {
           params,
           phase: 'prepared',
         };
-        await this.deps.store.setOrThrow(key, record);
+        await this.saveRecord(key, record);
       }
       return this.execute(key, record, caller, record.request);
     });
@@ -151,7 +209,7 @@ export class TaskDelegationService {
     const projectId = record.params.projectId;
     const persist = async (patch: Partial<DelegationRecord>) => {
       record = { ...record, error: undefined, waitReason: undefined, ...patch };
-      await this.deps.store.setOrThrow(key, record);
+      await this.saveRecord(key, record);
     };
     const reply = (blocked = false) => ({
       text: JSON.stringify({
@@ -204,7 +262,7 @@ export class TaskDelegationService {
       }
       return reply();
     } catch (error) {
-      await this.deps.store.setOrThrow(key, {
+      await this.saveRecord(key, {
         ...record,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -220,12 +278,7 @@ export class TaskDelegationService {
           if (!latest) return;
           const record = this.parseRecord(latest);
           if (record.phase === 'started' || record.error) return;
-          const context = await this.deps.recoveryContext?.(record.params, record.caller);
-          const caller = context?.caller ?? record.caller;
-          const request =
-            context?.projectGrants !== undefined
-              ? { ...record.request, projectGrants: context.projectGrants }
-              : record.request;
+          const { caller, request } = await this.context(record);
           await this.deps.authorize(caller, record.params.projectId, request);
           await this.execute(key, record, caller, request);
         });

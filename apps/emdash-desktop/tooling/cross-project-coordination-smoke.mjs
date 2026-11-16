@@ -83,6 +83,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 if (process.argv.includes('--version')) { console.log('1.4.0'); process.exit(0); }
 if (!process.argv.includes('acp')) { console.log('{}'); process.exit(0); }
+const failStartup = path.join(${JSON.stringify(capture)}, 'fail-next-acp-start');
+if (fs.existsSync(failStartup)) { fs.unlinkSync(failStartup); process.exit(41); }
 const readline = require('node:readline');
 const capture = ${JSON.stringify(capture)};
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
@@ -1082,6 +1084,55 @@ try {
     !(await readdir(capture)).includes(terminalMain.id + '-input.txt'),
     'Result notification injected input into the main terminal'
   );
+  await writeFile(join(capture, 'fail-next-acp-start'), 'Inject one ACP startup failure.\n');
+  const failedStartup = await replacementClient.callTool({
+    name: 'create_task',
+    arguments: {
+      name: 'Recover failed startup',
+      request_id: 'recover-failed-startup',
+      project_id: coordinator.projectId,
+      agent: 'opencode',
+      connection: 'official',
+      effort: null,
+      ui: 'chat',
+      prompt: 'Continue the saved task after recovery.',
+      document_refs: [{ path: 'plan.md' }],
+    },
+  });
+  assert.equal(failedStartup.isError, true, 'The injected startup failure was not reported');
+  const tasksAfterFailure = JSON.parse(
+    await call(replacementClient, 'list_tasks', { project_id: coordinator.projectId })
+  );
+  const failedTask = tasksAfterFailure.find((task) => task.name === 'Recover failed startup');
+  assert.ok(failedTask, 'The failed task was lost');
+  const failedStatus = JSON.parse(
+    await call(replacementClient, 'get_task_status', { task_id: failedTask.id })
+  );
+  assert.equal(failedStatus.delegation.phase, 'starting');
+  assert.equal(failedStatus.delegation.canRetry, true);
+  assert.ok(failedStatus.delegation.error);
+  const failedHead = (
+    await promisify(execFile)('git', ['rev-parse', 'HEAD'], { cwd: failedStatus.delegation.path })
+  ).stdout.trim();
+  await writeFile(
+    join(main.cwd, 'plan.md'),
+    documentText + '\nChanged while waiting.\nAfter startup failure.\n'
+  );
+  const failedTransfer = JSON.parse(
+    await call(independentClient, 'take_over_task', {
+      task_id: failedTask.id,
+      expected_owner: owner.id,
+    })
+  );
+  assert.deepEqual(
+    failedTransfer.assignment.documents,
+    failedStatus.coordination.assignment.documents
+  );
+  const staleRetry = await replacementClient.callTool({
+    name: 'retry_task',
+    arguments: { task_id: failedTask.id },
+  });
+  assert.equal(staleRetry.isError, true, 'The former owner retried a transferred task');
   const snapshotsBeforeRestart = await page.evaluate(() => window.allCoordinatorSnapshots());
   await page.close();
   const backgroundList = JSON.parse(
@@ -1120,7 +1171,7 @@ try {
   await page.getByRole('button', { name: /^(Settings|设置)$/ }).waitFor();
   await page.addScriptTag({
     type: 'module',
-    content: `import { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator });`,
+    content: `import { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator, coordinatorDelegationStatus } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator, coordinatorDelegationStatus });`,
   });
   await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
   const restored = await page.evaluate(() => window.allCoordinatorSnapshots());
@@ -1234,6 +1285,48 @@ try {
 
   assert.equal(await git('rev-parse', 'HEAD'), baseline);
 
+  await page
+    .getByTestId('cross-project-main-agents')
+    .getByRole('button', { name: 'Independent integration', exact: true })
+    .click();
+  await page
+    .locator(`[data-testid="coordinator-panel"][data-task-id="${independent.taskId}"]`)
+    .waitFor();
+  await page.getByTestId('coordinator-tasks-tab').click();
+  const startupCard = page.locator(
+    `[data-testid="task-startup-status"][data-task-id="${failedTask.id}"]`
+  );
+  await startupCard.getByText(/Task startup failed/).waitFor();
+  await startupCard.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(profile, 'failed-startup-after-takeover-restart.png') });
+  await startupCard.getByTestId('retry-task-startup').click();
+  await startupCard.waitFor({ state: 'hidden' });
+  const recoveredSession = await waitForCapture(failedStatus.delegation.conversationId);
+  await waitForPrompt('Continue the saved task after recovery.', recoveredSession.sessionId);
+  const recoveredStatus = await page.evaluate(
+    ({ id, taskId }) => window.coordinatorDelegationStatus(id, taskId),
+    { id: independent.id, taskId: failedTask.id }
+  );
+  assert.equal(recoveredStatus.phase, 'started');
+  assert.equal(recoveredStatus.canRetry, false);
+  assert.equal(recoveredStatus.conversationId, failedStatus.delegation.conversationId);
+  assert.equal(recoveredStatus.path, failedStatus.delegation.path);
+  assert.equal(
+    (
+      await promisify(execFile)('git', ['rev-parse', 'HEAD'], { cwd: recoveredStatus.path })
+    ).stdout.trim(),
+    failedHead
+  );
+  const recoveredOwner = await page.evaluate(
+    async (id) => (await window.allCoordinatorSnapshots()).find((record) => record.taskId === id),
+    independent.taskId
+  );
+  assert.deepEqual(
+    recoveredOwner.tasks[failedTask.id].documents,
+    failedStatus.coordination.assignment.documents
+  );
+  await page.screenshot({ path: join(profile, 'task-startup-retried-after-restart.png') });
+
   for (const directory of [true, false]) {
     const root = join(profile, directory ? 'directory-project' : 'empty-repository');
     await mkdir(root);
@@ -1321,6 +1414,8 @@ try {
           'document remote saved before restart without starting a model or publishing refs and restored afterward',
           'explicit document push published only its pinned management branch to a local personal-fork fixture',
           'fork code baseline and local annotated tags stayed outside the management push',
+          'failed startup survived ownership transfer and full restart; former owner denied and current owner retried through the UI',
+          'task startup retry preserved task, conversation, branch commit and frozen document inputs',
           'directory main opened and exchanged an ACP turn without initializing Git or allowing code delegation',
           'empty repository main created management documents without inventing a code baseline',
           'task worktree contained no copied management documents',

@@ -1,5 +1,6 @@
 import { defineContract, eventStream, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
+import { delegationStatusSchema } from '@core/features/agent-control/api/delegations';
 import {
   documentCommitSchema,
   documentPushOptionsSchema,
@@ -20,6 +21,14 @@ import {
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  delegationStatus: procedure({
+    input: z.object({ id: z.string(), taskId: z.string() }),
+    output: delegationStatusSchema.nullable(),
+  }),
+  retryTask: procedure({
+    input: z.object({ id: z.string(), taskId: z.string() }),
+    output: z.void(),
+  }),
   documentPushOptions: procedure({
     input: z.object({ id: z.string() }),
     output: documentPushOptionsSchema,

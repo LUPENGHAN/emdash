@@ -162,6 +162,10 @@ export async function allCoordinatorSnapshots() {
   return (await getCoordinationClient()).list();
 }
 
+export async function coordinatorDelegationStatus(id: string, taskId: string) {
+  return (await getCoordinationClient()).delegationStatus({ id, taskId });
+}
+
 export async function createTerminalMain(input: { projectId: string; taskId: string }) {
   const manager = getConversationsForTask(input.taskId);
   if (!manager) throw new Error('Main agent conversations are unavailable.');

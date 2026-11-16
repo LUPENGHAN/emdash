@@ -862,6 +862,11 @@ export async function bootServices(
         );
         return { text: action.accepted ? 'Task result accepted.' : 'Changes requested.' };
       }
+      if (action.kind === 'retry_task') {
+        await assertActiveAgentCaller(caller);
+        if (!taskDelegation.service) throw new Error('Task delegation is still starting.');
+        return taskDelegation.service.retry(caller, action.taskId);
+      }
       if (action.kind !== 'create_task') return undefined;
       if (!taskDelegation.service)
         throw new Error('Task delegation is still starting. Retry after startup.');
@@ -1248,6 +1253,13 @@ export async function bootServices(
         throw new Error('The responsible main conversation is unavailable.');
       return { ...context, caller: actual };
     },
+    onStateChange: (taskId) => {
+      void coordinationRuntime.service
+        ?.notifyTaskChanged(taskId)
+        .catch((error) =>
+          log.warn('Could not notify task startup state', { taskId, error: String(error) })
+        );
+    },
     getDelegationDefaults: async (caller) => {
       const defaults = await coordinationRuntime.service?.defaultsForCaller(caller);
       return defaults
@@ -1305,6 +1317,16 @@ export async function bootServices(
     delegationDrainStopped = true;
   });
   const coordinatorService = new CoordinatorService({
+    delegations: {
+      status: async (taskId) => {
+        if (!taskDelegation.service) throw new Error('Task delegation is still starting.');
+        return taskDelegation.service.status(taskId);
+      },
+      retry: async (caller, taskId) => {
+        if (!taskDelegation.service) throw new Error('Task delegation is still starting.');
+        return taskDelegation.service.retry(caller, taskId);
+      },
+    },
     documents: new CoordinatorDocuments(async (record) => {
       const [task] = await db
         .select()
@@ -1438,6 +1460,10 @@ export async function bootServices(
       };
     });
   coordinationRuntime.background = new BackgroundAgentControl({
+    delegationStatus: async (taskId) => {
+      if (!taskDelegation.service) throw new Error('Task delegation is still starting.');
+      return taskDelegation.service.status(taskId);
+    },
     emitMessagesChanged: (taskId) => agentMessageEvents.emit(undefined, { taskId }),
     reportError: (error, id) =>
       log.warn('Could not read stored agent message', { id, error: String(error) }),

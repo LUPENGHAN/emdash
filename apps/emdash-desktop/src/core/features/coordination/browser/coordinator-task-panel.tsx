@@ -22,6 +22,7 @@ import { coordinatorViewMemento } from '../contributions/mementos';
 import { CoordinatorDocumentsPanel } from './coordinator-documents-panel';
 import { CreateCrossProjectMainAgent } from './cross-project-main-agents';
 import { TakeOverTaskForm } from './take-over-task-form';
+import { TaskStartupStatus } from './task-startup-status';
 
 export const CoordinatorTaskPanel = observer(function CoordinatorTaskPanel({
   children,
@@ -72,9 +73,11 @@ const CoordinatorContent = observer(function CoordinatorContent({
         const next = await client.events.subscribe(undefined, {
           onEvent: () => {
             void queryClient.invalidateQueries({ queryKey: ['coordinator', taskId] });
+            void queryClient.invalidateQueries({ queryKey: ['coordinator-delegation-status'] });
           },
           onGap: () => {
             void queryClient.invalidateQueries({ queryKey: ['coordinator', taskId] });
+            void queryClient.invalidateQueries({ queryKey: ['coordinator-delegation-status'] });
           },
         });
         if (disposed) next();
@@ -187,6 +190,11 @@ const CoordinatorContent = observer(function CoordinatorContent({
                     </Button>
                   )}
                   {task.blockedReason && <p className="mt-2 text-sm">{task.blockedReason}</p>}
+                  <TaskStartupStatus
+                    coordinatorId={record.id}
+                    taskId={task.taskId}
+                    cancelled={task.state === 'cancelled'}
+                  />
                   {!!task.dependsOn?.length && (
                     <p className="mt-2 text-xs text-foreground-muted">
                       Prerequisites: {task.dependsOn.join(', ')}

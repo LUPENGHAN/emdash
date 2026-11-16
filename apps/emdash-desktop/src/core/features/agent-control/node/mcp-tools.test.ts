@@ -59,6 +59,15 @@ function registeredTools() {
   };
 }
 
+it('retries a saved task by stable ID without taking replacement startup parameters', async () => {
+  const registered = registeredTools();
+  const tool = registered.tool('retry_task');
+  if (!tool) throw new Error('Missing retry tool');
+  await tool.handler({ task_id: 'task' });
+  expect(registered.dispatch).toHaveBeenCalledWith({ kind: 'retry_task', taskId: 'task' });
+  expect(Object.keys(tool.config.inputSchema ?? {})).toEqual(['task_id']);
+});
+
 it('carries explicit supplier, model and effort through task and conversation tools', async () => {
   const registered = registeredTools();
   const task = registered.tool('create_task')!;
