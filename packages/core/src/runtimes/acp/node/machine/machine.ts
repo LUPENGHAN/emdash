@@ -229,7 +229,7 @@ export function evolve(
 
     case 'PromptQueued':
       return {
-        state: { ...s, queuedPrompts: [...s.queuedPrompts, ev.prompt] },
+        state: { ...s, queuedPrompts: prioritizeUserPrompts([...s.queuedPrompts, ev.prompt]) },
         effects: [{ type: 'state' }],
       };
 
@@ -255,7 +255,7 @@ export function evolve(
 
     case 'QueueReordered': {
       const byId = new Map(s.queuedPrompts.map((prompt) => [prompt.id, prompt]));
-      const reordered = ev.ids.map((id) => byId.get(id)!).filter(Boolean);
+      const reordered = prioritizeUserPrompts(ev.ids.map((id) => byId.get(id)!).filter(Boolean));
       const { queuedPrompts, effects: queueEffects } =
         s.phase.kind === 'ready' && !s.agentTurnActive && s.backgroundAgentCount === 0
           ? dequeuePromptEffects(reordered)
@@ -391,11 +391,18 @@ function makeTurn(s: SessionMachineState): ControlTurn {
   return { id: makeTurnId(s.conversationId, s.nextTurnIndex) };
 }
 
+function prioritizeUserPrompts(prompts: readonly QueuedPrompt[]): QueuedPrompt[] {
+  return [
+    ...prompts.filter((prompt) => prompt.origin !== 'background'),
+    ...prompts.filter((prompt) => prompt.origin === 'background'),
+  ];
+}
+
 function dequeuePromptEffects(queuedPrompts: readonly QueuedPrompt[]): {
   queuedPrompts: readonly QueuedPrompt[];
   effects: Effect[];
 } {
-  const [next, ...rest] = queuedPrompts;
+  const [next, ...rest] = prioritizeUserPrompts(queuedPrompts);
   return next
     ? { queuedPrompts: rest, effects: [{ type: 'sendPrompt', prompt: next }] }
     : { queuedPrompts, effects: [] };

@@ -4,6 +4,8 @@ export type { PromptAttachment } from './attachments';
 
 export const promptInputSchema = z.object({
   text: z.string(),
+  /** Background updates yield to queued user input at turn boundaries. */
+  origin: z.enum(['user', 'background']).optional(),
   hiddenContext: z.string().optional(),
   attachments: z.array(promptAttachmentSchema).optional(),
 });

@@ -202,7 +202,9 @@ describe('main agent coordination', () => {
     test.deps.deliver.mockResolvedValue(undefined);
     await new CoordinatorService(test.deps).deliverPending(record.id);
     expect(test.deps.deliver).toHaveBeenCalledTimes(2);
-    expect(test.deps.deliver.mock.calls[0][2]).toContain('"summary":"Implemented"');
+    expect(test.deps.deliver.mock.calls[0][2]).toContain('submitted a result');
+    expect(test.deps.deliver.mock.calls[0][2]).not.toContain('request_id');
+    expect(test.deps.deliver.mock.calls[0][3]).toContain('"summary":"Implemented"');
     expect(test.deps.deliver.mock.calls[1][2]).toContain('Second revision');
   });
 

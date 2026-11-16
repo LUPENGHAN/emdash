@@ -36,3 +36,5 @@
 - Result submission requests review. Only the designated main conversation can acknowledge result events or review a result through MCP; main conversation changes preserve coordinator identity and task history.
 
 - Delegated tasks may carry `depends_on`: plans remain visible without worktrees or processes until prerequisite results are accepted. Admission freezes approved result versions and commit references. Waiting plans can be cancelled through the main-agent UI or `cancel_pending_task`; cancellation never stops a running session.
+
+- ACP background prompts carry `origin: background`; queued user input takes priority at turn boundaries without interrupting the active turn. Main-agent result notices show a readable summary and keep event IDs, instructions and structured payloads in hidden context.

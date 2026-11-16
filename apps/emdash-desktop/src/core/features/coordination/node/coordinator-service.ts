@@ -38,7 +38,12 @@ type Dependencies = {
   ): Promise<Pick<Task, 'id' | 'projectId' | 'name' | 'type' | 'archivedAt'> | null>;
   assertProjectAvailable(projectId: string): Promise<void>;
   setTaskStatus(taskId: string, status: 'review' | 'done' | 'in_progress'): Promise<void>;
-  deliver(coordinator: Coordinator, eventId: string, text: string): Promise<void>;
+  deliver(
+    coordinator: Coordinator,
+    eventId: string,
+    text: string,
+    hiddenContext?: string
+  ): Promise<void>;
   emit(event: CoordinationEvent): void;
   onSchedulingChange?(): void;
   reportError?(error: unknown, id: string): void;
@@ -859,6 +864,7 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
           await this.deps.deliver(
             record,
             event.id,
+            `Task "${record.tasks[event.taskId]?.name ?? event.taskId}" submitted a result (version ${event.version}): ${result.summary}`,
             `${instruction}\nResult event ${event.id}, task ${event.taskId}, version ${event.version}:\n${JSON.stringify(result)}`
           );
           await this.locks.runExclusive(id, async () => {

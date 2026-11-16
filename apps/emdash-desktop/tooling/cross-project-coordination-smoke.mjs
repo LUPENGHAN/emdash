@@ -83,6 +83,14 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     result = { sessionId, configOptions: [] };
   } else if (request.method === 'session/prompt') {
     fs.appendFileSync(path.join(capture, 'main-prompts.jsonl'), JSON.stringify(request.params) + '\n');
+    if (JSON.stringify(request.params.prompt).includes('Hold coordination turn for queue acceptance')) {
+      const watcher = fs.watch(capture, (_event, name) => {
+        if (name !== 'release-held-turn') return;
+        watcher.close();
+        process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { stopReason: 'end_turn' } }) + '\n');
+      });
+      return;
+    }
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: request.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Simulated main agent response.' } } } }) + '\n');
     result = { stopReason: 'end_turn' };
   }
@@ -316,7 +324,42 @@ try {
       prUrls: [],
     },
   };
+  const composer = page.locator(`[data-acp-conversation-id="${coordinator.conversationId}"]`);
+  await composer
+    .locator('[contenteditable="true"]')
+    .fill('Hold coordination turn for queue acceptance');
+  await composer.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
+  await waitForPrompt('Hold coordination turn for queue acceptance', main.sessionId);
   const receipt = JSON.parse(await call(workerClient, 'submit_task_result', submission));
+  await composer
+    .locator('[contenteditable="true"]')
+    .fill('User follow-up before background result');
+  await composer.getByRole('button', { name: /^(Queue message|排队发送)$/ }).click();
+  await composer.getByText('User follow-up before background result', { exact: true }).waitFor();
+  assert.ok(
+    !(await readFile(join(capture, 'main-prompts.jsonl'), 'utf8')).includes(receipt.eventId),
+    'Background result interrupted the active user turn'
+  );
+  await writeFile(join(capture, 'release-held-turn'), 'release');
+  await waitForPrompt(receipt.eventId, main.sessionId);
+  const queueOrder = (await readFile(join(capture, 'main-prompts.jsonl'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const userIndex = queueOrder.findIndex(
+    (prompt) =>
+      prompt.sessionId === main.sessionId &&
+      JSON.stringify(prompt.prompt).includes('User follow-up before background result')
+  );
+  const resultIndex = queueOrder.findIndex(
+    (prompt) =>
+      prompt.sessionId === main.sessionId && JSON.stringify(prompt.prompt).includes(receipt.eventId)
+  );
+  assert.ok(
+    userIndex >= 0 && userIndex < resultIndex,
+    'User follow-up did not take priority over the background result'
+  );
+
   const repeated = JSON.parse(await call(workerClient, 'submit_task_result', submission));
   assert.deepEqual(repeated, receipt);
   await page.getByTestId('coordinator-tasks-tab').click();
@@ -852,6 +895,8 @@ try {
           'opening a fresh main agent does not start its process',
           'idempotent delegation and result submission',
           'result delivered through ACP and explicitly acknowledged',
+          'active user turn uninterrupted and queued UI follow-up executed before background result',
+          'human-readable result notice kept internal coordination instructions in hidden context',
           'changes requested and versioned result accepted',
           'one main agent dispatched into two independent repositories',
           'cross-project task used the target develop baseline',

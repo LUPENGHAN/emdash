@@ -313,3 +313,54 @@ describe('SessionMachine wrapper', () => {
     expect(machine.sessionState().activeTurnId).toBe('conv-test:turn:0');
   });
 });
+
+describe('user input before background updates', () => {
+  it('keeps the active turn and orders user messages before background results with FIFO within each origin', () => {
+    let state = makeWorking();
+    for (const [id, origin] of [
+      ['result-a', 'background'],
+      ['user-a', 'user'],
+      ['result-b', 'background'],
+      ['user-b', 'user'],
+    ] as const)
+      state = evolve(state, { type: 'PromptQueued', prompt: { ...prompt, id, origin } }).state;
+    expect(state.phase.kind).toBe('working');
+    expect(state.queuedPrompts.map((prompt) => prompt.id)).toEqual([
+      'user-a',
+      'user-b',
+      'result-a',
+      'result-b',
+    ]);
+    const ended = evolve(state, {
+      type: 'TurnEnded',
+      outcome: { kind: 'stopped', stopReason: 'end_turn' },
+    });
+    expect(ended.effects).toContainEqual({
+      type: 'sendPrompt',
+      prompt: expect.objectContaining({ id: 'user-a' }),
+    });
+    expect(ended.state.queuedPrompts.map((prompt) => prompt.id)).toEqual([
+      'user-b',
+      'result-a',
+      'result-b',
+    ]);
+  });
+  it('keeps user priority when queued messages are manually reordered', () => {
+    let state = makeWorking();
+    for (const [id, origin] of [
+      ['user-a', 'user'],
+      ['result-a', 'background'],
+      ['user-b', 'user'],
+    ] as const)
+      state = evolve(state, { type: 'PromptQueued', prompt: { ...prompt, id, origin } }).state;
+    const reordered = evolve(state, {
+      type: 'QueueReordered',
+      ids: ['result-a', 'user-b', 'user-a'],
+    });
+    expect(reordered.state.queuedPrompts.map((prompt) => prompt.id)).toEqual([
+      'user-b',
+      'user-a',
+      'result-a',
+    ]);
+  });
+});

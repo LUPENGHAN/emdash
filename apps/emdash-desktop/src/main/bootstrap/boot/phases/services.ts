@@ -1304,7 +1304,7 @@ export async function bootServices(
     emit: (event) => coordinationEvents.emit(undefined, event),
     reportError: (error, id) =>
       log.warn('Could not restore main agent state', { id, error: String(error) }),
-    deliver: async (record, eventId, text) => {
+    deliver: async (record, eventId, text, hiddenContext) => {
       if (!record.params)
         throw new Error('Open the main agent and configure its session before automatic delivery.');
       await taskDelegation.service?.resources.activate(record.taskId, record.projectId);
@@ -1329,7 +1329,7 @@ export async function bootServices(
           conversationId: record.conversationId,
           promptId: eventId,
           placement: 'queue',
-          prompt: { text },
+          prompt: { text, origin: 'background', hiddenContext },
         },
         { timeoutMs: 0 }
       );
@@ -1468,7 +1468,11 @@ export async function bootServices(
           conversationId: conversation.id,
           promptId,
           placement: 'queue',
-          prompt: { text, ...(ready.context && { hiddenContext: ready.context }) },
+          prompt: {
+            text,
+            origin: 'background',
+            ...(ready.context && { hiddenContext: ready.context }),
+          },
         },
         { timeoutMs: 0 }
       );
