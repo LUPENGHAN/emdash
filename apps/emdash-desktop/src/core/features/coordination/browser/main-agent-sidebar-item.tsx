@@ -20,6 +20,8 @@ export function MainAgentSidebarItem({
       type="button"
       disabled={busy}
       aria-label="Open main agent"
+      data-testid="project-main-agent"
+      data-project-id={projectId}
       className={`flex h-8 w-full items-center gap-2 rounded-lg text-sm hover:bg-background-tertiary-1 ${nested ? 'pl-10' : 'pl-7'}`}
       onClick={() => {
         setBusy(true);

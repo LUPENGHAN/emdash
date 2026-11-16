@@ -299,6 +299,19 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
           .optional()
           .describe('Stable request ID; reuse exactly when retrying the same task'),
         name: z.string().min(1).max(80).describe('Task name, e.g. "fix-login-timeout"'),
+        document_refs: z
+          .array(
+            z.object({
+              coordinator_id: z.string().min(1).optional(),
+              path: documentPathSchema,
+              revision: documentRevisionSchema.optional(),
+            })
+          )
+          .max(16)
+          .optional()
+          .describe(
+            'Freeze selected management documents as task context; omit coordinator_id for your responsible main agent. Uncommitted disk versions must still match at dispatch.'
+          ),
         base_branch: z
           .string()
           .optional()
@@ -333,6 +346,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       project_id,
       project_grants,
       depends_on,
+      document_refs,
       request_id,
       base_branch,
       prompt,
@@ -349,6 +363,13 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         ...(project_id && { projectId: project_id }),
         ...(project_grants && { projectGrants: project_grants }),
         ...(depends_on && { dependsOn: depends_on }),
+        ...(document_refs && {
+          documentRefs: document_refs.map(({ coordinator_id, path, revision }) => ({
+            coordinatorId: coordinator_id,
+            path,
+            revision,
+          })),
+        }),
         ...(request_id && { requestId: request_id }),
         ...(base_branch && { baseBranch: base_branch }),
         ...(prompt && { prompt, ...(agent && { providerId: agent }) }),
@@ -364,7 +385,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'read_management_document',
     {
       description:
-        'Read an authorized main agent management document as text with its version. Paths are relative to its management workspace. Omit coordinator_id for your responsible main agent. A disk version is valid only while the saved content is unchanged; use a full commit ID for historical content.',
+        'Read an authorized main agent management document as text with its version. Paths are relative to its management workspace. Omit coordinator_id for your responsible main agent. Workers can read only explicitly attached snapshots or documents permitted by their project grants. Attached snapshots remain readable after edits. Other disk versions are valid only while the saved content is unchanged; use a full commit ID for historical content.',
       inputSchema: {
         coordinator_id: z.string().min(1).optional(),
         path: documentPathSchema,

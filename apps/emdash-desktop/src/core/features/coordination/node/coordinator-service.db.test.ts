@@ -239,3 +239,74 @@ it('retains waiting plans, approved prerequisite snapshots and cancellation in S
   ]);
   expect(await make().dependencyGate('cancelled')).toContain('cancelled');
 });
+
+it('restores frozen task document content from SQLite without accessing the source host', async () => {
+  const store = new AppDbKeyValueStore<Record<string, Coordinator>>(fixture.db, 'coordinators');
+  const read = vi.fn(async (record: Coordinator, path: string) => ({
+    coordinatorId: record.id,
+    path,
+    revision: 'disk:selected',
+    content: 'Saved context',
+    workspaceId: 'documents',
+  }));
+  const make = (withDocuments: boolean) =>
+    new CoordinatorService({
+      store,
+      ...(withDocuments && { documents: { read, describe: vi.fn(), create: vi.fn() } }),
+      getTask: async () => null,
+      getConversation: async () => null,
+      resources: () => {
+        throw new Error('No runtime should be allocated');
+      },
+      defaultAgent: async () => 'claude',
+      resolveSelection: async () => ({
+        values: { agent: 'claude' },
+        sources: {},
+        effortOptions: {},
+        errors: [],
+      }),
+      assertProjectAvailable: async () => {},
+      setTaskStatus: async () => {},
+      emit: () => {},
+      deliver: async () => {},
+    });
+  const service = make(true);
+  const main = await service.ensureProject('project');
+  const caller: AgentCaller = {
+    taskId: main.taskId,
+    conversationId: main.conversationId,
+    projectId: 'project',
+    providerId: 'claude',
+    title: 'Main',
+    cwd: null,
+  };
+  await service.registerDelegation(
+    caller,
+    {
+      id: 'worker',
+      projectId: 'project',
+      taskConfig: { version: '1', name: 'Worker' },
+      workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+    },
+    [],
+    [],
+    [{ path: 'plan.md' }]
+  );
+  const restored = make(false);
+  const snapshot = (await restored.getTaskCoordination('worker'))?.assignment?.documents?.[0];
+  expect(snapshot).toMatchObject({
+    coordinatorId: main.id,
+    path: 'plan.md',
+    revision: 'disk:selected',
+    content: 'Saved context',
+  });
+  expect(await restored.instructionsForTask('worker')).toContain('Saved context');
+  await expect(
+    restored.readDocument(main.id, 'plan.md', 'disk:selected', {
+      ...caller,
+      taskId: 'worker',
+      conversationId: 'worker-conversation',
+    })
+  ).resolves.toEqual(snapshot);
+  expect(read).toHaveBeenCalledOnce();
+});

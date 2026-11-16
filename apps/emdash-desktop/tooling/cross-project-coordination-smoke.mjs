@@ -50,6 +50,9 @@ const session = sessionFlag >= 0 ? args[sessionFlag + 1] : require('node:crypto'
 fs.writeFileSync(path.join(${JSON.stringify(capture)}, session + '.json'), JSON.stringify({
   session, effort: process.env.CLAUDE_CODE_EFFORT_LEVEL,
   cliEffort: args[args.indexOf('--effort') + 1],
+  hasDocumentText: args.some((arg) => arg.includes('Frozen management documents:') && arg.includes('Saved through the main agent document editor.')),
+  hasLaterDocumentEdit: args.some((arg) => arg.includes('A later edit.')),
+  hasWaitingDocumentEdit: args.some((arg) => arg.includes('Changed while waiting.')),
   mcpUrl: mcp ? JSON.parse(mcp.slice('--mcp-config='.length)).mcpServers?.emdash?.url : undefined,
 }));
 process.stdin.on('data', (data) => fs.appendFileSync(path.join(${JSON.stringify(capture)}, session + '-input.txt'), data));
@@ -201,6 +204,36 @@ const waitForPrompt = (text, sessionId) =>
     void check();
   });
 
+async function quitApplication(application) {
+  const child = application.process();
+  const exited =
+    child.exitCode === null && child.signalCode === null ? once(child, 'exit') : Promise.resolve();
+  await application.evaluate(({ app }) => app.quit()).catch(() => {});
+  const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
+  await exited;
+  clearTimeout(timer);
+  return { exitCode: child.exitCode, signal: child.signalCode };
+}
+async function waitForDocumentSave(path, expected) {
+  await new Promise((done, reject) => {
+    const watcher = watch(dirname(path), () => {
+      void check();
+    });
+    const timer = setTimeout(() => {
+      watcher.close();
+      reject(new Error('The editor did not save the expected document text.'));
+    }, 15000);
+    const check = async () => {
+      const content = await readFile(path, 'utf8').catch(() => '');
+      if (content.includes(expected)) {
+        clearTimeout(timer);
+        watcher.close();
+        done();
+      }
+    };
+    void check();
+  });
+}
 try {
   app = await _electron.launch({
     executablePath: electronPath,
@@ -305,12 +338,6 @@ try {
   assert.equal(documentRead.content, documentText);
   assert.ok(documentRead.revision.startsWith('disk:'));
   assert.equal(await readFile(join(main.cwd, 'plan.md'), 'utf8'), documentText);
-  await writeFile(join(main.cwd, 'plan.md'), documentText + 'A later edit.\n');
-  const staleDocument = await client.callTool({
-    name: 'read_management_document',
-    arguments: { path: 'plan.md', revision: documentRead.revision },
-  });
-  assert.equal(staleDocument.isError, true);
   const forbiddenDocument = await client.callTool({
     name: 'read_management_document',
     arguments: { path: '../README.md' },
@@ -323,13 +350,23 @@ try {
     effort: 'high',
     connection: 'official',
     request_id: 'coordinated-request',
+    document_refs: [{ path: 'plan.md', revision: documentRead.revision }],
   };
   const created = JSON.parse(await call(client, 'create_task', args));
   const duplicate = JSON.parse(await call(client, 'create_task', args));
   assert.equal(created.task_id, duplicate.task_id);
+  await writeFile(join(main.cwd, 'plan.md'), documentText + 'A later edit.\n');
+  const staleDocument = await client.callTool({
+    name: 'read_management_document',
+    arguments: { path: 'plan.md', revision: documentRead.revision },
+  });
+  assert.equal(staleDocument.isError, true);
+  assert.equal(JSON.parse(await call(client, 'create_task', args)).task_id, created.task_id);
   const spawned = await waitForCapture(created.conversation_id);
   assert.equal(spawned.effort, 'high');
   assert.equal(spawned.cliEffort, 'high');
+  assert.equal(spawned.hasDocumentText, true);
+  assert.equal(spawned.hasLaterDocumentEdit, false);
   const head = (
     await promisify(execFile)('git', ['rev-parse', 'HEAD'], { cwd: created.path })
   ).stdout.trim();
@@ -356,9 +393,16 @@ try {
   assert.ok(spawned.mcpUrl);
   workerClient = new Client({ name: 'isolated-worker-agent', version: '1' });
   await workerClient.connect(new StreamableHTTPClientTransport(new URL(spawned.mcpUrl)));
+  const savedDocument = JSON.parse(
+    await call(workerClient, 'read_management_document', {
+      path: 'plan.md',
+      revision: documentRead.revision,
+    })
+  );
+  assert.equal(savedDocument.content, documentText);
   const unauthorizedDocument = await workerClient.callTool({
     name: 'read_management_document',
-    arguments: { path: 'plan.md' },
+    arguments: { path: 'unselected.md' },
   });
   assert.equal(unauthorizedDocument.isError, true);
   await assert.rejects(readFile(join(created.path, 'plan.md'), 'utf8'), { code: 'ENOENT' });
@@ -768,6 +812,7 @@ try {
     name: 'Consume approved SDK result',
     request_id: 'dependent-work',
     depends_on: [grantedTask.task_id],
+    document_refs: [{ coordinator_id: documentRead.coordinatorId, path: 'plan.md' }],
     agent: 'claude',
     ui: 'terminal',
     prompt: 'Consume only the approved prerequisite version',
@@ -778,6 +823,7 @@ try {
   assert.equal(dependentPlan.status, 'blocked');
   assert.equal(dependentPlan.path, undefined);
   assert.ok(dependentPlan.waiting_for.includes('Waiting for review'));
+  await writeFile(join(main.cwd, 'plan.md'), documentText + 'Changed while waiting.\n');
   assert.ok(!(await readdir(capture)).includes(dependentPlan.conversation_id + '.json'));
   const plannedStatus = JSON.parse(
     await call(independentClient, 'get_task_status', { task_id: dependentPlan.task_id })
@@ -831,6 +877,10 @@ try {
     await call(independentClient, 'get_task_status', { task_id: dependentPlan.task_id })
   );
   assert.equal(beforeDependencyReview.coordination.assignment.state, 'blocked');
+  assert.equal(
+    beforeDependencyReview.coordination.assignment.documents[0].content,
+    documentText + 'A later edit.\n'
+  );
   assert.ok(!(await readdir(capture)).includes(dependentPlan.conversation_id + '.json'));
   await call(independentClient, 'review_task_result', {
     task_id: grantedTask.task_id,
@@ -839,6 +889,9 @@ try {
     note: 'Inspected independent main task result',
   });
   const dependentCapture = await waitForCapture(dependentPlan.conversation_id);
+  assert.equal(dependentCapture.hasDocumentText, true);
+  assert.equal(dependentCapture.hasLaterDocumentEdit, true);
+  assert.equal(dependentCapture.hasWaitingDocumentEdit, false);
   assert.equal(dependentCapture.effort, 'high');
   assert.equal(dependentCapture.cliEffort, 'high');
   assert.ok(!(await readdir(capture)).includes(cancelledPlan.conversation_id + '.json'));
@@ -1001,6 +1054,7 @@ try {
     !(await readdir(capture)).includes(terminalMain.id + '-input.txt'),
     'Result notification injected input into the main terminal'
   );
+  const snapshotsBeforeRestart = await page.evaluate(() => window.allCoordinatorSnapshots());
   await page.close();
   const backgroundList = JSON.parse(
     await call(replacementClient, 'list_tasks', { project_id: relatedProjectId })
@@ -1015,6 +1069,69 @@ try {
   );
   assert.equal(backgroundMessage.status, 'accepted');
   await waitForPrompt('Follow-up with no renderer', crossCapture.sessionId);
+  await Promise.allSettled([
+    client.close(),
+    workerClient.close(),
+    replacementClient.close(),
+    crossWorkerClient.close(),
+    independentClient.close(),
+    grantedWorkerClient.close(),
+  ]);
+  const stopped = await quitApplication(app);
+  assert.equal(stopped.exitCode, 0, 'The application did not quit cleanly before restart');
+  app = undefined;
+  app = await _electron.launch({
+    executablePath: electronPath,
+    args: [appRoot],
+    env,
+    timeout: 30000,
+  });
+  page = await app.firstWindow();
+  page.setDefaultTimeout(20000);
+  await page.waitForLoadState('domcontentloaded');
+  await page.getByRole('button', { name: /^(Settings|设置)$/ }).waitFor();
+  await page.addScriptTag({
+    type: 'module',
+    content: `import { allCoordinatorSnapshots } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots });`,
+  });
+  await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
+  const restored = await page.evaluate(() => window.allCoordinatorSnapshots());
+  assert.deepEqual(
+    restored.map((record) => record.id).sort(),
+    snapshotsBeforeRestart.map((record) => record.id).sort()
+  );
+  for (const saved of snapshotsBeforeRestart) {
+    const record = restored.find((entry) => entry.id === saved.id);
+    assert.equal(record.taskId, saved.taskId);
+    assert.equal(record.conversationId, saved.conversationId);
+    assert.deepEqual(Object.keys(record.tasks).sort(), Object.keys(saved.tasks).sort());
+    for (const [id, task] of Object.entries(saved.tasks)) {
+      assert.equal(record.tasks[id].state, task.state);
+      assert.deepEqual(record.tasks[id].documents, task.documents);
+    }
+  }
+  const expandSource = page.getByRole('button', { name: /^(Expand|展开) Delegation acceptance$/ });
+  if (await expandSource.isVisible()) await expandSource.click();
+  await page
+    .locator(`[data-testid="project-main-agent"][data-project-id="${coordinator.projectId}"]`)
+    .click();
+  await page.getByTestId('coordinator-documents-tab').click();
+  const restoredDocuments = page.getByTestId('coordinator-documents-panel');
+  await restoredDocuments.getByText('plan.md', { exact: true }).last().dblclick();
+  await restoredDocuments.getByRole('button', { name: /^(Raw|原始)$/ }).click();
+  await page.waitForFunction(() =>
+    Array.from(document.querySelectorAll('.monaco-editor .view-lines')).some((element) =>
+      element.textContent.replace(/\u00a0/g, ' ').includes('Changed while waiting.')
+    )
+  );
+  await restoredDocuments.locator('.monaco-editor .view-lines').first().click();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+End' : 'Control+End');
+  await page.keyboard.insertText('\nAfter full restart.\n');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s');
+  await waitForDocumentSave(join(main.cwd, 'plan.md'), 'After full restart.');
+  await page.screenshot({ path: join(profile, 'management-document-restarted.png') });
+  assert.equal(await git('rev-parse', 'HEAD'), baseline);
+
   await writeFile(
     join(profile, 'result.json'),
     JSON.stringify(
@@ -1025,7 +1142,11 @@ try {
           'main agent ran in an independent management history without code files or baseline changes',
           'management document created, edited and saved in the existing Monaco editor without starting an agent',
           'main MCP read returned saved document text and rejected stale or invalid paths',
-          'worker without document grants could not read main documents and its branch contained none',
+          'worker received selected frozen document in its CLI context and MCP while unselected documents stayed denied',
+          'document context stayed frozen through a source edit, dependency waiting and duplicate delegation',
+          'complete Electron exit and restart preserved main bindings, task states and frozen document snapshots',
+          'management document reopened and edited through Monaco after the full restart',
+          'task worktree contained no copied management documents',
           'real ACP protocol with a simulated OpenCode executable',
           'authenticated main and worker MCP identities',
           'real worktree and worker CLI startup with high effort',
@@ -1082,16 +1203,6 @@ try {
   await replacementClient?.close().catch(() => {});
   await workerClient?.close().catch(() => {});
   await client?.close().catch(() => {});
-  if (app) {
-    const child = app.process();
-    const exited =
-      child.exitCode === null && child.signalCode === null
-        ? once(child, 'exit')
-        : Promise.resolve();
-    await app.evaluate(({ app }) => app.quit()).catch(() => {});
-    const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
-    await exited;
-    clearTimeout(timer);
-  }
+  if (app) await quitApplication(app);
   await renderer.close();
 }

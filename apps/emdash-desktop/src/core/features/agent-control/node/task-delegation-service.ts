@@ -79,6 +79,17 @@ function requestFingerprint(request: CreateDelegatedTask, projectId: string): st
         ...(request.dependsOn?.length
           ? [{ dependsOn: [...new Set(request.dependsOn)].sort() }]
           : []),
+        ...(request.documentRefs?.length
+          ? [
+              {
+                documentRefs: request.documentRefs.map((ref) => [
+                  ref.coordinatorId,
+                  ref.path,
+                  ref.revision,
+                ]),
+              },
+            ]
+          : []),
       ])
     )
     .digest('hex');

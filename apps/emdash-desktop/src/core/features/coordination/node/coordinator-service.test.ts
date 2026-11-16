@@ -433,11 +433,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('5');
+    expect((await test.service.ensureProject('project')).version).toBe('6');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('5');
+    expect(test.records.get(record.id)?.version).toBe('6');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -878,7 +878,7 @@ it('preserves a legacy main checkout until its separate document migration runs'
   vi.mocked(test.resources.prepare).mockClear();
   vi.mocked(test.resources.create).mockClear();
   const reopened = await new CoordinatorService(test.deps).open(first.id);
-  expect(reopened.version).toBe('5');
+  expect(reopened.version).toBe('6');
   expect(reopened.params?.workspaceConfig.git).toEqual(saved.params.workspaceConfig.git);
   expect(reopened.taskId).toBe(first.taskId);
   expect(reopened.conversationId).toBe(first.conversationId);
@@ -949,4 +949,171 @@ describe('management document authorization', () => {
     expect(deps.resources().activate).not.toHaveBeenCalled();
     expect(deps.resources().start).not.toHaveBeenCalled();
   });
+});
+
+describe('frozen task documents', () => {
+  const plan = (id: string) => ({
+    id,
+    projectId: 'project',
+    taskConfig: { version: '1' as const, name: id },
+    workspaceConfig: {
+      version: '2' as const,
+      git: { kind: 'none' as const },
+      workspace: { kind: 'new-worktree' as const },
+    },
+  });
+  it('freezes selected content once, restores it and transfers it with task ownership', async () => {
+    const { records, deps } = setup();
+    let content = 'selected plan';
+    const read = vi.fn(async (record: Coordinator, path: string) => ({
+      coordinatorId: record.id,
+      path,
+      revision: 'disk:selected',
+      content,
+      workspaceId: 'docs',
+    }));
+    const make = () =>
+      new CoordinatorService({ ...deps, documents: { read, create: vi.fn(), describe: vi.fn() } });
+    const service = make();
+    const main = await service.ensureProject('project');
+    await service.registerDelegation(caller(main), plan('worker'), [], [], [{ path: 'plan.md' }]);
+    content = 'changed plan';
+    await make().registerDelegation(caller(main), plan('worker'), [], [], [{ path: 'plan.md' }]);
+    expect(read).toHaveBeenCalledOnce();
+    expect(await make().instructionsForTask('worker')).toContain('selected plan');
+    expect(await make().instructionsForTask('worker')).not.toContain('changed plan');
+    const worker = caller(main, 'worker');
+    await expect(
+      make().readDocument(main.id, 'plan.md', 'disk:selected', worker)
+    ).resolves.toMatchObject({ content: 'selected plan' });
+    await expect(make().readDocument(main.id, 'plan.md', undefined, worker)).resolves.toMatchObject(
+      { content: 'selected plan' }
+    );
+    await expect(make().readDocument(main.id, 'other.md', undefined, worker)).rejects.toThrow(
+      'permission'
+    );
+    await expect(make().readDocument(main.id, 'plan.md', 'disk:changed', worker)).rejects.toThrow(
+      'permission'
+    );
+    const target = await service.ensureProject('target');
+    await service.takeOverTask(target.id, 'worker', main.id);
+    records.delete(main.id);
+    await expect(
+      make().readDocument(main.id, 'plan.md', 'disk:selected', worker)
+    ).resolves.toMatchObject({ content: 'selected plan' });
+    expect(read).toHaveBeenCalledOnce();
+  });
+  it('does not save a partial assignment if one selected document cannot be read', async () => {
+    const { deps } = setup();
+    const read = vi.fn(async (record: Coordinator, path: string) => {
+      if (path === 'missing.md') throw new Error('Document missing');
+      return {
+        coordinatorId: record.id,
+        path,
+        revision: 'disk:1',
+        content: 'plan',
+        workspaceId: 'docs',
+      };
+    });
+    const service = new CoordinatorService({
+      ...deps,
+      documents: { read, create: vi.fn(), describe: vi.fn() },
+    });
+    const main = await service.ensureProject('project');
+    await expect(
+      service.registerDelegation(
+        caller(main),
+        plan('worker'),
+        [],
+        [],
+        [{ path: 'plan.md' }, { path: 'missing.md' }]
+      )
+    ).rejects.toThrow('Document missing');
+    expect((await service.getByTask(main.taskId))?.tasks.worker).toBeUndefined();
+    expect(deps.resources().create).not.toHaveBeenCalled();
+  });
+  it('limits selected context and refuses document references without a responsible main', async () => {
+    const { deps } = setup();
+    const read = vi.fn(async (record: Coordinator, path: string) => ({
+      coordinatorId: record.id,
+      path,
+      revision: 'disk:1',
+      content: 'x'.repeat(500 * 1024),
+      workspaceId: 'docs',
+    }));
+    const service = new CoordinatorService({
+      ...deps,
+      documents: { read, create: vi.fn(), describe: vi.fn() },
+    });
+    const main = await service.ensureProject('project');
+    await expect(
+      service.registerDelegation(
+        caller(main),
+        plan('worker'),
+        [],
+        [],
+        Array.from({ length: 5 }, (_, index) => ({ path: `${index}.md` }))
+      )
+    ).rejects.toThrow('2 MiB');
+    expect((await service.getByTask(main.taskId))?.tasks.worker).toBeUndefined();
+    await expect(
+      service.registerDelegation(
+        { ...caller(main), taskId: 'ordinary' },
+        plan('worker'),
+        [],
+        [],
+        [{ path: 'plan.md' }]
+      )
+    ).rejects.toThrow('responsible main');
+  });
+});
+
+it('stores a selected document version once when implicit and explicit references resolve to it', async () => {
+  const { deps } = setup();
+  const read = vi.fn(async (record: Coordinator, path: string) => ({
+    coordinatorId: record.id,
+    path,
+    revision: 'disk:1',
+    content: 'Selected',
+    workspaceId: 'documents',
+  }));
+  const service = new CoordinatorService({
+    ...deps,
+    documents: { read, describe: vi.fn(), create: vi.fn() },
+  });
+  const main = await service.ensureProject('project');
+  await service.registerDelegation(
+    caller(main),
+    {
+      id: 'worker',
+      projectId: 'project',
+      taskConfig: { version: '1', name: 'Worker' },
+      workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+    },
+    [],
+    [],
+    [{ path: 'plan.md' }, { path: 'plan.md', revision: 'disk:1' }]
+  );
+  expect((await service.getTaskCoordination('worker'))?.assignment?.documents).toHaveLength(1);
+  await expect(
+    service.readDocument(main.id, 'plan.md', 'disk:1', caller(main, 'worker'))
+  ).resolves.toMatchObject({ content: 'Selected' });
+});
+
+it('reads document location and creates a file without reactivating an initialized main workspace', async () => {
+  const { deps, resources } = setup();
+  const describe = vi.fn();
+  const create = vi.fn();
+  const service = new CoordinatorService({
+    ...deps,
+    documents: { describe, create, read: vi.fn() },
+  });
+  const main = await service.openProject('project');
+  vi.mocked(resources.activate).mockClear();
+  await service.documentWorkspace(main.id);
+  await service.createDocument(main.id, 'plan.md');
+  expect(describe).toHaveBeenCalledWith(main);
+  expect(create).toHaveBeenCalledWith(main, 'plan.md');
+  expect(resources.activate).not.toHaveBeenCalled();
+  expect(resources.start).not.toHaveBeenCalled();
 });

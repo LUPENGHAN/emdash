@@ -4,6 +4,11 @@ import type { AgentCaller } from '@core/features/agent-control/api';
 import type { DelegationResources } from '@core/features/agent-control/api/node/delegation-resources';
 import type { CreateTaskParams, Task } from '@core/primitives/tasks/api';
 import {
+  documentReferencesSchema,
+  type ManagementDocumentReference,
+  type ManagementDocument,
+} from '../api/documents';
+import {
   taskResultSchema,
   agentSelectionSchema,
   coordinatorRecord,
@@ -53,7 +58,7 @@ type Dependencies = {
 
 const instruction = `You are this project's main agent. Coordinate existing Emdash tasks through MCP.
 Delegate implementation into task worktrees; keep code changes on their own branches.
-Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort. Use depends_on for tasks that must wait for approved prerequisite results.
+Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort. Use depends_on for tasks that must wait for approved prerequisite results. Attach only relevant management documents with document_refs; their versions and content are frozen for that task.
 Workers must call submit_task_result with commits, checks and unresolved issues. Inspect their changes and evidence before reviewing a result.
 When a result notification arrives, call acknowledge_task_results with its event IDs before taking follow-up actions.
 Agent startup, an idle process and a created PR do not prove task completion. Do not automatically merge branches or PRs.`;
@@ -81,7 +86,7 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '5',
+        version: '6',
         id,
         kind: 'project',
         name: 'Main agent',
@@ -137,7 +142,7 @@ export class CoordinatorService {
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '5',
+        version: '6',
         id,
         name,
         kind: 'cross-project',
@@ -167,7 +172,8 @@ export class CoordinatorService {
 Keep code on this task's branch. Before finishing, call submit_task_result with this task ID,
 a stable request_id, a summary, commit references, checks actually run and unresolved issues.
 Do not mark the task complete yourself. The responsible main agent reviews your result.
-Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ?? [])}. These references do not install changes into this repository; consume the specified commits or versions explicitly.`;
+Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ?? [])}. These references do not install changes into this repository; consume the specified commits or versions explicitly.
+Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use these saved versions as task context. They grant access only to these snapshots, not to the rest of the source management workspace. Read a snapshot through read_management_document with its coordinatorId, path and revision.`;
     return undefined;
   }
   private parseRecord(value: unknown): Coordinator {
@@ -251,15 +257,33 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
     if (!this.deps.documents) throw new Error('Management documents are unavailable.');
     return this.deps.documents;
   }
+  private async documentRecord(id: string) {
+    const saved = await this.get(id);
+    await this.deps.assertProjectAvailable(saved.projectId);
+    return saved.params ? saved : this.open(id);
+  }
   async documentWorkspace(id: string) {
-    const documents = this.documentService();
-    return documents.describe(await this.open(id));
+    return this.documentService().describe(await this.documentRecord(id));
   }
   async createDocument(id: string, path: string) {
-    const documents = this.documentService();
-    return documents.create(await this.open(id), path);
+    return this.documentService().create(await this.documentRecord(id), path);
   }
   async readDocument(id: string, path: string, revision?: string, caller?: AgentCaller) {
+    if (caller) {
+      const records = await this.accessRecords(caller);
+      const principal = coordinatorPrincipal(caller, records);
+      if (principal.kind === 'worker') {
+        const snapshots = (principal.assignment.documents ?? []).filter(
+          (doc) =>
+            doc.coordinatorId === id &&
+            doc.path === path &&
+            (!revision || doc.revision === revision)
+        );
+        if (snapshots.length > 1)
+          throw new Error('Choose the explicit version of this task document.');
+        if (snapshots.length === 1) return snapshots[0];
+      }
+    }
     const documents = this.documentService();
     const record = await this.get(id);
     if (
@@ -408,8 +432,10 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
     caller: AgentCaller,
     params: CreateTaskParams,
     grantedProjectIds: string[] = [],
-    dependsOn: string[] = []
+    dependsOn: string[] = [],
+    documentRefs: ManagementDocumentReference[] = []
   ): Promise<void> {
+    const refs = documentReferencesSchema.parse(documentRefs);
     await this.assertDelegationGrants(caller, grantedProjectIds);
     await this.ownership.runExclusive('ownership', async () => {
       const records = await this.accessRecords(caller, params.id);
@@ -417,8 +443,8 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
         (entry) => entry.taskId === caller.taskId || entry.tasks[caller.taskId]
       );
       if (!record) {
-        if (dependsOn.length)
-          throw new Error('Task dependencies require a responsible main agent.');
+        if (dependsOn.length || refs.length)
+          throw new Error('Task dependencies and documents require a responsible main agent.');
         return;
       }
       const owner = records.find((entry) => entry.tasks[params.id]);
@@ -442,12 +468,36 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
         )
           throw new Error('Worker project grants exceed the caller permissions.');
         await this.validateDependencies(caller, params.id, dependsOn, records);
+        const documents: ManagementDocument[] = [];
+        const seen = new Set<string>();
+        const savedVersions = new Set<string>();
+        for (const ref of refs) {
+          const source = ref.coordinatorId ?? latest.id;
+          const key = JSON.stringify([source, ref.path, ref.revision]);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const document = await this.readDocument(source, ref.path, ref.revision, caller);
+          const version = JSON.stringify([
+            document.coordinatorId,
+            document.path,
+            document.revision,
+          ]);
+          if (savedVersions.has(version)) continue;
+          savedVersions.add(version);
+          documents.push(document);
+        }
+        if (
+          documents.reduce((bytes, doc) => bytes + Buffer.byteLength(doc.content, 'utf8'), 0) >
+          2 * 1024 * 1024
+        )
+          throw new Error('Choose management documents totaling no more than 2 MiB for this task.');
         latest.tasks[params.id] = {
           taskId: params.id,
           projectId: params.projectId,
           name: params.taskConfig.name,
           state: dependsOn.length ? 'blocked' : 'assigned',
           dependsOn: [...new Set(dependsOn)],
+          ...(documents.length && { documents }),
           taskCreated: false,
           createdAt: Date.now(),
           ...(dependsOn.length && { blockedReason: 'Waiting for dependency review.' }),

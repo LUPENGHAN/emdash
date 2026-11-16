@@ -43,3 +43,11 @@ export const managementDocumentSchema = z.object({
   workspaceId: z.string(),
 });
 export type ManagementDocument = z.infer<typeof managementDocumentSchema>;
+
+export const documentReferenceSchema = z.object({
+  coordinatorId: z.string().min(1).optional(),
+  path: documentPathSchema,
+  revision: documentRevisionSchema.optional(),
+});
+export type ManagementDocumentReference = z.infer<typeof documentReferenceSchema>;
+export const documentReferencesSchema = z.array(documentReferenceSchema).max(16);

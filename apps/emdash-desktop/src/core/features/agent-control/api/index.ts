@@ -1,5 +1,6 @@
 import { defineContract, eventStream, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
+import type { ManagementDocumentReference } from '@core/features/coordination/api/documents';
 import type { TaskResult } from '@core/features/coordination/api/types';
 import { pendingAgentMessageSchema } from './pending-messages';
 
@@ -101,6 +102,7 @@ export type AgentControlAction =
       requestId?: string;
       projectGrants?: string[];
       dependsOn?: string[];
+      documentRefs?: ManagementDocumentReference[];
       /** The explicit code base branch; absent resolves the target project baseline. */
       baseBranch?: string;
       /** An agent to start in the new task with this first message. */

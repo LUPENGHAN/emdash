@@ -770,3 +770,16 @@ it('validates management document paths and passes versioned reads to the backgr
     revision: 'disk:etag',
   });
 });
+
+it('carries selected management document references and their versions through delegation', async () => {
+  const { tool, dispatch } = registeredTools();
+  await tool('create_task')!.handler({
+    name: 'With context',
+    document_refs: [{ coordinator_id: 'source', path: 'plan.md', revision: 'disk:1' }],
+  });
+  expect(dispatch).toHaveBeenLastCalledWith({
+    kind: 'create_task',
+    name: 'With context',
+    documentRefs: [{ coordinatorId: 'source', path: 'plan.md', revision: 'disk:1' }],
+  });
+});

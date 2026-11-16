@@ -1,6 +1,7 @@
 import { defineVersionedSchema } from '@emdash/core/primitives/versioned-schema/api';
 import { z } from 'zod';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
+import { managementDocumentSchema, type ManagementDocument } from './documents';
 
 export const agentSelectionSchema = z.object({
   agent: z.string().optional(),
@@ -42,6 +43,7 @@ export type AssignedTask = {
   review?: { note: string; accepted: boolean; at: number };
   grantedProjectIds?: string[];
   ownershipHistory?: { from: string | null; to: string; at: number }[];
+  documents?: ManagementDocument[];
   dependsOn?: string[];
   blockedReason?: string;
   taskCreated?: boolean;
@@ -57,7 +59,7 @@ export type ResultEvent = {
   error?: string;
 };
 export type Coordinator = {
-  version: '5';
+  version: '6';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -172,5 +174,18 @@ export const coordinatorRecord = defineVersionedSchema()
     '5',
     coordinatorV1.extend({ version: z.literal('5'), tasks: coordinatorV4.shape.tasks }),
     (record) => ({ ...record, version: '5' as const })
+  )
+  .version(
+    '6',
+    coordinatorV1.extend({
+      version: z.literal('6'),
+      tasks: z.record(
+        z.string(),
+        coordinatorV4.shape.tasks.valueType.extend({
+          documents: z.array(managementDocumentSchema).max(16).optional(),
+        })
+      ),
+    }),
+    (record) => ({ ...record, version: '6' as const })
   )
   .build();

@@ -50,6 +50,18 @@ const CoordinatorContent = observer(function CoordinatorContent({
     queryFn: async () => (await getCoordinationClient()).getByTask({ taskId }),
   });
   const { navigate } = useNavigate();
+  const primaryId = record?.conversationId;
+  const primaryType = primaryId
+    ? getConversationsForTask(taskId)?.conversations.get(primaryId)?.data.type
+    : undefined;
+  useEffect(() => {
+    if (tab !== 'conversation' || !primaryId || !primaryType) return;
+    composition.paneLayout.open(
+      primaryType === 'acp' ? 'acp-chat' : 'conversation',
+      { conversationId: primaryId },
+      { preview: false }
+    );
+  }, [composition, primaryId, primaryType, tab]);
   useEffect(() => {
     let disposed = false;
     let unsubscribe: (() => void) | undefined;
@@ -80,19 +92,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
         <Button
           data-testid="coordinator-conversation-tab"
           variant={tab === 'conversation' ? 'secondary' : 'ghost'}
-          onClick={() => {
-            if (record) {
-              const conversation = getConversationsForTask(taskId)?.conversations.get(
-                record.conversationId
-              );
-              composition.paneLayout.open(
-                conversation?.data.type === 'acp' ? 'acp-chat' : 'conversation',
-                { conversationId: record.conversationId },
-                { preview: false }
-              );
-            }
-            setTab('conversation');
-          }}
+          onClick={() => setTab('conversation')}
         >
           Conversation
         </Button>
@@ -185,6 +185,24 @@ const CoordinatorContent = observer(function CoordinatorContent({
                     <p className="mt-2 text-xs text-foreground-muted">
                       Prerequisites: {task.dependsOn.join(', ')}
                     </p>
+                  )}
+                  {!!task.documents?.length && (
+                    <details className="mt-2 text-sm" data-testid="assigned-task-documents">
+                      <summary>Saved task documents ({task.documents.length})</summary>
+                      {task.documents.map((doc, index) => (
+                        <details key={index} className="mt-2">
+                          <summary>
+                            {doc.path} · {doc.revision}
+                          </summary>
+                          <p className="text-xs text-foreground-muted">
+                            Source: {doc.coordinatorId}
+                          </p>
+                          <pre className="max-h-64 overflow-auto p-2 whitespace-pre-wrap">
+                            {doc.content}
+                          </pre>
+                        </details>
+                      ))}
+                    </details>
                   )}
                   {task.result && (
                     <div className="mt-2 space-y-2 text-sm">

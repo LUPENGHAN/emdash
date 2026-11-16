@@ -323,3 +323,25 @@ describe('waiting delegation recovery', () => {
     expect(test.deps.start).toHaveBeenCalledOnce();
   });
 });
+
+it('includes document references and versions in retry identity while preserving an empty reference list', async () => {
+  const { service, deps } = setup();
+  await service.dispatch(caller, request);
+  await expect(service.dispatch(caller, { ...request, documentRefs: [] })).resolves.toBeDefined();
+  await expect(
+    service.dispatch(caller, { ...request, documentRefs: [{ path: 'plan.md' }] })
+  ).rejects.toThrow('different task parameters');
+  const selected = {
+    ...request,
+    requestId: 'with-documents',
+    documentRefs: [{ coordinatorId: 'source', path: 'plan.md', revision: 'disk:1' }],
+  };
+  await service.dispatch(caller, selected);
+  await expect(
+    service.dispatch(caller, {
+      ...selected,
+      documentRefs: [{ ...selected.documentRefs[0], revision: 'disk:2' }],
+    })
+  ).rejects.toThrow('different task parameters');
+  expect(deps.create).toHaveBeenCalledTimes(2);
+});

@@ -1223,7 +1223,8 @@ export async function bootServices(
         caller,
         params,
         request.projectGrants,
-        request.dependsOn
+        request.dependsOn,
+        request.documentRefs
       );
     },
     getBlocker: async (taskId) => {
