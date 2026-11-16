@@ -4,6 +4,7 @@ import { getAgentsClient } from '@core/features/agents/api/browser/client';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
 import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
 import { getCoordinationClient } from '@core/features/coordination/api/browser/client';
+import { getIntegrationsClient } from '@core/features/integrations/api/browser/client';
 import { getProjectsWireClient } from '@core/features/projects/api/browser/client';
 import {
   asAvailableProject,
@@ -14,6 +15,7 @@ import {
   getTaskStore,
 } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { getSidebarStore } from '@core/features/workbench/contributions/browser/app-stores';
+import { openModal } from '@core/manifests/browser/modal-api';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
 
 /** Test renderer entry: normal typed clients and stores, with isolated paths supplied by the harness. */
@@ -233,6 +235,45 @@ export async function archiveFixtureProject(projectId: string) {
 
 export async function deleteFixtureProject(projectId: string) {
   await (await getProjectsWireClient()).deleteProject({ projectId });
+}
+
+export async function configurePrFixture(input: { projectId: string; apiBaseUrl: string }) {
+  const connected = await (
+    await getIntegrationsClient()
+  ).connect({
+    integrationId: 'gitlab',
+    credentials: { apiToken: 'fixture-only-token', instanceUrl: input.apiBaseUrl },
+    displayName: 'Isolated forge fixture',
+  });
+  if (!connected.success) throw new Error(connected.error);
+  const saved = await (
+    await getProjectsWireClient()
+  ).updateProjectSettings({
+    projectId: input.projectId,
+    patch: {
+      gitIdentity: {
+        stored: {
+          baseRemote: 'upstream',
+          pushRemote: 'personal',
+          defaultBranch: { remote: 'upstream', branch: 'main' },
+        },
+      },
+      integrationAccounts: {
+        stored: { gitlab: { kind: 'account', accountId: connected.accountId } },
+      },
+    },
+  });
+  if (!saved.success) throw new Error(JSON.stringify(saved.error));
+}
+
+export function openPrFixtureDialog(input: {
+  projectId: string;
+  taskId: string;
+  workspaceId: string;
+  repositoryUrl: string;
+  branchName: string;
+}) {
+  void openModal('createPrModal', { ...input, draft: false });
 }
 
 export async function createTerminalMain(input: { projectId: string; taskId: string }) {
