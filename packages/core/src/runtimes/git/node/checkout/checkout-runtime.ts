@@ -88,6 +88,10 @@ export class GitCheckoutRuntime {
     return host;
   }
 
+  readHead(input: CheckoutSelector) {
+    return this.read(input, (checkout) => checkout.readHead());
+  }
+
   getChangedFiles(input: CheckoutSelector & { target: NormalizedDiffTarget }) {
     return this.read(input, async (checkout) => ({
       files: await checkout.getChangedFiles(denormalizeDiffTarget(input.target)),

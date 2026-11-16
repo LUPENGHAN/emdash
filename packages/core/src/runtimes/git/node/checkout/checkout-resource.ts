@@ -108,6 +108,11 @@ export class CheckoutResource {
     return this.fileContents.state(key, scope);
   }
 
+  readHead(): Promise<CheckoutHeadState> {
+    this.assertActive();
+    return this.commands.getHead();
+  }
+
   getChangedFiles(target: DiffTarget): Promise<GitChange[]> {
     this.assertActive();
     return this.commands.getChangedFiles(target);

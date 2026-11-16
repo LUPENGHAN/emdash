@@ -42,6 +42,11 @@ import {
 } from './schemas';
 
 export const gitCheckoutContract = defineContract({
+  readHead: fallible({
+    input: checkoutSelectorSchema,
+    data: checkoutHeadStateSchema,
+    error: gitCommandErrorSchema,
+  }),
   readRemoteBranch: fallible({
     input: readRemoteBranchInputSchema,
     data: z.object({
