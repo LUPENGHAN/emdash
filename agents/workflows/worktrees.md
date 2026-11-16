@@ -43,6 +43,26 @@
   concurrent callers and cached for 5 minutes; a workspace nested inside another one measured in
   the same request counts only in its own row; closing the view cancels walks still running
 
+## Baseline synchronization capability
+
+The Host Git runtime exposes `git.checkout.syncBaseline` as a cancellable job. Its input names
+the upstream remote/ref and the local baseline ref explicitly; it does not infer `main` or
+`origin`. Calls share the repository family lane and object-transfer lock. A checked-out baseline
+uses Git's fast-forward checkout semantics; an unchecked baseline uses a non-forcing local fetch
+that still refuses checked-out destination refs. Task and management refs are not integration
+targets, and management branch names are refused.
+
+Upstream observations live under `refs/emdash/baseline-observations/`. A fetched candidate cannot
+replace that checkpoint when the upstream history was rewritten, so a repeated request remains
+blocked. Candidate fetches ignore configured destination refmaps, tags and recursive submodules.
+Cancellation cleans up the request's candidate ref and invalidates Git projections even if the
+fast-forward completed before its completion was interrupted.
+
+This is a Host capability, not an enabled automatic Project policy. The Project domain must
+resolve and validate the baseline, own configuration/status, mint operation credentials, sequence
+verification commands, and gate automatic delegation. The source-control renderer facade does
+not expose an arbitrary destination-branch passthrough for this job.
+
 ## `.emdash.json`
 
 `.emdash.json` stores optional shareable project settings. Supported runtime keys:

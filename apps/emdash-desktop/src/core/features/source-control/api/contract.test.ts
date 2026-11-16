@@ -7,10 +7,10 @@ describe('sourceControlContract', () => {
     expect(Object.keys(sourceControlContract.repository)).toEqual(
       Object.keys(gitContract.repository)
     );
-    // `content` is intentionally not relayed: git-ref file content is served
-    // through the files domain (OpenFileStore git facets), not source-control.
+    // File content belongs to the files domain. Baseline synchronization is invoked
+    // by Project policy, rather than a renderer-supplied destination branch.
     expect(Object.keys(sourceControlContract.checkout)).toEqual(
-      Object.keys(gitContract.checkout).filter((key) => key !== 'content')
+      Object.keys(gitContract.checkout).filter((key) => key !== 'content' && key !== 'syncBaseline')
     );
     expect(Object.keys(sourceControlContract.repository.model.states)).toEqual(
       Object.keys(gitContract.repository.model.states)
