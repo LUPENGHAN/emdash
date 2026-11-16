@@ -179,6 +179,20 @@ Provider-option changes patch only their own fields through the host's
 the desktop mirror must not replace the host config or suppress writes based on cached equality.
 
 
+## Code baseline verification
+
+The Project baseline domain owns verification commands, optional timeouts, configuration revisions,
+attempt history and approval evidence in the desktop `project-baselines` KV namespace. These fields
+are separate from the lifecycle settings form and are not written to `.emdash.json`. Changes use an
+expected revision; the Projects Wire baseline model streams saved state to other windows.
+
+Verification creates a dedicated worktree at the selected full OID through the owning Host registry.
+It runs the explicit command through Host Scripts with that workspace's resolved environment and
+shell setup, without activating lifecycle scripts or copying preserved artifacts. The command must
+prepare dependencies needed by a clean checkout. Saved workspace and run receipts allow result
+recovery; an unknown execution result blocks approval and is never automatically replayed. Check
+workspaces remain available for diagnosis until a safe cleanup flow is implemented.
+
 ## Management workspace execution
 
 Workspace-registry records created through `createManagementWorktree` carry immutable
