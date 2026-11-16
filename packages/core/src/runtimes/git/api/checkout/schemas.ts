@@ -223,3 +223,10 @@ export const pushBranchJobInputSchema = checkoutSelectorSchema.extend({
   credentials: gitOperationCredentialsSchema.optional(),
 });
 export type PushBranchJobInput = z.infer<typeof pushBranchJobInputSchema>;
+export const readRemoteBranchInputSchema = checkoutSelectorSchema.extend({
+  remote: z.string().min(1),
+  expectedRemoteFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  branch: localBranchRefSchema,
+  credentials: gitOperationCredentialsSchema.optional(),
+});
+export type ReadRemoteBranchInput = z.infer<typeof readRemoteBranchInputSchema>;

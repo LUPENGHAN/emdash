@@ -31,6 +31,7 @@ import {
   type PushTarget,
   type PushBranchJobInput,
 } from '#runtimes/git/api';
+import type { ReadRemoteBranchInput } from '#runtimes/git/api/checkout/schemas';
 import type { CheckoutIdentity } from '#runtimes/git/node/allocation/identity';
 import { blame as readBlame } from '#runtimes/git/node/checkout/ops/blame';
 import { readGitFileContent } from '#runtimes/git/node/checkout/ops/content';
@@ -296,6 +297,46 @@ export class GitCheckout {
       });
     } catch (error) {
       return checkoutFailures.command(error);
+    }
+  }
+
+  async readRemoteBranch(
+    input: Omit<ReadRemoteBranchInput, 'checkout' | 'credentials'>,
+    context: GitOperationContext = {}
+  ): Promise<Result<{ oid: string | null }, GitCommandError>> {
+    try {
+      const branch = localBranchRefSchema.parse(input.branch);
+      const urls = (
+        await this.exec.exec(['remote', 'get-url', '--push', '--all', '--', input.remote])
+      ).stdout
+        .trim()
+        .split('\n')
+        .filter(Boolean);
+      const url = urls[0];
+      if (
+        urls.length !== 1 ||
+        !url ||
+        createHash('sha256').update(url).digest('hex') !== input.expectedRemoteFingerprint
+      )
+        return gitErr.commandFailed(
+          'The pinned push destination changed. Refresh before reading its branch.'
+        );
+      // Read the push URL: a remote may fetch from upstream but publish to a personal fork.
+      const result = await execGitWithProgress(
+        this.exec,
+        ['ls-remote', '--refs', '--', url, branch],
+        context
+      );
+      const rows = result.stdout.trim().split('\n').filter(Boolean);
+      if (!rows.length) return ok({ oid: null });
+      const match = /^([a-fA-F0-9]{40}|[a-fA-F0-9]{64})\t(.+)$/.exec(rows[0] ?? '');
+      if (rows.length !== 1 || !match || match[2] !== branch)
+        return gitErr.commandFailed('The remote branch response was not an exact match.');
+      return ok({ oid: match[1] ?? null });
+    } catch (error) {
+      if (context.signal?.aborted) throw error;
+      const failure = commandFailed(error);
+      return err({ ...failure.error, message: redactSecrets(failure.error.message) });
     }
   }
 

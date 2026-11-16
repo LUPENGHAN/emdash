@@ -15,6 +15,7 @@ export function createCheckoutProcedures(runtime: GitCheckoutRuntime) {
     getCommitFiles: (input) => runtime.getCommitFiles(input),
     blame: (input) => runtime.blame(input),
     inspectPushTarget: (input) => runtime.inspectPushTarget(input),
+    readRemoteBranch: (input, meta) => runtime.readRemoteBranch(input, meta.signal),
     pushBranch: { run: (input, context) => runtime.pushBranch(input, context) },
     push: { run: (input, context) => runtime.push(input, context) },
     publish: { run: (input, context) => runtime.publish(input, context) },

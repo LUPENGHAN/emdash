@@ -213,6 +213,12 @@ export class CheckoutResource {
   async inspectPushTarget(remote: string) {
     return this.execute(() => this.commands.inspectPushTarget(remote));
   }
+  async readRemoteBranch(
+    input: Parameters<GitCheckout['readRemoteBranch']>[0],
+    context: GitOperationContext
+  ) {
+    return this.execute(() => this.commands.readRemoteBranch(input, context));
+  }
   async pushBranch(input: Parameters<GitCheckout['pushBranch']>[0], context: GitOperationContext) {
     const result = await this.execute(() => this.commands.pushBranch(input, context));
     if (result.success) {

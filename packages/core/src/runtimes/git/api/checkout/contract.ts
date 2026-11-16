@@ -38,9 +38,20 @@ import {
   pushJobInputSchema,
   pushBranchJobInputSchema,
   pushTargetSchema,
+  readRemoteBranchInputSchema,
 } from './schemas';
 
 export const gitCheckoutContract = defineContract({
+  readRemoteBranch: fallible({
+    input: readRemoteBranchInputSchema,
+    data: z.object({
+      oid: z
+        .string()
+        .regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/)
+        .nullable(),
+    }),
+    error: gitCommandErrorSchema,
+  }),
   model: liveModel({
     key: checkoutSelectorSchema,
     states: {

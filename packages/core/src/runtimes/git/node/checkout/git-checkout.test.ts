@@ -1175,6 +1175,43 @@ describe('selected file commits', () => {
 });
 
 describe('explicit branch push targets', () => {
+  it('reads the exact push destination without changing refs when its fetch URL points elsewhere', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    const git = async (...args: string[]) =>
+      (await execFileAsync('git', args, { cwd: repo })).stdout.trim();
+    const fork = path.join(repo, 'personal fork.git');
+    const upstream = path.join(repo, 'upstream.git');
+    try {
+      await git('init', '--bare', fork);
+      await git('init', '--bare', upstream);
+      await git('remote', 'add', 'personal', upstream);
+      await git('remote', 'set-url', '--push', 'personal', fork);
+      const ref = localBranchRefSchema.parse('refs/heads/main');
+      const target = await checkout.inspectPushTarget('personal');
+      if (!target.success) throw new Error('Missing target');
+      const input = {
+        remote: 'personal',
+        expectedRemoteFingerprint: target.data.fingerprint,
+        branch: ref,
+      };
+      expect(await checkout.readRemoteBranch(input)).toMatchObject({
+        success: true,
+        data: { oid: null },
+      });
+      const oid = await git('rev-parse', 'HEAD');
+      await git('push', fork, 'HEAD:refs/heads/main');
+      expect(await checkout.readRemoteBranch(input)).toMatchObject({
+        success: true,
+        data: { oid },
+      });
+      expect(await git('rev-parse', 'HEAD')).toBe(oid);
+      expect((await execFileAsync('git', ['--git-dir', upstream, 'for-each-ref'])).stdout).toBe('');
+      await git('remote', 'set-url', '--push', 'personal', upstream);
+      expect(await checkout.readRemoteBranch(input)).toMatchObject({ success: false });
+    } finally {
+      await cleanup();
+    }
+  });
   it('pushes only the pinned branch and commit without automatically following tags', async () => {
     const { repo, checkout, cleanup } = await makeCheckout();
     const git = async (...args: string[]) =>

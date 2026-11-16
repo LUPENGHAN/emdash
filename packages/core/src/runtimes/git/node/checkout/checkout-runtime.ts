@@ -21,6 +21,7 @@ import {
   type PushJobInput,
   type PushBranchJobInput,
 } from '#runtimes/git/api';
+import type { ReadRemoteBranchInput } from '#runtimes/git/api/checkout/schemas';
 import type { GitAllocationGraph } from '#runtimes/git/node/allocation/allocation-graph';
 import { expectedGitCommandError } from '#runtimes/git/node/api/errors';
 import { credentialOperationEnv } from '#runtimes/git/node/exec/operation-context';
@@ -129,6 +130,14 @@ export class GitCheckoutRuntime {
 
   inspectPushTarget(input: CheckoutSelector & { remote: string }) {
     return this.run(input, (checkout) => checkout.inspectPushTarget(input.remote));
+  }
+  readRemoteBranch(input: ReadRemoteBranchInput, signal?: AbortSignal) {
+    return this.run(input, (checkout) =>
+      checkout.readRemoteBranch(input, {
+        signal,
+        env: credentialOperationEnv(input.credentials),
+      })
+    );
   }
   pushBranch(input: PushBranchJobInput, context: LiveJobContext<GitTransferProgress>) {
     return this.run(input, (checkout) =>
