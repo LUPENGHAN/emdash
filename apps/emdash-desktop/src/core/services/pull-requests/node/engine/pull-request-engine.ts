@@ -50,10 +50,10 @@ export class PullRequestEngine {
   }
 
   async findOpenPullRequests(
-    input: PullRequestSource,
+    input: PullRequestSource & { projectId?: string },
     signal: AbortSignal
   ): Promise<Result<MatchingPullRequests, PullRequestError>> {
-    const client = await this.clientFor(input.repositoryUrl, signal);
+    const client = await this.clientFor(input.repositoryUrl, signal, input.projectId);
     if (!client.success) return client;
     if (!client.data.findOpenPullRequests)
       return err({
@@ -73,10 +73,11 @@ export class PullRequestEngine {
       title: string;
       body?: string;
       draft: boolean;
+      projectId?: string;
     },
     signal: AbortSignal
   ): Promise<Result<{ url: string; number: number }, PullRequestError>> {
-    const client = await this.clientFor(input.repositoryUrl, signal);
+    const client = await this.clientFor(input.repositoryUrl, signal, input.projectId);
     if (!client.success) return client;
     return await client.data.createPullRequest(input, signal);
   }
@@ -114,18 +115,20 @@ export class PullRequestEngine {
 
   private async clientFor(
     repositoryUrl: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    projectId?: string
   ): Promise<Result<PullRequestClient, PullRequestError>> {
     const resolved = await this.options.auth.resolveIntegration({ repositoryUrl }, { signal });
     if (!resolved.success) return resolved;
     const { integrationId } = resolved.data;
-    let client = this.clients.get(integrationId);
+    const key = projectId ? JSON.stringify([integrationId, projectId]) : integrationId;
+    let client = this.clients.get(key);
     if (client === undefined) {
       client = (this.options.createClient ?? createRegistryClient)(
         integrationId,
-        this.hostContext(integrationId)
+        this.hostContext(integrationId, projectId)
       );
-      this.clients.set(integrationId, client);
+      this.clients.set(key, client);
     }
     if (!client) {
       return err({
@@ -137,13 +140,13 @@ export class PullRequestEngine {
     return ok(client);
   }
 
-  private hostContext(integrationId: string): PullRequestHostContext {
+  private hostContext(integrationId: string, projectId?: string): PullRequestHostContext {
     return {
       log: this.options.logger,
       scope: this.options.scope,
       resolveCredentials: async (repositoryUrl, signal) => {
         const auth = await this.options.auth.resolveAuth(
-          { repositoryUrl, integrationId },
+          { repositoryUrl, integrationId, ...(projectId ? { projectId } : {}) },
           { signal }
         );
         if (!auth.success) return auth;

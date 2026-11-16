@@ -22,8 +22,9 @@ import { useIntegrationsContext } from '@core/features/integrations/contribution
 import { ProviderIdentityStrip } from '@core/features/integrations/contributions/browser/provider-identity-strip';
 import { getProjectSettingsStore } from '@core/features/projects/api/browser/stores/project-selectors';
 import { BrokenSettingNotice } from '@core/features/projects/contributions/browser/settings-provenance';
+import { getSourceControlClient } from '@core/features/source-control/api/browser/client';
 import { getGitRepositoryStore } from '@core/features/source-control/api/browser/stores/source-control-selectors';
-import { formatPushErrorDetail } from '@core/features/source-control/api/git-error-messages';
+import type { TaskPullRequestRecord } from '@core/features/source-control/api/task-pull-requests';
 import { BranchDisplay } from '@core/features/source-control/contributions/browser/branch-display';
 import { ProjectBranchSelector } from '@core/features/source-control/contributions/browser/project-branch-selector';
 import { RemoteSelector } from '@core/features/source-control/contributions/browser/remote-selector';
@@ -32,12 +33,9 @@ import { workspaceRegistry } from '@core/features/workspaces/api/browser/stores/
 import { useModalController, useOpenModal } from '@core/manifests/browser/modal-api';
 import { openExternal } from '@core/primitives/desktop-host/browser/host-client';
 import { ConfirmButton } from '@core/primitives/keybindings/browser/confirm-button';
-import { log } from '@core/primitives/logging/browser/logger';
 import { defineModal } from '@core/primitives/modals/react';
 import type { ProviderAccountSummary } from '@core/primitives/provider-accounts/api';
 import { isManagementBranch } from '@core/primitives/workspaces/api/management-branch';
-import { pullRequestErrorMessage } from '@core/services/pull-requests/api';
-import { getPullRequestsRuntimeClient } from '@core/services/pull-requests/api/client';
 import { resolveInitialBaseBranch } from './base-branch';
 import { getTargetRemotes, resolveCreatePrTargetRemote } from './target-remote';
 
@@ -52,7 +50,7 @@ export type CreatePrModalArgs = {
 
 export const CreatePrModal = observer(function CreatePrModal({
   projectId,
-  taskId: _taskId,
+  taskId,
   repositoryUrl,
   branchName,
   draft,
@@ -69,6 +67,8 @@ export const CreatePrModal = observer(function CreatePrModal({
   const [createActionId, setCreateActionId] = useState('push-and-create');
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<{ url: string; number: number }[]>([]);
+  const [prepared, setPrepared] = useState<TaskPullRequestRecord>();
+  const request = useRef<{ fingerprint: string; id: string } | undefined>(undefined);
   const [accountOverride, setAccountOverride] = useState<ProviderAccountSummary | null>(null);
   const [accountSaveState, setAccountSaveState] = useState<'idle' | 'saving' | 'failed'>('idle');
   const accountSaveInFlight = useRef(false);
@@ -164,52 +164,48 @@ export const CreatePrModal = observer(function CreatePrModal({
       return;
     }
     if (!title.trim() || !targetRepositoryUrl) return;
+    if (!repo?.pushRemote?.name) {
+      setError(`Select a valid push remote before creating the ${noun}.`);
+      return;
+    }
     setError(null);
     setCandidates([]);
+    setPrepared(undefined);
     setIsCreating(true);
+    const selection = {
+      taskId,
+      workspaceId,
+      sourceBranch: branchName,
+      pushRemote: repo.pushRemote.name,
+      repositoryUrl: targetRepositoryUrl,
+      base: selectedBase.branch,
+      title: title.trim(),
+      body: description.trim() || undefined,
+      draft,
+      push,
+    };
+    const fingerprint = JSON.stringify(selection);
+    if (request.current?.fingerprint !== fingerprint)
+      request.current = { fingerprint, id: crypto.randomUUID() };
+    const requestId = request.current.id;
     try {
-      if (push) {
-        const workspace = workspaceRegistry.get(workspaceId);
-        if (!workspace) throw new Error('Workspace is unavailable');
-        const pushResult = await workspace.get(gitCheckoutStoreToken).push();
-        if (!pushResult.success) {
-          log.error('Failed to push branch:', pushResult.error);
-          setError(formatPushErrorDetail(pushResult.error));
-          return;
-        }
-      }
-
-      const baseRepository = parseRepositoryRef(targetRepositoryUrl);
-      const headRepository = repo?.pushRemote?.url ? parseRepositoryRef(repo.pushRemote.url) : null;
-      if (!headRepository) {
-        setError(`Select a valid push remote before creating the ${noun}.`);
-        return;
-      }
-      const head =
-        provider === 'github' &&
-        baseRepository &&
-        headRepository &&
-        headRepository.repositoryUrl !== baseRepository.repositoryUrl
-          ? `${headRepository.owner}:${branchName}`
-          : branchName;
-
-      const client = await getPullRequestsRuntimeClient();
-      const result = await client.ensurePullRequest({
-        repositoryUrl: targetRepositoryUrl,
-        headRepositoryUrl: headRepository.repositoryUrl,
-        head,
-        base: selectedBase.branch,
-        title: title.trim(),
-        body: description.trim() || undefined,
-        draft,
-      });
-
-      if (result.success) {
-        complete();
-      } else {
-        setError(pullRequestErrorMessage(result.error));
-        if (result.error.type === 'pull_request_match_ambiguous')
-          setCandidates(result.error.candidates);
+      const client = (await getSourceControlClient()).taskPullRequests;
+      setPrepared(await client.prepare({ ...selection, requestId }, { timeoutMs: 0 }));
+      const result = await client.run({ taskId, requestId }, { timeoutMs: 0 });
+      if (result.phase !== 'complete' || !result.result)
+        throw new Error('The PR request has no completed receipt.');
+      complete();
+    } catch (cause) {
+      setError(String(cause));
+      try {
+        const saved = (
+          await (await getSourceControlClient()).taskPullRequests.list({ taskId })
+        ).find((entry) => entry.requestId === requestId);
+        if (saved) setPrepared(saved);
+        if (saved?.failure?.type === 'pull_request_match_ambiguous')
+          setCandidates(saved.failure.candidates);
+      } catch {
+        /* Keep the original operation error when the host cannot refresh the request. */
       }
     } finally {
       setIsCreating(false);
@@ -354,6 +350,17 @@ export const CreatePrModal = observer(function CreatePrModal({
               </Button>
             ))}
           </Alert.Root>
+        )}
+        {prepared && (
+          <p className="text-xs text-foreground-muted" data-testid="prepared-task-pr">
+            {prepared.plan.headRepositoryUrl} ·{' '}
+            {prepared.plan.sourceRef.slice('refs/heads/'.length)} · {prepared.plan.oid.slice(0, 12)}
+            {' → '}
+            {prepared.plan.repositoryUrl} · {prepared.plan.base}
+            {prepared.plan.push === false
+              ? ' · Existing remote commit; no push'
+              : ` · Push remote: ${prepared.plan.pushTarget.remote}`}
+          </p>
         )}
       </Dialog.Body>
       <Dialog.Footer>

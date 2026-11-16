@@ -1843,6 +1843,7 @@ export async function bootServices(
     runtimes,
     credentials: gitCredentials,
     pullRequests: getPullRequestsRuntimeClient,
+    refreshRepositoryInterest: (projectId) => pullRequestsRegistration.refreshProject(projectId),
     access: coordinatorService,
     assertCaller: assertActiveAgentCaller,
     changed: (taskId) => {
@@ -1881,11 +1882,14 @@ export async function bootServices(
           .state(attached.data.repository, 'remotes')
           .snapshot()
       ).data.remotes;
-      return await pullRequestRepositoryUrls(
+      const fromRemotes = await pullRequestRepositoryUrls(
         (url) => repositoryRouter.route(url),
         remotes.map((remote) => remote.url),
         (integrationId) => pullRequestsPluginRegistry.get(integrationId) !== undefined
       );
+      return [
+        ...new Set([...fromRemotes, ...(await taskPullRequests.repositoryTargets(projectId))]),
+      ];
     },
     resolveProjectAuthContext: async (projectId, integrationId) =>
       await resolvePullRequestAccount(
@@ -1898,8 +1902,8 @@ export async function bootServices(
   // Answers the PR worker's per-sync "as whom" requests through the blessed
   // resolver (spec: github-git-settings §8); before this binding, identity
   // requests fail closed and the worker skips the sync.
-  bindPullRequestSyncIdentityResolver((repositoryUrl, integrationId) =>
-    pullRequestsRegistration.resolveSyncIdentity(repositoryUrl, integrationId)
+  bindPullRequestSyncIdentityResolver((repositoryUrl, integrationId, projectId) =>
+    pullRequestsRegistration.resolveSyncIdentity(repositoryUrl, integrationId, projectId)
   );
   bindPullRequestIntegrationResolver((repositoryUrl) =>
     resolvePullRequestIntegration((url) => repositoryRouter.route(url), repositoryUrl)

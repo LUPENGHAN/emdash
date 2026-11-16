@@ -107,6 +107,7 @@ export const createPullRequestInputSchema = z.object({
   title: z.string(),
   body: z.string().optional(),
   draft: z.boolean(),
+  projectId: z.string().min(1).optional(),
 });
 
 export const ensurePullRequestInputSchema = createPullRequestInputSchema.extend({

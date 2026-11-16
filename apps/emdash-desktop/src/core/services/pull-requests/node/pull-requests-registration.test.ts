@@ -73,6 +73,31 @@ describe('PullRequestsRegistration', () => {
     expect(client.registerRepository).toHaveBeenCalledWith({ repositoryUrl });
     expect(mocks.resolveAuth).not.toHaveBeenCalled();
   });
+  it('resolves a task mutation only through its source project and never another open project', async () => {
+    const repositoryUrl = 'https://github.com/acme/shared';
+    mocks.projects.set('one', { remoteUrls: [repositoryUrl] });
+    mocks.projects.set('two', { remoteUrls: [repositoryUrl] });
+    const registration = createRegistration(createClient());
+    await registration.onProjectOpened('one');
+    await registration.onProjectOpened('two');
+    mocks.resolveAuth.mockImplementation(async (projectId) =>
+      projectId === 'two'
+        ? err({ type: 'disabled', message: 'Disabled in source project' })
+        : ok({ accountId: 'account-one' })
+    );
+    expect(await registration.resolveSyncIdentity(repositoryUrl, 'github', 'two')).toMatchObject({
+      success: false,
+    });
+    expect(mocks.resolveAuth).toHaveBeenCalledExactlyOnceWith('two', 'github');
+    mocks.resolveAuth.mockClear();
+    expect(
+      await registration.resolveSyncIdentity(repositoryUrl, 'github', 'missing')
+    ).toMatchObject({ success: false });
+    expect(mocks.resolveAuth).not.toHaveBeenCalled();
+    expect(await registration.resolveSyncIdentity(repositoryUrl, 'github', 'one')).toEqual(
+      ok({ integrationId: 'github', accountId: 'account-one' })
+    );
+  });
 
   it('replays only current shared repository interest after every worker restart', async () => {
     const shared = 'https://github.com/acme/shared';

@@ -107,6 +107,12 @@ const sourceControlRepositoryContract = defineContract({
 });
 
 const sourceControlCheckoutContract = defineContract({
+  readRemoteBranch: runtimeFallibleProcedure(
+    checkout.readRemoteBranch.input
+      .omit({ checkout: true, credentials: true })
+      .extend(workspaceKeySchema.shape),
+    checkout.readRemoteBranch.output
+  ),
   model: liveModel({
     key: workspaceKeySchema,
     states: {

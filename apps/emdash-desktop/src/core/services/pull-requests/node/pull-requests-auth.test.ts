@@ -16,6 +16,23 @@ function controllerWith(
 }
 
 describe('pull requests auth controller', () => {
+  it('preserves the source project on task mutation identity requests', async () => {
+    const resolveSyncIdentity = vi.fn(async () =>
+      ok({ integrationId: 'github', accountId: 'account-two' })
+    );
+    const controller = controllerWith({ resolveSyncIdentity });
+    const result = await controller.call('resolveAuth', {
+      repositoryUrl: 'https://github.com/org/sdk',
+      integrationId: 'github',
+      projectId: 'project-two',
+    });
+    expect(result).toMatchObject({ success: true, data: { accountId: 'account-two' } });
+    expect(resolveSyncIdentity).toHaveBeenCalledWith(
+      'https://github.com/org/sdk',
+      'github',
+      'project-two'
+    );
+  });
   it('uses the selected account’s stored Enterprise endpoint', async () => {
     const controller = controllerWith({
       readCredentials: async () =>

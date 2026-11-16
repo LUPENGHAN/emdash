@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { KeyedMutex } from '@emdash/shared/concurrency';
 import { redactSecrets } from '@emdash/shared/logger';
 import type { AgentCaller } from '@core/features/agent-control/api';
+import type { PullRequestError } from '@core/services/pull-requests/api/errors';
 import {
   taskPullRequestInputSchema,
   taskPullRequestPlanSchema,
@@ -19,13 +20,18 @@ export type TaskPullRequestDependencies = {
   };
   authorize(taskId: string, caller?: AgentCaller, intent?: 'read' | 'control'): Promise<void>;
   prepare(input: TaskPullRequestInput): Promise<TaskPullRequestPlan>;
-  check(plan: TaskPullRequestPlan): Promise<void>;
+  check(plan: TaskPullRequestPlan, published?: boolean): Promise<void>;
   push(plan: TaskPullRequestPlan): Promise<void>;
   ensure(plan: TaskPullRequestPlan): Promise<{ url: string; number: number }>;
   associate?(plan: TaskPullRequestPlan, result: { url: string; number: number }): Promise<void>;
   changed?(taskId: string): void;
 };
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export class TaskPullRequestFailure extends Error {
+  constructor(readonly detail: PullRequestError) {
+    super('message' in detail ? detail.message : `Task PR creation failed: ${detail.type}`);
+  }
+}
 
 /** A task owns the request across receiver changes; authorization is checked on every step. */
 export class TaskPullRequestService {
@@ -54,13 +60,23 @@ export class TaskPullRequestService {
     }
     return records;
   }
+  async repositoryTargets(projectId: string): Promise<string[]> {
+    const targets = new Set<string>();
+    for (const value of Object.values(await this.deps.store.getAll())) {
+      if (value?.plan?.projectId === projectId) targets.add(this.parse(value).plan.repositoryUrl);
+    }
+    return [...targets];
+  }
   async prepare(input: TaskPullRequestInput, caller?: AgentCaller): Promise<TaskPullRequestRecord> {
     const selected = taskPullRequestInputSchema.parse(input);
     return this.tasks.runExclusive(selected.taskId, async () => {
       await this.deps.authorize(selected.taskId, caller, 'control');
       const key = this.key(selected.taskId, selected.requestId);
       // Schema order gives equivalent object inputs one fingerprint regardless of property order.
-      const fingerprint = hash(selected);
+      const fingerprintInput = { ...selected };
+      // Absent and true both mean push; retain fingerprints saved before this optional choice.
+      if (fingerprintInput.push !== false) delete fingerprintInput.push;
+      const fingerprint = hash(fingerprintInput);
       const saved = await this.deps.store.getOrThrow(key);
       if (saved) {
         const record = this.parse(saved);
@@ -71,7 +87,7 @@ export class TaskPullRequestService {
       const plan = taskPullRequestPlanSchema.parse(await this.deps.prepare(selected));
       if (plan.taskId !== selected.taskId) throw new Error('The prepared PR task does not match.');
       const record: TaskPullRequestRecord = {
-        version: '1',
+        version: '2',
         requestId: selected.requestId,
         fingerprint,
         plan,
@@ -99,15 +115,17 @@ export class TaskPullRequestService {
         await this.deps.check(record.plan);
         if (record.phase === 'prepared' || record.phase === 'pushing') {
           await this.deps.authorize(taskId, caller, 'control');
-          record = { ...record, phase: 'pushing', error: undefined };
-          await this.save(key, record);
-          await this.deps.push(record.plan);
-          record = { ...record, phase: 'pushed' };
+          if (record.plan.push !== false) {
+            record = { ...record, phase: 'pushing', error: undefined, failure: undefined };
+            await this.save(key, record);
+            await this.deps.push(record.plan);
+          }
+          record = { ...record, phase: 'pushed', error: undefined, failure: undefined };
           await this.save(key, record);
         }
         await this.deps.authorize(taskId, caller, 'control');
-        await this.deps.check(record.plan);
-        record = { ...record, phase: 'creating', error: undefined };
+        await this.deps.check(record.plan, true);
+        record = { ...record, phase: 'creating', error: undefined, failure: undefined };
         await this.save(key, record);
         const result = record.result ?? (await this.deps.ensure(record.plan));
         // Persist the receipt before association: a failed breadcrumb cannot cause another create.
@@ -122,7 +140,11 @@ export class TaskPullRequestService {
         const persisted = await this.deps.store.getOrThrow(key);
         if (persisted) {
           const authoritative = this.parse(persisted);
-          await this.save(key, { ...authoritative, error: redactSecrets(String(error)) });
+          await this.save(key, {
+            ...authoritative,
+            error: redactSecrets(String(error)),
+            failure: error instanceof TaskPullRequestFailure ? error.detail : undefined,
+          });
         }
         throw error;
       }

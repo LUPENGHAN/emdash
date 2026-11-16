@@ -29,7 +29,7 @@ export function createPullRequestsAuthController(dependencies: {
   return createController(gitPlatformAuthContract, {
     resolveIntegration: async ({ repositoryUrl }) =>
       await dependencies.resolveIntegration(repositoryUrl),
-    resolveAuth: async ({ repositoryUrl, integrationId: routedIntegrationId }) => {
+    resolveAuth: async ({ repositoryUrl, integrationId: routedIntegrationId, projectId }) => {
       const repository = parseRepositoryRef(repositoryUrl);
       if (!repository) {
         return err({
@@ -38,7 +38,9 @@ export function createPullRequestsAuthController(dependencies: {
           message: `Unrecognized repository URL: ${repositoryUrl}`,
         });
       }
-      const identity = await dependencies.resolveSyncIdentity(repositoryUrl, routedIntegrationId);
+      const identity = projectId
+        ? await dependencies.resolveSyncIdentity(repositoryUrl, routedIntegrationId, projectId)
+        : await dependencies.resolveSyncIdentity(repositoryUrl, routedIntegrationId);
       if (!identity.success) return identity;
       const { integrationId, accountId } = identity.data;
       const credentials = await dependencies.readCredentials(

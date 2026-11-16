@@ -455,6 +455,12 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         push_remote: z.string().min(1).optional(),
         target_repository: z.string().min(1).optional(),
         target_branch: z.string().min(1).optional(),
+        push: z
+          .boolean()
+          .optional()
+          .describe(
+            'Default true. Set false to use and freeze the existing remote branch commit without pushing local changes.'
+          ),
       },
     },
     ({
@@ -467,6 +473,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       push_remote,
       target_repository,
       target_branch,
+      push,
     }) =>
       dispatch({
         kind: 'create_pull_request',
@@ -479,6 +486,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         pushRemote: push_remote,
         repositoryUrl: target_repository,
         base: target_branch,
+        push,
       })
   );
   server.registerTool(

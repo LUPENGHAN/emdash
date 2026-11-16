@@ -194,6 +194,48 @@ describe('PullRequestEngine (client dispatch)', () => {
       ...options,
     });
   }
+  it('keeps task mutation credential contexts separate for projects referencing the same repository', async () => {
+    const auth = fakeGitHubAuth();
+    const resolveAuth = vi.fn(async () =>
+      ok({ integrationId: 'github', accountId: 'account', credentials: { accessToken: 'fixture' } })
+    );
+    auth.resolveAuth = resolveAuth;
+    const createClient = vi.fn((_integrationId: string, host: PullRequestHostContext) => {
+      const client = fakeClient();
+      client.findOpenPullRequests = async (input, signal) => {
+        await host.resolveCredentials(input.repositoryUrl, signal);
+        return ok({ prs: [], complete: true });
+      };
+      return client;
+    });
+    const engine = createDispatchEngine({ auth, createClient });
+    const input = {
+      repositoryUrl,
+      headRepositoryUrl: repositoryUrl,
+      headRefName: 'feature',
+      base: 'main',
+    };
+    const signal = new AbortController().signal;
+    await engine.findOpenPullRequests({ ...input, projectId: 'one' }, signal);
+    await engine.findOpenPullRequests({ ...input, projectId: 'two' }, signal);
+    await engine.findOpenPullRequests({ ...input, projectId: 'one' }, signal);
+    expect(createClient).toHaveBeenCalledTimes(2);
+    expect(resolveAuth).toHaveBeenNthCalledWith(
+      1,
+      { repositoryUrl, integrationId: 'github', projectId: 'one' },
+      { signal }
+    );
+    expect(resolveAuth).toHaveBeenNthCalledWith(
+      2,
+      { repositoryUrl, integrationId: 'github', projectId: 'two' },
+      { signal }
+    );
+    expect(resolveAuth).toHaveBeenNthCalledWith(
+      3,
+      { repositoryUrl, integrationId: 'github', projectId: 'one' },
+      { signal }
+    );
+  });
 
   it('refuses ensure support for a provider without an authoritative matching read', async () => {
     const client = fakeClient();

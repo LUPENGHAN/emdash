@@ -170,11 +170,14 @@ export class PullRequestsRegistration implements Disposable {
    */
   async resolveSyncIdentity(
     repositoryUrl: string,
-    integrationId: string
+    integrationId: string,
+    sourceProjectId?: string
   ): Promise<Result<PullRequestSyncIdentity, PullRequestAuthError>> {
     const host = parseRepositoryRef(repositoryUrl)?.host ?? 'unknown';
     const projectIds = [...this.projectRepositoryUrls.entries()]
-      .filter(([, urls]) => urls.includes(repositoryUrl))
+      .filter(
+        ([id, urls]) => (!sourceProjectId || id === sourceProjectId) && urls.includes(repositoryUrl)
+      )
       .map(([projectId]) => projectId);
     if (projectIds.length === 0) {
       return err({

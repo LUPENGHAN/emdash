@@ -609,7 +609,13 @@ export class PullRequestService {
     return this.creationLocks.runExclusive(key, async () => {
       signal.throwIfAborted();
       const matches = await this.engine.findOpenPullRequests(
-        { repositoryUrl, headRepositoryUrl, headRefName, base: input.base },
+        {
+          repositoryUrl,
+          headRepositoryUrl,
+          headRefName,
+          base: input.base,
+          ...(input.projectId ? { projectId: input.projectId } : {}),
+        },
         signal
       );
       if (!matches.success) return matches;

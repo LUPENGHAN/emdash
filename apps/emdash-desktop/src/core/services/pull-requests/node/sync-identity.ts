@@ -6,7 +6,8 @@ export type PullRequestSyncIdentity = { integrationId: string; accountId: string
 
 export type PullRequestSyncIdentityResolver = (
   repositoryUrl: string,
-  integrationId: string
+  integrationId: string,
+  projectId?: string
 ) => Promise<Result<PullRequestSyncIdentity, PullRequestAuthError>>;
 
 export type PullRequestIntegrationResolution = Result<
@@ -35,7 +36,8 @@ export function bindPullRequestSyncIdentityResolver(
 
 export async function resolvePullRequestSyncIdentity(
   repositoryUrl: string,
-  integrationId: string
+  integrationId: string,
+  projectId?: string
 ): Promise<Result<PullRequestSyncIdentity, PullRequestAuthError>> {
   if (!boundResolver) {
     return err({
@@ -44,7 +46,7 @@ export async function resolvePullRequestSyncIdentity(
       message: 'GitHub identity resolution is not available yet; the desktop is still starting.',
     });
   }
-  return await boundResolver(repositoryUrl, integrationId);
+  return await boundResolver(repositoryUrl, integrationId, projectId);
 }
 
 let boundIntegrationResolver: PullRequestIntegrationResolver | undefined;

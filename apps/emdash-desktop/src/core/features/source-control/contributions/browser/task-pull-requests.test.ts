@@ -29,7 +29,7 @@ let queryClient: QueryClient;
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.record = {
-    version: '1',
+    version: '2',
     requestId: 'stable-request',
     fingerprint: 'fingerprint',
     phase: 'creating',

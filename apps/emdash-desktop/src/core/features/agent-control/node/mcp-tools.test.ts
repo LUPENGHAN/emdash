@@ -94,6 +94,7 @@ it('carries explicit PR source and target choices and retries only the saved req
     pushRemote: 'personal',
     repositoryUrl: 'https://github.com/org/sdk',
     base: 'develop',
+    push: undefined,
   });
   await retry.handler({ task_id: 'worker', request_id: 'pr-1' });
   expect(registered.dispatch).toHaveBeenLastCalledWith({

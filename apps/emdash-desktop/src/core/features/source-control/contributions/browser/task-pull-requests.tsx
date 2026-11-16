@@ -46,7 +46,11 @@ export function TaskPullRequestStatus({ taskId }: { taskId: string }) {
             {request.plan.headRepositoryUrl} · {request.plan.sourceRef.slice('refs/heads/'.length)}{' '}
             · {request.plan.oid.slice(0, 12)}
           </p>
-          <p>Push remote: {request.plan.pushTarget.remote}</p>
+          <p>
+            {request.plan.push === false
+              ? 'Existing remote commit; no push'
+              : `Push remote: ${request.plan.pushTarget.remote}`}
+          </p>
           <p>
             Target: {request.plan.repositoryUrl} · {request.plan.base}
           </p>

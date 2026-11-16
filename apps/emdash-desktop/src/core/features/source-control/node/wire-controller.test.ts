@@ -30,6 +30,43 @@ function attachedProjects(project: unknown) {
 }
 
 describe('createSourceControlWireController', () => {
+  it('reads a remote branch through an operation credential lease and releases it', async () => {
+    const readRemoteBranch = vi.fn(async () => ok({ oid: 'a'.repeat(40) }));
+    const release = vi.fn();
+    const mintOperationCredentials = vi.fn(async () => ({ credentials: undefined, release }));
+    const controller = createSourceControlWireController({
+      runtimes: {
+        client: vi.fn(async () => ok({ git: { checkout: { readRemoteBranch } } })),
+      } as never,
+      workspaceIdentity: {
+        resolve: vi.fn(async () => checkoutIdentity),
+        resolveProject: vi.fn(async () => projectIdentity),
+      },
+      projects: attachedProjects({}),
+      mintOperationCredentials: mintOperationCredentials as never,
+    });
+    expect(
+      await controller.call('checkout.readRemoteBranch', {
+        workspaceId: checkoutIdentity.workspaceId,
+        remote: 'personal',
+        branch: 'refs/heads/feature',
+        expectedRemoteFingerprint: 'b'.repeat(64),
+      })
+    ).toEqual(ok({ oid: 'a'.repeat(40) }));
+    expect(mintOperationCredentials).toHaveBeenCalledWith({
+      projectId: checkoutIdentity.projectId,
+      host: checkoutIdentity.host,
+    });
+    expect(release).toHaveBeenCalledOnce();
+    expect(readRemoteBranch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checkout: hostPathFromNative(checkoutIdentity.path),
+        remote: 'personal',
+        branch: 'refs/heads/feature',
+      }),
+      {}
+    );
+  });
   it('resolves repository ids and clients for attached state', async () => {
     const source = liveSource({ kind: 'ready', branches: [], tags: [], remoteHeads: [] });
     const state = vi.fn(() => ({ asLiveSource: () => source }));

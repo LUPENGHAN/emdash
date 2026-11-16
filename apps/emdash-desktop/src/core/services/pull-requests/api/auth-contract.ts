@@ -25,6 +25,8 @@ export const gitPlatformAuthContract = defineContract({
       repositoryUrl: z.string(),
       /** The integration `resolveIntegration` returned for this repository. */
       integrationId: z.string(),
+      /** A task mutation resolves only through its own project's selected account. */
+      projectId: z.string().min(1).optional(),
     }),
     data: z.object({
       integrationId: z.string(),

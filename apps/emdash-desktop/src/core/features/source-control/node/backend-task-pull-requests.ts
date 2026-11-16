@@ -19,7 +19,7 @@ import type {
   SourceControlWorkspaceIdentityResolver,
 } from '../api/runtime-adapter';
 import type { TaskPullRequestRecord, TaskPullRequestPlan } from '../api/task-pull-requests';
-import { TaskPullRequestService } from './task-pull-request-service';
+import { TaskPullRequestService, TaskPullRequestFailure } from './task-pull-request-service';
 
 type Dependencies = {
   db: AppDb;
@@ -28,6 +28,7 @@ type Dependencies = {
   runtimes: SourceControlRuntimeBroker;
   credentials: Pick<GitCredentialsService, 'mintOperationCredentials'>;
   pullRequests(): Promise<PullRequestsRuntimeClient>;
+  refreshRepositoryInterest(projectId: string): Promise<void>;
   access: Pick<BackgroundAgentAccess, 'mayAccessTask'>;
   assertCaller(caller: AgentCaller): Promise<void>;
   changed?(taskId: string): void;
@@ -78,7 +79,38 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
     if (!client.success) throw new Error(`The PR host is unavailable: ${client.error.type}`);
     return { identity, git: client.data.git, checkout: hostPathFromNative(identity.path) };
   };
-  const check = async (plan: TaskPullRequestPlan) => {
+  const publishedOid = async (
+    plan: Pick<
+      TaskPullRequestPlan,
+      'taskId' | 'projectId' | 'workspaceId' | 'sourceRef' | 'pushTarget'
+    >
+  ) => {
+    const host = await runtime(plan);
+    const lease = await deps.credentials.mintOperationCredentials({
+      projectId: plan.projectId,
+      host: host.identity.host,
+    });
+    try {
+      const read = await host.git.checkout.readRemoteBranch(
+        {
+          checkout: host.checkout,
+          remote: plan.pushTarget.remote,
+          expectedRemoteFingerprint: plan.pushTarget.fingerprint,
+          branch: plan.sourceRef,
+          credentials: lease?.credentials,
+        },
+        { timeoutMs: 0 }
+      );
+      if (!read.success)
+        throw new Error(`Could not verify the published PR source: ${JSON.stringify(read.error)}`);
+      if (!read.data.oid)
+        throw new Error('The source branch is not published on the selected push remote.');
+      return read.data.oid;
+    } finally {
+      lease?.release();
+    }
+  };
+  const check = async (plan: TaskPullRequestPlan, published = false) => {
     const host = await runtime(plan);
     const [head, remote] = await Promise.all([
       host.git.checkout.model.state({ checkout: host.checkout }, 'head').snapshot(),
@@ -90,11 +122,13 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
     if (
       head.data.kind !== 'branch' ||
       head.data.ref !== plan.sourceRef ||
-      head.data.oid !== plan.oid
+      (plan.push !== false && head.data.oid !== plan.oid)
     )
       throw new Error('The source branch or commit changed. Prepare a separate PR request.');
     if (!remote.success || remote.data.fingerprint !== plan.pushTarget.fingerprint)
       throw new Error('The pinned push destination changed or is unavailable.');
+    if (published && (await publishedOid(plan)) !== plan.oid)
+      throw new Error('The published source commit changed. Prepare a separate PR request.');
   };
   return new TaskPullRequestService({
     store: new AppDbKeyValueStore<Record<string, TaskPullRequestRecord>>(
@@ -134,6 +168,8 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
     },
     prepare: async (input) => {
       const target = await task(input.taskId);
+      if (input.workspaceId && input.workspaceId !== target.workspaceId)
+        throw new Error('The task workspace changed. Reopen the PR dialog before preparing it.');
       const project = deps.projects.requireAttached(target.projectId);
       if (!project.success) throw new Error('Attach the target project before preparing its PR.');
       const host = await runtime({ ...target, taskId: target.id });
@@ -175,12 +211,22 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
       localBranchRefSchema.parse(`refs/heads/${base}`);
       if (source.host !== repository.host)
         throw new Error('PR source and target must use the same host.');
+      const oid =
+        input.push === false
+          ? await publishedOid({
+              ...target,
+              taskId: target.id,
+              sourceRef: head.data.ref,
+              pushTarget: push.data,
+            })
+          : head.data.oid;
       return {
         taskId: target.id,
         projectId: target.projectId,
         workspaceId: target.workspaceId,
         sourceRef: head.data.ref,
-        oid: head.data.oid,
+        oid,
+        push: input.push ?? true,
         pushTarget: push.data,
         headRepositoryUrl: source.repositoryUrl,
         repositoryUrl: repository.repositoryUrl,
@@ -218,11 +264,13 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
       }
     },
     ensure: async (plan) => {
+      await deps.refreshRepositoryInterest(plan.projectId);
       const client = await deps.pullRequests();
       const registered = await client.registerRepository({ repositoryUrl: plan.repositoryUrl });
       if (!registered.success)
         throw new Error(`PR target registration failed: ${JSON.stringify(registered.error)}`);
       const created = await client.ensurePullRequest({
+        projectId: plan.projectId,
         repositoryUrl: plan.repositoryUrl,
         headRepositoryUrl: plan.headRepositoryUrl,
         head: plan.sourceRef.slice('refs/heads/'.length),
@@ -231,8 +279,7 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
         body: plan.body,
         draft: plan.draft,
       });
-      if (!created.success)
-        throw new Error(`Task PR creation failed: ${JSON.stringify(created.error)}`);
+      if (!created.success) throw new TaskPullRequestFailure(created.error);
       return created.data;
     },
   });

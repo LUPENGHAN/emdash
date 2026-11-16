@@ -8,6 +8,7 @@ import type {
 } from '../api/task-pull-requests';
 import {
   TaskPullRequestService,
+  TaskPullRequestFailure,
   type TaskPullRequestDependencies,
 } from './task-pull-request-service';
 
@@ -78,6 +79,53 @@ function setup() {
 }
 
 describe('durable task PR requests', () => {
+  it('reads a version-1 request using its saved plan without resolving defaults again', async () => {
+    const t = setup();
+    const prepared = await t.service().prepare(t.input, t.caller);
+    const entry = [...t.records.entries()][0];
+    if (!entry) throw new Error('Missing prepared record');
+    t.records.set(entry[0], { ...prepared, version: '1' } as unknown as TaskPullRequestRecord);
+    vi.mocked(t.deps.prepare).mockRejectedValue(new Error('Defaults changed'));
+    const resumed = await t.service().create(t.input, t.caller);
+    expect(resumed.version).toBe('2');
+    expect(resumed.plan).toEqual(prepared.plan);
+    expect(resumed.phase).toBe('complete');
+    expect(t.deps.prepare).toHaveBeenCalledOnce();
+  });
+  it('retains explicit repository interest under its source project after service recreation', async () => {
+    const t = setup();
+    expect(await t.service().repositoryTargets(t.plan.projectId)).toEqual([]);
+    await t.service().prepare(t.input, t.caller);
+    expect(await t.service().repositoryTargets(t.plan.projectId)).toEqual([t.plan.repositoryUrl]);
+    expect(await t.service().repositoryTargets('another-project')).toEqual([]);
+  });
+  it('preserves saved fingerprints when push is explicitly set to its historical default', async () => {
+    const t = setup();
+    const prepared = await t.service().prepare(t.input, t.caller);
+    expect(await t.service().prepare({ ...t.input, push: true }, t.caller)).toEqual(prepared);
+    await expect(t.service().prepare({ ...t.input, push: false }, t.caller)).rejects.toThrow(
+      'different parameters'
+    );
+  });
+  it('skips pushing when the prepared source uses an existing remote commit', async () => {
+    const t = setup();
+    vi.mocked(t.deps.prepare).mockResolvedValue({ ...t.plan, push: false });
+    const result = await t.service().create({ ...t.input, push: false }, t.caller);
+    expect(result.phase).toBe('complete');
+    expect(t.deps.push).not.toHaveBeenCalled();
+    expect(t.deps.check).toHaveBeenLastCalledWith(expect.objectContaining({ push: false }), true);
+  });
+  it('saves platform ambiguity candidates for the same UI and MCP recovery path', async () => {
+    const t = setup();
+    const failure = {
+      type: 'pull_request_match_ambiguous' as const,
+      message: 'Choose an existing PR',
+      candidates: [{ url: `${t.plan.repositoryUrl}/pull/7`, number: 7 }],
+    };
+    vi.mocked(t.deps.ensure).mockRejectedValue(new TaskPullRequestFailure(failure));
+    await expect(t.service().create(t.input, t.caller)).rejects.toThrow(failure.message);
+    expect((await t.service().list(t.input.taskId, t.caller))[0]?.failure).toEqual(failure);
+  });
   it('persists a preview before network writes and freezes resolved defaults across recreation', async () => {
     const t = setup();
     const prepared = await t.service().prepare(t.input, t.caller);

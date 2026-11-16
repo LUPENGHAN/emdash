@@ -1,6 +1,7 @@
 import { defineVersionedSchema } from '@emdash/core/primitives/versioned-schema/api';
 import { localBranchRefSchema, pushTargetSchema } from '@emdash/core/runtimes/git/api';
 import { z } from 'zod';
+import { pullRequestErrorSchema } from '@core/services/pull-requests/api/errors';
 
 export const taskPullRequestInputSchema = z.object({
   taskId: z.string().min(1),
@@ -12,6 +13,8 @@ export const taskPullRequestInputSchema = z.object({
   pushRemote: z.string().min(1).optional(),
   repositoryUrl: z.string().min(1).optional(),
   base: z.string().min(1).optional(),
+  push: z.boolean().optional(),
+  workspaceId: z.string().optional(),
 });
 export type TaskPullRequestInput = z.infer<typeof taskPullRequestInputSchema>;
 
@@ -28,21 +31,29 @@ export const taskPullRequestPlanSchema = z.object({
   title: z.string(),
   body: z.string().optional(),
   draft: z.boolean(),
+  push: z.boolean().optional(),
 });
 export type TaskPullRequestPlan = z.infer<typeof taskPullRequestPlanSchema>;
 
+const taskPullRequestV1 = z.object({
+  version: z.literal('1'),
+  requestId: z.string(),
+  fingerprint: z.string(),
+  plan: taskPullRequestPlanSchema.omit({ push: true }),
+  phase: z.enum(['prepared', 'pushing', 'pushed', 'creating', 'complete']),
+  result: z.object({ url: z.string(), number: z.number().int().positive() }).optional(),
+  error: z.string().optional(),
+});
 export const taskPullRequestRecord = defineVersionedSchema()
-  .initial(
-    '1',
-    z.object({
-      version: z.literal('1'),
-      requestId: z.string(),
-      fingerprint: z.string(),
+  .initial('1', taskPullRequestV1)
+  .version(
+    '2',
+    taskPullRequestV1.extend({
+      version: z.literal('2'),
       plan: taskPullRequestPlanSchema,
-      phase: z.enum(['prepared', 'pushing', 'pushed', 'creating', 'complete']),
-      result: z.object({ url: z.string(), number: z.number().int().positive() }).optional(),
-      error: z.string().optional(),
-    })
+      failure: pullRequestErrorSchema.optional(),
+    }),
+    (record) => ({ ...record, version: '2' as const })
   )
   .build();
 export type TaskPullRequestRecord = typeof taskPullRequestRecord.Type;

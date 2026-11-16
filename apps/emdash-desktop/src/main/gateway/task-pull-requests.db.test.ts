@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -53,13 +53,16 @@ async function setup() {
   // A fixture-only SSH executable maps this one logical fork to a local bare repository.
   // Git still performs its real receive-pack/ref update through the Host Wire job.
   const ssh = join(dir, 'fixture-ssh');
+  const transfers = join(dir, 'transfers.txt');
   await writeFile(
     ssh,
     `#!/usr/bin/env node
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
-if (!args.includes('git@fixture.invalid') || args.at(-1) !== "git-receive-pack 'personal/sdk.git'") process.exit(42);
-const result = spawnSync('git-receive-pack', [${JSON.stringify(fork)}], { stdio: 'inherit', windowsHide: true });
+const command = args.at(-1);
+if (!args.includes('git@fixture.invalid') || !["git-receive-pack 'personal/sdk.git'", "git-upload-pack 'personal/sdk.git'"].includes(command)) process.exit(42);
+require('node:fs').appendFileSync(${JSON.stringify(transfers)}, command + '\\n');
+const result = spawnSync(command.startsWith('git-upload-pack') ? 'git-upload-pack' : 'git-receive-pack', [${JSON.stringify(fork)}], { stdio: 'inherit', windowsHide: true });
 process.exit(result.status ?? 1);
 `,
     { mode: 0o755 }
@@ -185,6 +188,7 @@ process.exit(result.status ?? 1);
         registerRepository: registered,
         ensurePullRequest: ensure,
       }) as unknown as PullRequestsRuntimeClient,
+    refreshRepositoryInterest: vi.fn(async () => {}),
     access: { mayAccessTask: authorize },
     assertCaller: vi.fn(async () => {}),
   };
@@ -211,6 +215,7 @@ process.exit(result.status ?? 1);
     registered,
     credentials,
     release,
+    transfers,
     fixture,
     owner: (id: string) => {
       owner = id;
@@ -234,8 +239,8 @@ it('pushes exactly the frozen task commit, targets the configured organization b
   await expect(t.service().run(t.input.taskId, t.input.requestId, t.caller)).rejects.toThrow(
     'Lost platform response'
   );
-  expect(t.credentials).toHaveBeenCalledOnce();
-  expect(t.release).toHaveBeenCalledOnce();
+  expect(t.credentials).toHaveBeenCalledTimes(2);
+  expect(t.release).toHaveBeenCalledTimes(2);
   expect(
     (await exec('git', ['--git-dir', t.fork, 'rev-parse', 'refs/heads/feat/sdk'])).stdout.trim()
   ).toBe(t.oid);
@@ -261,7 +266,51 @@ it('pushes exactly the frozen task commit, targets the configured organization b
       base: 'develop',
     })
   );
-  expect(t.credentials).toHaveBeenCalledOnce();
+  expect(t.credentials).toHaveBeenCalledTimes(3);
+  expect(t.release).toHaveBeenCalledTimes(3);
+});
+
+it('creates from the pinned remote commit without publishing local commits, including later local work', async () => {
+  const t = await setup();
+  await t.git('push', t.fork, 'develop:refs/heads/feat/sdk');
+  const prepared = await t.service().prepare({ ...t.input, push: false }, t.caller);
+  expect(prepared.plan).toMatchObject({ oid: t.baseline, push: false });
+  expect(prepared.plan.oid).not.toBe(t.oid);
+  await writeFile(join(t.checkout, 'local-only.ts'), 'export const local = true;');
+  await exec('git', ['add', '.'], { cwd: t.checkout });
+  await exec('git', ['commit', '-m', 'Keep local work'], { cwd: t.checkout });
+  const local = (await exec('git', ['rev-parse', 'HEAD'], { cwd: t.checkout })).stdout.trim();
+  expect((await t.service().run(t.input.taskId, t.input.requestId, t.caller)).phase).toBe(
+    'complete'
+  );
+  expect(
+    (await exec('git', ['--git-dir', t.fork, 'rev-parse', 'refs/heads/feat/sdk'])).stdout.trim()
+  ).toBe(t.baseline);
+  expect((await exec('git', ['rev-parse', 'HEAD'], { cwd: t.checkout })).stdout.trim()).toBe(local);
+  expect(await readFile(t.transfers, 'utf8')).not.toContain('git-receive-pack');
+  expect(t.ensure).toHaveBeenCalledOnce();
+});
+
+it('refuses a changed remote commit without pushing or calling the platform', async () => {
+  const t = await setup();
+  await t.git('push', t.fork, 'develop:refs/heads/feat/sdk');
+  await t.service().prepare({ ...t.input, push: false }, t.caller);
+  await exec('git', ['--git-dir', t.fork, 'fetch', t.checkout, 'feat/sdk']);
+  await exec('git', ['--git-dir', t.fork, 'update-ref', 'refs/heads/feat/sdk', t.oid]);
+  await expect(t.service().run(t.input.taskId, t.input.requestId, t.caller)).rejects.toThrow(
+    'published source commit changed'
+  );
+  expect(await readFile(t.transfers, 'utf8')).not.toContain('git-receive-pack');
+  expect(t.ensure).not.toHaveBeenCalled();
+});
+
+it('does not create an unpublished branch when the user chose to skip push', async () => {
+  const t = await setup();
+  await expect(t.service().prepare({ ...t.input, push: false }, t.caller)).rejects.toThrow(
+    'not published'
+  );
+  expect(await readFile(t.transfers, 'utf8')).not.toContain('git-receive-pack');
+  expect(t.ensure).not.toHaveBeenCalled();
 });
 
 it('stops a stale remote before minting credentials or creating a PR', async () => {

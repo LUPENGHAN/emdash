@@ -106,6 +106,24 @@ export function createSourceControlWireController(
       ),
     },
     checkout: {
+      readRemoteBranch: (input, meta) =>
+        withIdentityRuntime(
+          options.runtimes,
+          options.workspaceIdentity.resolve(input.workspaceId),
+          (runtime, identity) =>
+            withOperationCredentials(options, identity, undefined, (credentials) =>
+              runtime.git.checkout.readRemoteBranch(
+                {
+                  checkout: hostPathFromNative(identity.path),
+                  remote: input.remote,
+                  branch: input.branch,
+                  expectedRemoteFingerprint: input.expectedRemoteFingerprint,
+                  credentials,
+                },
+                callOptions(meta)
+              )
+            )
+        ),
       model: checkoutModel,
       getChangedFiles: (input, meta) =>
         withCheckoutRuntime(options, input, (git, mapped) =>
