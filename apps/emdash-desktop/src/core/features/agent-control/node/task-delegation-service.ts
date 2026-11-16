@@ -2,18 +2,47 @@ import { createHash, randomUUID } from 'node:crypto';
 import { defineVersionedSchema } from '@emdash/core/primitives/versioned-schema/api';
 import { KeyedMutex } from '@emdash/shared/concurrency';
 import { z } from 'zod';
+import {
+  projectBaselineSelectionSchema,
+  type ProjectBaselineSelection,
+} from '@core/features/projects/api/baseline-sync';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
 import type { TaskDelegationStatus } from '../api/delegations';
 import type { DelegationResources } from '../api/node/delegation-resources';
 
 export type CreateDelegatedTask = Extract<AgentControlAction, { kind: 'create_task' }>;
+export type PreparedTaskDelegation = CreateTaskParams & {
+  /** The local source revision in params remains the executable input across retries. */
+  baselineSelection?: ProjectBaselineSelection;
+};
+const preparedTaskDelegationSchema = z
+  .custom<CreateTaskParams>()
+  .and(
+    z.object({
+      baselineSelection: projectBaselineSelectionSchema.optional(),
+    })
+  )
+  .refine(
+    (params) => {
+      const selected = params.baselineSelection;
+      if (!selected) return true;
+      const git = params.workspaceConfig?.git;
+      return (
+        params.projectId === selected.target.projectId &&
+        git?.kind === 'create-branch' &&
+        git.fromBranch.type === 'local' &&
+        git.fromBranch.branch === selected.oid
+      );
+    },
+    { message: 'The delegation source does not match its approved baseline snapshot.' }
+  );
 const delegationV1 = z.object({
   version: z.literal('1'),
   caller: z.custom<AgentCaller>(),
   request: z.custom<CreateDelegatedTask>(),
   fingerprint: z.string(),
-  params: z.custom<CreateTaskParams>(),
+  params: preparedTaskDelegationSchema,
   phase: z.enum(['prepared', 'created', 'activated', 'starting', 'started']),
   path: z.string().optional(),
   error: z.string().optional(),
@@ -43,7 +72,7 @@ export type TaskDelegationDependencies = {
       conversationId: string;
       role?: 'coordination';
     }
-  ): Promise<CreateTaskParams>;
+  ): Promise<PreparedTaskDelegation>;
   findTask(taskId: string, projectId: string): Promise<'missing' | 'available' | 'deleted'>;
   create(params: CreateTaskParams): Promise<void>;
   activate(taskId: string, projectId: string): Promise<{ path: string }>;
@@ -133,6 +162,9 @@ export class TaskDelegationService {
       error: saved.record.error,
       waitReason: saved.record.waitReason,
       canRetry: !!saved.record.error && saved.record.phase !== 'started',
+      ...(saved.record.params.baselineSelection && {
+        baselineSelection: saved.record.params.baselineSelection,
+      }),
     };
   }
   private async context(record: DelegationRecord) {

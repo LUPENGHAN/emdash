@@ -4,6 +4,7 @@ import { cell } from '@emdash/wire/state';
 import { openFixture } from '@tooling/utils/db';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ProjectAttachmentState } from '@core/features/projects/api/attachments';
+import type { ProjectBaselineSelection } from '@core/features/projects/api/baseline-sync';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
 import type { ProjectProvider } from '@core/features/projects/api/node/project-provider';
 import type { TaskService } from '@core/features/tasks/api/node/task-service';
@@ -91,6 +92,77 @@ async function setup(options: { directory?: boolean } = {}) {
   };
   return { dependencies, caller, track, state, createTask, provisionWorkspace };
 }
+
+it('freezes the approved commit and evidence across dependency waiting and service recovery', async () => {
+  const t = await setup();
+  const oid = 'a'.repeat(40);
+  const selection: ProjectBaselineSelection = {
+    oid,
+    checkedAt: 100,
+    offline: false,
+    revision: 0,
+    remoteFingerprint: null,
+    verification: 'not-configured',
+    verifiedAt: null,
+    target: {
+      projectId: t.caller.projectId,
+      repositoryKey: 'repo',
+      workspaceId: 'root',
+      host: LOCAL_HOST_REF,
+      checkout: '/repo',
+      baselineRef: 'refs/heads/develop' as ProjectBaselineSelection['target']['baselineRef'],
+      remote: null,
+      upstreamRef: null,
+    },
+  };
+  const prepareBaseline = vi.fn(async () => structuredClone(selection));
+  let waiting = true;
+  const deps = {
+    ...t.dependencies,
+    prepareBaseline,
+    getBlocker: async () => (waiting ? 'Dependency pending' : null),
+  };
+  const request = {
+    kind: 'create_task' as const,
+    requestId: 'frozen-base',
+    name: 'Frozen',
+    prompt: 'Implement it',
+  };
+  const first = createBackendTaskDelegation(deps);
+  const dispatched = JSON.parse((await first.dispatch(t.caller, request)).text);
+  expect(t.createTask).not.toHaveBeenCalled();
+  expect((await first.status(dispatched.task_id))?.baselineSelection?.oid).toBe(oid);
+  prepareBaseline.mockResolvedValue({ ...selection, oid: 'b'.repeat(40) });
+  waiting = false;
+  const restored = createBackendTaskDelegation(deps);
+  await restored.retry(t.caller, dispatched.task_id);
+  expect(t.createTask).toHaveBeenCalledOnce();
+  expect(vi.mocked(t.createTask).mock.calls[0]?.[0].workspaceConfig.git).toMatchObject({
+    kind: 'create-branch',
+    fromBranch: { type: 'local', branch: oid },
+  });
+  expect((await restored.status(dispatched.task_id))?.baselineSelection).toEqual(selection);
+  expect(prepareBaseline).toHaveBeenCalledOnce();
+});
+
+it('does not create resources or start an agent when baseline checks reject delegation', async () => {
+  const t = await setup();
+  const prepareBaseline = vi.fn(async () => {
+    throw new Error('Baseline verification failed');
+  });
+  const service = createBackendTaskDelegation({ ...t.dependencies, prepareBaseline });
+  await expect(
+    service.dispatch(t.caller, {
+      kind: 'create_task',
+      requestId: 'blocked-base',
+      name: 'Blocked',
+      prompt: 'Fix it',
+    })
+  ).rejects.toThrow('verification failed');
+  expect(t.createTask).not.toHaveBeenCalled();
+  expect(t.provisionWorkspace).not.toHaveBeenCalled();
+  expect(t.dependencies.startConversation).not.toHaveBeenCalled();
+});
 
 it('uses the project baseline and frozen defaults without any renderer or caller branch lookup', async () => {
   const test = await setup();

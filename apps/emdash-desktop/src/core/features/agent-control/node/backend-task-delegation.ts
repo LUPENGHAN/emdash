@@ -4,6 +4,10 @@ import type { Scope } from '@emdash/shared/concurrency';
 import { and, eq } from 'drizzle-orm';
 import { getPlugin } from '@core/features/agents/api/node/plugin-registry';
 import { assertModelEffort } from '@core/features/model-providers/api/model-effort';
+import {
+  projectBaselineSelectionSchema,
+  type ProjectBaselineSelection,
+} from '@core/features/projects/api/baseline-sync';
 import { createBackgroundProjectAccess } from '@core/features/projects/api/node/attached-project';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
 import { resolveProjectEffectiveSettings } from '@core/features/projects/api/node/settings/effective-settings';
@@ -21,6 +25,7 @@ import {
   TaskDelegationService,
   type DelegationRecord,
   type TaskDelegationDependencies,
+  type PreparedTaskDelegation,
 } from './task-delegation-service';
 
 type Dependencies = {
@@ -32,6 +37,7 @@ type Dependencies = {
   startConversation(params: CreateTaskParams): Promise<void>;
   getAgentSettings(agentId: string): Promise<ProviderCustomConfig | undefined>;
   getBranchDefaults(): Promise<{ branchPrefix?: string; appendRandomBranchSuffix?: boolean }>;
+  prepareBaseline?(projectId: string): Promise<ProjectBaselineSelection>;
   authorize(
     caller: AgentCaller,
     targetProjectId: string,
@@ -62,7 +68,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
     onCreated: deps.onCreated,
     recoveryContext: deps.recoveryContext,
     onStateChange: deps.onStateChange,
-    prepare: async (caller, request, ids): Promise<CreateTaskParams> => {
+    prepare: async (caller, request, ids): Promise<PreparedTaskDelegation> => {
       const defaults =
         ids.role === 'coordination' ? undefined : await deps.getDelegationDefaults?.(caller);
       request = {
@@ -71,6 +77,16 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
       } as typeof request;
       const projectId = request.projectId ?? caller.projectId;
       const project = await projectFor(projectId);
+      const baselineSelection =
+        ids.role !== 'coordination' && !request.baseBranch && deps.prepareBaseline
+          ? projectBaselineSelectionSchema.parse(await deps.prepareBaseline(projectId))
+          : undefined;
+      if (
+        baselineSelection &&
+        (baselineSelection.target.projectId !== projectId ||
+          isManagementBranch(baselineSelection.target.baselineRef))
+      )
+        throw new Error('The approved baseline does not belong to the target code Project.');
       let git: WorkspaceConfig['git'];
       let workspace: WorkspaceConfig['workspace'] = { kind: 'new-worktree' };
       if (!project.hasRepository) {
@@ -119,9 +135,13 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
         git = {
           kind: 'create-branch',
           branchName,
-          fromBranch: baseRemote
-            ? { type: 'remote', branch: base.branch, remote: baseRemote }
-            : { type: 'local', branch: base.branch },
+          // A local source accepts Git revisions. Use the reviewed full OID so a queued
+          // task cannot move with either the local baseline or a remote tracking ref.
+          fromBranch: baselineSelection
+            ? { type: 'local', branch: baselineSelection.oid }
+            : baseRemote
+              ? { type: 'remote', branch: base.branch, remote: baseRemote }
+              : { type: 'local', branch: base.branch },
         };
       }
       if (ids.role === 'coordination' && !request.prompt)
@@ -171,6 +191,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
       return {
         id: ids.taskId,
         projectId,
+        ...(baselineSelection && { baselineSelection }),
         taskConfig: {
           version: '1',
           name: request.name,
