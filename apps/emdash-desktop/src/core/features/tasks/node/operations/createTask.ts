@@ -48,6 +48,7 @@ import type {
   TaskLifecycleStatus,
 } from '@core/primitives/tasks/api';
 import { compileWorktreeGitPlan, type WorktreeGitPlan } from '@core/primitives/workspaces/api';
+import { isManagementBranch } from '@core/primitives/workspaces/api/management-branch';
 import type { AppDb, DrizzleTx } from '@core/services/app-db/node/db';
 import { appDbPokes } from '@core/services/app-db/node/pokes';
 import { projects, tasks } from '@core/services/app-db/node/schema';
@@ -90,6 +91,25 @@ export async function prepareCreateTask(
   const project = attached.data;
 
   const { workspaceConfig } = params;
+  if (workspaceConfig.git.kind === 'management' && params.taskConfig.role !== 'coordination')
+    return err({
+      type: 'provision-failed',
+      message: 'Management workspaces belong to main agents.',
+    });
+  const git = workspaceConfig.git;
+  const codeReferences =
+    git.kind === 'create-branch'
+      ? [git.branchName, git.fromBranch.branch]
+      : git.kind === 'use-branch'
+        ? [git.branchName]
+        : git.kind === 'pr-branch'
+          ? [git.taskBranch ?? git.headBranch]
+          : [];
+  if (params.taskConfig.role !== 'coordination' && codeReferences.some(isManagementBranch))
+    return err({
+      type: 'provision-failed',
+      message: 'Management branches cannot be used for code tasks.',
+    });
   const initialStatus: TaskLifecycleStatus = params.taskConfig.initialStatus ?? 'in_progress';
 
   let workspaceId: string;
@@ -243,6 +263,7 @@ export async function prepareCreateTask(
       repositoryPath: project.repoPath,
       workspaceId,
       branch: gitPlan.branch,
+      ...(gitPlan.purpose && { purpose: gitPlan.purpose }),
       ...(gitPlan.baseRef !== undefined && { baseRef: gitPlan.baseRef }),
       path: workspacePath,
       preservePatterns: compiled.preservePatterns,

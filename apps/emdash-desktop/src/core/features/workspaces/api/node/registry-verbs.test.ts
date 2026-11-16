@@ -129,3 +129,43 @@ describe('createWorktreeThroughRegistry', () => {
     });
   });
 });
+
+it('uses the management-only host verb without falling back to ordinary worktree creation', async () => {
+  const contract = defineContract({
+    createWorkspace: workspaceRegistryContract.createWorkspace,
+    createManagementWorktree: workspaceRegistryContract.createManagementWorktree,
+  });
+  const create = vi.fn(async (input: { workspaceId: string; path: string }) =>
+    ok(hostRecord({ id: input.workspaceId, path: input.path }))
+  );
+  const wire = createTestWire(contract, {
+    createWorkspace: async (input) =>
+      ok(hostRecord({ id: input.workspaceId, path: input.path, kind: 'repository' })),
+    createManagementWorktree: create,
+  });
+  const runtimes = { client: async () => ok({ workspaceRegistry: wire.client }) } as never;
+  try {
+    expect(
+      await createWorktreeThroughRegistry(runtimes, {
+        ...spec,
+        purpose: 'management',
+        baseRef: undefined,
+      })
+    ).toEqual(ok(undefined));
+    expect(create).toHaveBeenCalledWith(
+      {
+        workspaceId: spec.workspaceId,
+        repositoryId: 'ws-repo',
+        branch: spec.branch,
+        path: spec.path,
+      },
+      expect.anything()
+    );
+    expect(
+      await createWorktreeThroughRegistry(runtimes, { ...spec, purpose: 'management' })
+    ).toMatchObject({ success: false, error: { stage: 'prepare' } });
+    expect(create).toHaveBeenCalledOnce();
+  } finally {
+    await wire.dispose();
+  }
+});

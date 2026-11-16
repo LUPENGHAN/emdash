@@ -188,5 +188,45 @@ it('applies worker defaults to delegation and keeps them out of the main runtime
     { taskId: 'main', conversationId: 'main-conversation', role: 'coordination' }
   );
   expect(defaults).not.toHaveBeenCalled();
+  expect(main.workspaceConfig.git).toEqual({
+    kind: 'management',
+    branchName: 'emdash/manage/main',
+  });
   expect(main.taskConfig.initialConversation).toMatchObject({ provider: 'claude', effort: 'low' });
+});
+
+it('prepares a management workspace without a code baseline while refusing code delegation', async () => {
+  const test = await setup();
+  const attached = test.dependencies.projects.requireAttached(test.caller.projectId);
+  if (!attached.success) throw new Error('Project unavailable');
+  vi.spyOn(attached.data.repoFacts, 'get').mockImplementation(async () => ({
+    remotes: [],
+    localBranches: [],
+  }));
+  const service = createBackendTaskDelegation(test.dependencies);
+  const request = {
+    kind: 'create_task' as const,
+    name: 'Main',
+    prompt: 'Coordinate',
+    providerId: 'claude',
+    connection: 'official' as const,
+    effort: 'low',
+  };
+  const main = await service.resources.prepare(test.caller, request, {
+    taskId: 'main',
+    conversationId: 'main-conversation',
+    role: 'coordination',
+  });
+  expect(main.workspaceConfig.git).toEqual({
+    kind: 'management',
+    branchName: 'emdash/manage/main',
+  });
+  expect(main.taskConfig.role).toBe('coordination');
+  await expect(
+    service.resources.prepare(test.caller, request, {
+      taskId: 'code',
+      conversationId: 'code-conversation',
+    })
+  ).rejects.toThrow('code baseline');
+  expect(test.createTask).not.toHaveBeenCalled();
 });

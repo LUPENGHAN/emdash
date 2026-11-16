@@ -57,7 +57,7 @@ export type ResultEvent = {
   error?: string;
 };
 export type Coordinator = {
-  version: '4';
+  version: '5';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -136,6 +136,30 @@ const coordinatorV3 = coordinatorV1.extend({
     })
   ),
 });
+const coordinatorV4 = coordinatorV3.extend({
+  version: z.literal('4'),
+  tasks: z.record(
+    z.string(),
+    coordinatorV3.shape.tasks.valueType.extend({
+      state: z.enum(['assigned', 'blocked', 'cancelled', 'review', 'changes_requested', 'done']),
+      dependsOn: z.array(z.string()).optional(),
+      blockedReason: z.string().optional(),
+      taskCreated: z.boolean().optional(),
+      createdAt: z.number().optional(),
+      dependencyResults: z
+        .array(
+          z.object({
+            taskId: z.string(),
+            projectId: z.string(),
+            version: z.number().int().positive(),
+            commits: z.array(z.string()),
+          })
+        )
+        .optional(),
+    })
+  ),
+});
+
 export const coordinatorRecord = defineVersionedSchema()
   .initial('1', coordinatorV1)
   .version('2', coordinatorV1.extend({ version: z.literal('2') }), (record) => ({
@@ -143,38 +167,10 @@ export const coordinatorRecord = defineVersionedSchema()
     version: '2' as const,
   }))
   .version('3', coordinatorV3, (record) => ({ ...record, version: '3' as const }))
+  .version('4', coordinatorV4, (record) => ({ ...record, version: '4' as const }))
   .version(
-    '4',
-    coordinatorV3.extend({
-      version: z.literal('4'),
-      tasks: z.record(
-        z.string(),
-        coordinatorV3.shape.tasks.valueType.extend({
-          state: z.enum([
-            'assigned',
-            'blocked',
-            'cancelled',
-            'review',
-            'changes_requested',
-            'done',
-          ]),
-          dependsOn: z.array(z.string()).optional(),
-          blockedReason: z.string().optional(),
-          taskCreated: z.boolean().optional(),
-          createdAt: z.number().optional(),
-          dependencyResults: z
-            .array(
-              z.object({
-                taskId: z.string(),
-                projectId: z.string(),
-                version: z.number().int().positive(),
-                commits: z.array(z.string()),
-              })
-            )
-            .optional(),
-        })
-      ),
-    }),
-    (record) => ({ ...record, version: '4' as const })
+    '5',
+    coordinatorV1.extend({ version: z.literal('5'), tasks: coordinatorV4.shape.tasks }),
+    (record) => ({ ...record, version: '5' as const })
   )
   .build();

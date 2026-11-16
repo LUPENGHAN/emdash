@@ -40,3 +40,5 @@
 - ACP background prompts carry `origin: background`; queued user input takes priority at turn boundaries without interrupting the active turn. Main-agent result notices show a readable summary and keep event IDs, instructions and structured payloads in hidden context.
 
 - The task UI lists persistent pending messages and undelivered main-agent results through `agentControl` Wire procedures. Explicit handling/dismissal prevents message replay; resolving a result notification only acknowledges its event and never completes the task. In-flight deliveries are hidden until their acceptance is known or recovery establishes uncertainty.
+
+- New main-agent runtimes use independent management worktrees through the dedicated Host verb. Ordinary task creation rejects management workspace configs and the reserved management branch namespace, including qualified refs. Existing main-agent checkouts remain intact until their document migration runs.

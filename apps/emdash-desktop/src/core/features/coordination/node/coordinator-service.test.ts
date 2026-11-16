@@ -125,6 +125,7 @@ describe('main agent coordination', () => {
     expect(test.resources.create).toHaveBeenCalledOnce();
     expect(first.params?.taskConfig.role).toBe('coordination');
     expect(first.params?.workspaceConfig.git).toMatchObject({
+      kind: 'management',
       branchName: `emdash/manage/${first.taskId}`,
     });
     expect(first.params?.taskConfig.initialConversation?.initialQueue).toBeUndefined();
@@ -432,11 +433,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('4');
+    expect((await test.service.ensureProject('project')).version).toBe('5');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('4');
+    expect(test.records.get(record.id)?.version).toBe('5');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -861,4 +862,26 @@ it('allows explicit user handling of an undelivered result without completing or
   await expect(test.service.resolveResultEventForUser(main.id, 'foreign-event')).rejects.toThrow(
     'no longer assigned'
   );
+});
+
+it('preserves a legacy main checkout until its separate document migration runs', async () => {
+  const test = setup();
+  const first = await test.service.openProject('project');
+  const saved = test.records.get(first.id);
+  if (!saved?.params) throw new Error('Missing main runtime');
+  saved.params.workspaceConfig.git = {
+    kind: 'create-branch',
+    branchName: `emdash/manage/${first.taskId}`,
+    fromBranch: { type: 'local', branch: 'main' },
+  };
+  test.records.set(first.id, { ...saved, version: '4' } as unknown as Coordinator);
+  vi.mocked(test.resources.prepare).mockClear();
+  vi.mocked(test.resources.create).mockClear();
+  const reopened = await new CoordinatorService(test.deps).open(first.id);
+  expect(reopened.version).toBe('5');
+  expect(reopened.params?.workspaceConfig.git).toEqual(saved.params.workspaceConfig.git);
+  expect(reopened.taskId).toBe(first.taskId);
+  expect(reopened.conversationId).toBe(first.conversationId);
+  expect(test.resources.prepare).not.toHaveBeenCalled();
+  expect(test.resources.create).not.toHaveBeenCalled();
 });

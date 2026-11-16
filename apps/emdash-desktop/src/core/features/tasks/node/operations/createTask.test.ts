@@ -237,6 +237,71 @@ describe('createTask', () => {
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
 
+  it('refuses management history for ordinary code tasks before creating resources', async () => {
+    const result = await createTask(db, projects, hostIsReachable, {
+      id: 'task-1',
+      projectId: 'project-1',
+      taskConfig: { version: '1', name: 'Code' },
+      workspaceConfig: {
+        version: '2',
+        git: { kind: 'management', branchName: 'emdash/manage/main' },
+        workspace: { kind: 'new-worktree' },
+      },
+    });
+    expect(result).toMatchObject({ success: false, error: { type: 'provision-failed' } });
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(hostConversations.create).not.toHaveBeenCalled();
+    expect(workspaceRegistry.createWorktree).not.toHaveBeenCalled();
+  });
+
+  it.each(['source', 'destination'] as const)(
+    'refuses the management namespace as a code-task %s',
+    async (location) => {
+      const result = await createTask(db, projects, hostIsReachable, {
+        id: 'task-1',
+        projectId: 'project-1',
+        taskConfig: { version: '1', name: 'Code' },
+        workspaceConfig: {
+          version: '2',
+          git: {
+            kind: 'create-branch',
+            branchName: location === 'destination' ? 'emdash/manage/task' : 'feature/task',
+            fromBranch: {
+              type: 'local',
+              branch: location === 'source' ? 'emdash/manage/main' : 'main',
+            },
+          },
+          workspace: { kind: 'new-worktree' },
+        },
+      });
+      expect(result).toMatchObject({ success: false, error: { type: 'provision-failed' } });
+      expect(mocks.transaction).not.toHaveBeenCalled();
+      expect(workspaceRegistry.createWorktree).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['refs/heads/emdash/manage/main', 'refs/remotes/fork/emdash/manage/main'])(
+    'refuses qualified management refs as code sources: %s',
+    async (source) => {
+      const result = await createTask(db, projects, hostIsReachable, {
+        id: 'task-1',
+        projectId: 'project-1',
+        taskConfig: { version: '1', name: 'Code' },
+        workspaceConfig: {
+          version: '2',
+          git: {
+            kind: 'create-branch',
+            branchName: 'feature/task',
+            fromBranch: { type: 'local', branch: source },
+          },
+          workspace: { kind: 'new-worktree' },
+        },
+      });
+      expect(result.success).toBe(false);
+      expect(mocks.transaction).not.toHaveBeenCalled();
+    }
+  );
+
   describe('tombstone-aware creation admission (ADR 0006)', () => {
     it('refuses a repository-instance target carrying a pending tombstone', async () => {
       mocks.findWorkspaceTombstoneConflict.mockReturnValue({

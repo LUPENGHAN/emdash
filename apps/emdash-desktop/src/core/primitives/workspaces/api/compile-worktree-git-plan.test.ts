@@ -318,3 +318,12 @@ describe('compileWorktreeGitPlan — GitLab merge requests', () => {
     );
   });
 });
+
+it('compiles management history without a code base or implicit publication', () => {
+  expect(
+    compileWorktreeGitPlan(
+      { kind: 'management', branchName: 'emdash/manage/main' },
+      { baseRemote: null, pushRemote: null }
+    )
+  ).toEqual({ branch: 'emdash/manage/main', purpose: 'management' });
+});

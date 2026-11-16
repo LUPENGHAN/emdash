@@ -12,6 +12,8 @@ import { resolveProjectEffectiveSettings } from '@core/features/projects/api/nod
 import type { TaskService } from '@core/features/tasks/api/node/task-service';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
 import { resolveTaskBranchName, type CreateTaskParams } from '@core/primitives/tasks/api';
+import type { WorkspaceConfig } from '@core/primitives/workspaces/api';
+import { isManagementBranch } from '@core/primitives/workspaces/api/management-branch';
 import type { AppDb } from '@core/services/app-db/node/db';
 import { AppDbKeyValueStore } from '@core/services/app-db/node/key-value-store';
 import { tasks } from '@core/services/app-db/node/schema';
@@ -121,13 +123,6 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
           ? { remote: remote.name, branch: request.baseBranch.slice(remote.name.length + 1) }
           : { remote: null, branch: request.baseBranch };
       }
-      if (!base) throw new Error('Configure the target project code baseline before delegating.');
-      if (base.branch.startsWith('emdash/manage/'))
-        throw new Error('Management branches cannot be code task baselines.');
-      const baseRemote = base.remote
-        ? remotes.find((entry) => entry.name === base.remote)
-        : undefined;
-      if (base.remote && !baseRemote) throw new Error('The code baseline remote is unavailable.');
       const branchDefaults = await deps.getBranchDefaults();
       const slug =
         request.name
@@ -140,6 +135,25 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
         suffix: ids.taskId.slice(0, 8),
         appendRandomSuffix: branchDefaults.appendRandomBranchSuffix ?? true,
       });
+      let git: WorkspaceConfig['git'];
+      if (ids.role === 'coordination')
+        git = { kind: 'management', branchName: `emdash/manage/${ids.taskId}` };
+      else {
+        if (!base) throw new Error('Configure the target project code baseline before delegating.');
+        if (isManagementBranch(base.branch))
+          throw new Error('Management branches cannot be code task baselines.');
+        const baseRemote = base.remote
+          ? remotes.find((entry) => entry.name === base.remote)
+          : undefined;
+        if (base.remote && !baseRemote) throw new Error('The code baseline remote is unavailable.');
+        git = {
+          kind: 'create-branch',
+          branchName,
+          fromBranch: baseRemote
+            ? { type: 'remote', branch: base.branch, remote: baseRemote }
+            : { type: 'local', branch: base.branch },
+        };
+      }
       const agentId = request.providerId ?? caller.providerId;
       const plugin = getPlugin(agentId);
       const type = request.ui === 'chat' ? 'acp' : 'pty';
@@ -183,6 +197,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
         taskConfig: {
           version: '1',
           name: request.name,
+          ...(ids.role && { role: ids.role }),
           ...(request.prompt && {
             initialConversation: {
               id: ids.conversationId,
@@ -210,13 +225,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
         },
         workspaceConfig: {
           version: '2',
-          git: {
-            kind: 'create-branch',
-            branchName,
-            fromBranch: baseRemote
-              ? { type: 'remote', branch: base.branch, remote: baseRemote }
-              : { type: 'local', branch: base.branch },
-          },
+          git,
           workspace: { kind: 'new-worktree' },
         },
       };

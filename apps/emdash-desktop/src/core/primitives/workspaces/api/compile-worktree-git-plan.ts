@@ -10,6 +10,7 @@ import type { WorkspaceConfig } from './workspace-config';
  */
 export type WorktreeGitPlan = {
   branch: string;
+  purpose?: 'management';
   /** Omitted when `gitSetup.fetchBranch` materializes the branch instead. */
   baseRef?: string;
   /** Explicit background publication target; absent when publication is disabled. */
@@ -50,6 +51,8 @@ export function compileWorktreeGitPlan(
   context: WorktreeGitPlanContext
 ): WorktreeGitPlan {
   switch (git.kind) {
+    case 'management':
+      return { branch: git.branchName, purpose: 'management' };
     case 'create-branch':
       return {
         branch: git.branchName,

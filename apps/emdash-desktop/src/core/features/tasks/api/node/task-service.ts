@@ -420,6 +420,7 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
         repositoryPath: project.repoPath,
         workspaceId: workspaceRow.id,
         branch: gitPlan.branch,
+        ...(gitPlan.purpose && { purpose: gitPlan.purpose }),
         ...(gitPlan.baseRef !== undefined && { baseRef: gitPlan.baseRef }),
         path: workspacePath,
         preservePatterns,

@@ -22,6 +22,7 @@ const branchSchema = z.discriminatedUnion('type', [
 const gitSetupSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('none') }),
   z.object({ kind: z.literal('use-branch'), branchName: z.string() }),
+  z.object({ kind: z.literal('management'), branchName: z.string() }),
   z.object({
     kind: z.literal('create-branch'),
     branchName: z.string(),

@@ -260,6 +260,18 @@ try {
   await send.click();
   const main = await waitForCapture('main-session');
   assert.ok(main.mcpUrl, 'The main ACP session was not given its authenticated MCP URL');
+  assert.ok(main.cwd && main.cwd !== repository);
+  await assert.rejects(readFile(join(main.cwd, 'README.md'), 'utf8'), { code: 'ENOENT' });
+  let hasCommonHistory = true;
+  try {
+    await promisify(execFile)('git', ['merge-base', baseline, 'HEAD'], { cwd: main.cwd });
+  } catch (error) {
+    assert.equal(error.code, 1);
+    hasCommonHistory = false;
+  }
+  assert.equal(hasCommonHistory, false, 'The main agent inherited code history');
+  assert.equal(await git('rev-parse', 'HEAD'), baseline);
+
   await waitForPrompt('main agent');
   client = new Client({ name: 'isolated-main-agent', version: '1' });
   await client.connect(new StreamableHTTPClientTransport(new URL(main.mcpUrl)));
@@ -968,6 +980,7 @@ try {
         passed: true,
         checks: [
           'real Electron startup and fixed main agent sidebar',
+          'main agent ran in an independent management history without code files or baseline changes',
           'real ACP protocol with a simulated OpenCode executable',
           'authenticated main and worker MCP identities',
           'real worktree and worker CLI startup with high effort',

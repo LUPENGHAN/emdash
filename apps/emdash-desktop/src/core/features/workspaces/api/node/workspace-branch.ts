@@ -12,6 +12,7 @@ export function deriveBranchName(git: GitSetup): string | null {
     case 'none':
       return null;
     case 'use-branch':
+    case 'management':
     case 'create-branch':
       return git.branchName;
     case 'pr-branch':

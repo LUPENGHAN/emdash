@@ -51,6 +51,7 @@ export type RegistryWorktreeSpec = {
   repositoryPath: string;
   workspaceId: string;
   branch: string;
+  purpose?: 'management';
   /** Optional when `gitSetup.fetchBranch` materializes the branch instead. */
   baseRef?: string;
   path: string;
@@ -70,6 +71,14 @@ export async function createWorktreeThroughRegistry(
   runtimes: Pick<RuntimeBroker, 'client'>,
   spec: RegistryWorktreeSpec
 ): Promise<WorkspaceCreationOutcome> {
+  if (
+    spec.purpose === 'management' &&
+    (spec.baseRef !== undefined || spec.publish !== undefined || spec.gitSetup !== undefined)
+  )
+    return err({
+      stage: 'prepare',
+      message: 'Management worktrees cannot inherit code refs or publication settings.',
+    });
   const client = await runtimes.client(spec.host);
   if (!client.success) {
     return err({ stage: 'resolve-host', message: client.error.message });
@@ -91,16 +100,24 @@ export async function createWorktreeThroughRegistry(
 
   // Waits for the whole pipeline: the contract gives this verb no call deadline, since
   // `git worktree add` on a large repository has no fixed bound.
-  const created = await registry.createWorktree({
-    workspaceId: spec.workspaceId,
-    repositoryId,
-    branch: spec.branch,
-    ...(spec.baseRef !== undefined && { baseRef: spec.baseRef }),
-    path: spec.path,
-    preservePatterns: spec.preservePatterns,
-    ...(spec.publish !== undefined && { publish: spec.publish }),
-    ...(spec.gitSetup !== undefined && { gitSetup: spec.gitSetup }),
-  });
+  const created =
+    spec.purpose === 'management'
+      ? await registry.createManagementWorktree({
+          workspaceId: spec.workspaceId,
+          repositoryId,
+          branch: spec.branch,
+          path: spec.path,
+        })
+      : await registry.createWorktree({
+          workspaceId: spec.workspaceId,
+          repositoryId,
+          branch: spec.branch,
+          ...(spec.baseRef !== undefined && { baseRef: spec.baseRef }),
+          path: spec.path,
+          preservePatterns: spec.preservePatterns,
+          ...(spec.publish !== undefined && { publish: spec.publish }),
+          ...(spec.gitSetup !== undefined && { gitSetup: spec.gitSetup }),
+        });
   if (!created.success) {
     const error = created.error;
     switch (error.type) {

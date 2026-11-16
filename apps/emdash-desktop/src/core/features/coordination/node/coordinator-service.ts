@@ -79,7 +79,7 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '4',
+        version: '5',
         id,
         kind: 'project',
         name: 'Main agent',
@@ -135,7 +135,7 @@ export class CoordinatorService {
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '4',
+        version: '5',
         id,
         name,
         kind: 'cross-project',
@@ -226,9 +226,12 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
           { taskId: record.taskId, conversationId: record.conversationId, role: 'coordination' }
         );
         params.taskConfig.role = 'coordination';
-        if (params.workspaceConfig.git.kind !== 'create-branch')
+        if (params.workspaceConfig.workspace.kind !== 'new-worktree')
           throw new Error('A main agent needs an isolated workspace.');
-        params.workspaceConfig.git.branchName = `emdash/manage/${record.taskId}`;
+        params.workspaceConfig.git = {
+          kind: 'management',
+          branchName: `emdash/manage/${record.taskId}`,
+        };
         // The first turn is user initiated. Instructions are delivered as hidden context on that turn.
         if (params.taskConfig.initialConversation) {
           params.taskConfig.initialConversation.initialQueue = undefined;

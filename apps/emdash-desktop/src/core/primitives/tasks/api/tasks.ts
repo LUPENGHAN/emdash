@@ -24,6 +24,7 @@ import type { WorkspaceConfig } from '@core/primitives/workspaces/api';
 export type GitSetup =
   | { kind: 'none' }
   | { kind: 'use-branch'; branchName: string }
+  | { kind: 'management'; branchName: string }
   | { kind: 'create-branch'; branchName: string; fromBranch: GitBranchRef; pushBranch?: boolean }
   | {
       kind: 'pr-branch';
