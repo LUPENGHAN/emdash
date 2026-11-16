@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react';
 import { reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
+import { coordinationBrowserContributions } from '@core/features/coordination/contributions/browser';
 import {
   getTaskManagerStore,
   getTaskStore,
@@ -144,7 +145,11 @@ const TaskMainPanelContent = observer(function TaskMainPanelContent() {
     return <MissingWorkspaceState />;
   }
 
-  return <ReadyTaskMainPanel />;
+  return (
+    <coordinationBrowserContributions.taskPanel>
+      <ReadyTaskMainPanel />
+    </coordinationBrowserContributions.taskPanel>
+  );
 });
 
 function MissingWorkspaceState({

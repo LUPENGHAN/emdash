@@ -75,7 +75,7 @@ export type Task = {
   conversations: Record<string, number>;
   workspaceGit?: { linesAdded: number; linesDeleted: number };
   workspaceId?: string;
-  type: 'task' | 'automation-run';
+  type: 'task' | 'automation-run' | 'coordination';
   automationRunId?: string;
   automationRunMeta?: AutomationRunMeta;
 };

@@ -15,7 +15,7 @@ import { resolveTaskBranchName, type CreateTaskParams } from '@core/primitives/t
 import type { AppDb } from '@core/services/app-db/node/db';
 import { AppDbKeyValueStore } from '@core/services/app-db/node/key-value-store';
 import { tasks } from '@core/services/app-db/node/schema';
-import type { AgentCaller } from '../api';
+import type { AgentCaller, AgentControlAction } from '../api';
 import { delegationModelSelection } from '../api/model-selection';
 import { TaskDelegationService, type DelegationRecord } from './task-delegation-service';
 
@@ -29,6 +29,10 @@ type Dependencies = {
   getAgentSettings(agentId: string): Promise<ProviderCustomConfig | undefined>;
   getBranchDefaults(): Promise<{ branchPrefix?: string; appendRandomBranchSuffix?: boolean }>;
   authorize(caller: AgentCaller, targetProjectId: string): Promise<void>;
+  onPrepared?(caller: AgentCaller, params: CreateTaskParams): Promise<void>;
+  getDelegationDefaults?(
+    caller: AgentCaller
+  ): Promise<Partial<Extract<AgentControlAction, { kind: 'create_task' }>>>;
 };
 
 /** Retains project attachment while background tasks need their runtime. */
@@ -73,7 +77,14 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
   return new TaskDelegationService({
     store: new AppDbKeyValueStore<Record<string, DelegationRecord>>(deps.db, 'agent-delegations'),
     authorize: deps.authorize,
+    onPrepared: deps.onPrepared,
     prepare: async (caller, request, ids): Promise<CreateTaskParams> => {
+      const defaults =
+        ids.role === 'coordination' ? undefined : await deps.getDelegationDefaults?.(caller);
+      request = {
+        ...defaults,
+        ...Object.fromEntries(Object.entries(request).filter(([, value]) => value !== undefined)),
+      } as typeof request;
       const projectId = request.projectId ?? caller.projectId;
       const project = await projectFor(projectId);
       if (!project.hasRepository) throw new Error('A code task needs a Git repository.');
@@ -99,7 +110,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
         ? remotes.find((entry) => entry.name === base.remote)
         : undefined;
       if (base.remote && !baseRemote) throw new Error('The code baseline remote is unavailable.');
-      const defaults = await deps.getBranchDefaults();
+      const branchDefaults = await deps.getBranchDefaults();
       const slug =
         request.name
           .toLowerCase()
@@ -107,9 +118,9 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
           .replace(/^-+|-+$/g, '') || 'task';
       const branchName = resolveTaskBranchName({
         rawBranch: slug,
-        branchPrefix: defaults.branchPrefix ?? '',
+        branchPrefix: branchDefaults.branchPrefix ?? '',
         suffix: ids.taskId.slice(0, 8),
-        appendRandomSuffix: defaults.appendRandomBranchSuffix ?? true,
+        appendRandomSuffix: branchDefaults.appendRandomBranchSuffix ?? true,
       });
       const agentId = request.providerId ?? caller.providerId;
       const plugin = getPlugin(agentId);

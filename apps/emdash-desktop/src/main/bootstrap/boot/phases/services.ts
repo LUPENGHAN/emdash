@@ -21,6 +21,7 @@ import type { AccountKVSchema } from '@core/features/account/node/services/accou
 import { AccountCredentialStore } from '@core/features/account/node/services/credential-store';
 import { createEmdashAccountService } from '@core/features/account/node/services/emdash-account-service';
 import { ProviderTokenDispatcher } from '@core/features/account/node/services/provider-token-dispatcher';
+import type { AgentCaller } from '@core/features/agent-control/api';
 import type { AgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
 import { createAgentControlDispatcher } from '@core/features/agent-control/node/agent-control-dispatcher';
 import { startAgentControlServer } from '@core/features/agent-control/node/agent-control-server';
@@ -68,6 +69,10 @@ import {
   usageSessionRoots,
 } from '@core/features/conversations/node/usage-stats/usage-attribution';
 import { createUsageStatsService } from '@core/features/conversations/node/usage-stats/usage-stats-service';
+import type { Coordinator } from '@core/features/coordination/api/types';
+import { CoordinatorService } from '@core/features/coordination/node/coordinator-service';
+import { coordinationEvents } from '@core/features/coordination/node/event-host';
+import { createSelectionResolver } from '@core/features/coordination/node/selection-resolver';
 import {
   createGitCredentialsService,
   type GitCredentialsService,
@@ -149,6 +154,7 @@ import {
 } from '@core/features/projects/api/node/settings/effective-settings';
 import { ProjectSettingsService } from '@core/features/projects/api/node/settings/project-settings-service';
 import type { ProjectDeletionDependencies } from '@core/features/projects/node/operations/deleteProject';
+import { getProjects } from '@core/features/projects/node/operations/getProjects';
 import {
   getProjectById,
   getProjectByPath,
@@ -193,7 +199,7 @@ import { startPeriodicSweep } from '@core/primitives/periodic-sweep/node/periodi
 import { DEFAULT_AGENT_GIT_CREDENTIALS } from '@core/primitives/project-settings/api';
 import type { HostReachabilityProbe } from '@core/primitives/ssh/api';
 import { AppDbKeyValueStore } from '@core/services/app-db/node/key-value-store';
-import { conversations, tasks } from '@core/services/app-db/node/schema';
+import { conversations } from '@core/services/app-db/node/schema';
 import { createNotificationService } from '@core/services/notifications/node';
 import { LegacyAccountImports } from '@core/services/provider-accounts/node/migrations/legacy-account-imports';
 import { listProviderAccountSummaries } from '@core/services/provider-accounts/node/provider-account-service';
@@ -280,6 +286,7 @@ export type ServicesBundle = {
   readonly notifications: ReturnType<typeof createNotificationService>;
   readonly previewServerAccess: PreviewServerAccessService;
   readonly promptLibrary: ReturnType<typeof createPromptLibraryService>;
+  readonly coordination: CoordinatorService;
   readonly requirements: RequirementsService;
   readonly modelGateway: ModelGatewayService;
   readonly memory: MemoryService;
@@ -682,9 +689,59 @@ export async function bootServices(
     emit: (event) => memoryEvents.emit(undefined, event),
   });
   // Agent control: Emdash's own MCP tools for every local agent (see agent-control).
+  const coordinationRuntime: { service?: CoordinatorService } = {};
   const taskDelegation: { service?: TaskDelegationService } = {};
+  const assertActiveAgentCaller = async (caller: AgentCaller) => {
+    const actual = await resolveAgentCaller(
+      db,
+      async (workspaceId) => (await workspaceIdentity.resolve(workspaceId))?.path ?? null,
+      caller.conversationId
+    );
+    if (
+      !actual ||
+      actual.projectId !== caller.projectId ||
+      actual.taskId !== caller.taskId ||
+      actual.providerId !== caller.providerId
+    )
+      throw new Error('The calling conversation or task is no longer active.');
+  };
   const agentControl = createAgentControlDispatcher({
     backend: async (caller, action) => {
+      if (
+        ['submit_task_result', 'acknowledge_task_results', 'review_task_result'].includes(
+          action.kind
+        )
+      )
+        await assertActiveAgentCaller(caller);
+      if (action.kind === 'submit_task_result') {
+        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        const receipt = await coordinationRuntime.service.submit(
+          caller,
+          action.taskId ?? caller.taskId,
+          action.requestId,
+          action.result
+        );
+        return { text: JSON.stringify(receipt) };
+      }
+      if (action.kind === 'acknowledge_task_results') {
+        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        await coordinationRuntime.service.acknowledge(caller, action.eventIds);
+        return { text: 'Result events acknowledged.' };
+      }
+      if (action.kind === 'review_task_result') {
+        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        const record = await coordinationRuntime.service.getByTask(caller.taskId);
+        if (!record || !record.tasks[action.taskId])
+          throw new Error('Only the responsible main agent can review this task.');
+        await coordinationRuntime.service.review(
+          record.id,
+          action.taskId,
+          action.accepted,
+          action.note,
+          action.resultVersion
+        );
+        return { text: action.accepted ? 'Task result accepted.' : 'Changes requested.' };
+      }
       if (action.kind !== 'create_task') return undefined;
       if (!taskDelegation.service)
         throw new Error('Task delegation is still starting. Retry after startup.');
@@ -1004,6 +1061,7 @@ export async function bootServices(
     startConversation: async (params) => {
       const conversation = params.taskConfig.initialConversation;
       if (!conversation) return;
+      const context = await coordinationRuntime.service?.instructionsForTask(params.id);
       if (conversation.type !== 'acp') {
         await launchTuiConversation({
           projectId: params.projectId,
@@ -1013,6 +1071,7 @@ export async function bootServices(
           telemetry: telemetryService,
           taskSessions: taskSessionManager,
           initialSize: { cols: 120, rows: 36 },
+          hiddenContext: context,
         });
         return;
       }
@@ -1027,6 +1086,11 @@ export async function bootServices(
       if (!target.acpInput) throw new Error('The delegated ACP session has no runtime target.');
       const runtime = await runtimes.client(target.host);
       if (!runtime.success) throw new Error(`Agent host unavailable: ${runtime.error.type}`);
+      if (context && target.acpInput.initialQueue)
+        target.acpInput.initialQueue = target.acpInput.initialQueue.map((prompt) => ({
+          ...prompt,
+          hiddenContext: [context, prompt.hiddenContext].filter(Boolean).join('\n\n'),
+        }));
       const started = await runtime.data.acp.startSession(
         { ...target.acpInput, mode: target.sessionId ? 'resume' : 'fresh' },
         { timeoutMs: 0 }
@@ -1034,30 +1098,107 @@ export async function bootServices(
       if (!started.success)
         throw new Error(`Agent startup failed: ${JSON.stringify(started.error)}`);
     },
+    onPrepared: async (caller, params) => {
+      await coordinationRuntime.service?.registerDelegation(caller, params);
+    },
+    getDelegationDefaults: async (caller) => {
+      const defaults = await coordinationRuntime.service?.defaultsForCaller(caller);
+      return defaults
+        ? {
+            providerId: defaults.agent,
+            connection: defaults.connection,
+            supplierId: defaults.supplierId,
+            model: defaults.model,
+            effort: defaults.effort,
+          }
+        : {};
+    },
     getAgentSettings: (id) => providerOverrideSettings.getItem(id),
     getBranchDefaults: () => appSettingsService.get('project'),
     authorize: async (caller, targetProjectId) => {
-      const actual = await resolveAgentCaller(
-        db,
-        async (workspaceId) => (await workspaceIdentity.resolve(workspaceId))?.path ?? null,
-        caller.conversationId
-      );
-      if (!actual || actual.projectId !== caller.projectId || actual.taskId !== caller.taskId)
-        throw new Error('The calling conversation is no longer available.');
-      const [sourceTask] = await db
-        .select({ deletedAt: tasks.deletedAt, archivedAt: tasks.archivedAt })
-        .from(tasks)
-        .where(eq(tasks.id, actual.taskId))
-        .limit(1);
-      if (!sourceTask || sourceTask.deletedAt || sourceTask.archivedAt)
-        throw new Error('The calling task is no longer active.');
-      if (targetProjectId !== actual.projectId)
+      await assertActiveAgentCaller(caller);
+      if (targetProjectId !== caller.projectId)
         throw new Error('Cross-project delegation requires a coordinator project grant.');
       const project = await getProjectById(db, targetProjectId);
       if (!project || project.archivedAt)
         throw new Error('The target project is unavailable or archived.');
     },
   });
+  const coordinatorService = new CoordinatorService({
+    store: new AppDbKeyValueStore<Record<string, Coordinator>>(db, 'coordinators'),
+    resources: () => {
+      if (!taskDelegation.service) throw new Error('Task resources are still starting.');
+      return taskDelegation.service.resources;
+    },
+    defaultAgent: () => appSettingsService.get('defaultAgent'),
+    resolveSelection: createSelectionResolver({
+      defaultAgent: () => appSettingsService.get('defaultAgent'),
+      getAgentSettings: (agent) => providerOverrideSettings.getItem(agent),
+      getProviders: async () => (await appSettingsService.get('modelProviders')).providers,
+      getModels: async () => (await appSettingsService.get('gatewayModels')).models,
+    }),
+    assertProjectAvailable: async (projectId) => {
+      const project = await getProjectById(db, projectId);
+      if (!project || project.archivedAt)
+        throw new Error('The project is unavailable or archived.');
+    },
+    setTaskStatus: (taskId, status) =>
+      taskService.updateTaskStatus(taskId, status, telemetryService),
+    emit: (event) => coordinationEvents.emit(undefined, event),
+    reportError: (error, id) =>
+      log.warn('Could not restore main agent state', { id, error: String(error) }),
+    deliver: async (record, eventId, text) => {
+      if (!record.params)
+        throw new Error('Open the main agent and configure its session before automatic delivery.');
+      await taskDelegation.service?.resources.activate(record.taskId, record.projectId);
+      const target = await resolveConversationRuntimeTarget(
+        record.conversationId,
+        workspaceIdentity,
+        db,
+        async (agentId, override) => (await effectiveAgentConfig(agentId, override))?.env,
+        sessionLaunchContexts,
+        prepareAgentLaunch
+      );
+      if (!target.acpInput)
+        throw new Error('Automatic result delivery requires a structured chat session.');
+      const runtime = await runtimes.client(target.host);
+      if (!runtime.success)
+        throw new Error(`The main agent host is unavailable: ${runtime.error.type}`);
+      const attached = await runtime.data.acp.attach(target.acpInput);
+      if (!attached.success)
+        throw new Error(`Could not attach the main agent: ${JSON.stringify(attached.error)}`);
+      const delivered = await runtime.data.acp.sendPrompt(
+        {
+          conversationId: record.conversationId,
+          promptId: eventId,
+          placement: 'queue',
+          prompt: { text },
+        },
+        { timeoutMs: 0 }
+      );
+      if (!delivered.success)
+        throw new Error(`Result delivery failed: ${JSON.stringify(delivered.error)}`);
+    },
+  });
+  coordinationRuntime.service = coordinatorService;
+  appScope.add(
+    projectEvents.on('project:created', async (project) => {
+      await coordinatorService.ensureProject(project.id);
+    })
+  );
+  void getProjects(db)
+    .then(async (projects) => {
+      for (const project of projects) {
+        await coordinatorService.ensureProject(project.id).catch((error) =>
+          log.warn('Could not restore project main agent', {
+            projectId: project.id,
+            error: String(error),
+          })
+        );
+      }
+      await coordinatorService.recover();
+    })
+    .catch((error) => log.warn('Could not restore main agents', { error: String(error) }));
   const delegationRecoveryTimer = setTimeout(() => {
     const report = (error: unknown) =>
       log.warn('Could not recover task delegation', { error: String(error) });
@@ -1511,6 +1652,7 @@ export async function bootServices(
     notifications: notificationService,
     previewServerAccess,
     promptLibrary: promptLibraryService,
+    coordination: coordinatorService,
     requirements: requirementsService,
     memory: memoryService,
     modelGateway,

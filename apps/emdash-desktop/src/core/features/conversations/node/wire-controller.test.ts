@@ -497,6 +497,24 @@ describe('createConversationsWireController', () => {
     expect(sendPrompt).toHaveBeenCalledWith(input, { timeoutMs: 0 });
   });
 
+  it('adds coordinator instructions to user prompts while preserving caller context', async () => {
+    const sendPrompt = vi.fn(async () => ok({ queued: false }));
+    const getHiddenContext = vi.fn(async () => 'Main agent instructions');
+    const controller = setupController({ client: { acp: { sendPrompt } }, getHiddenContext });
+    await controller.call('acp.sendPrompt', {
+      conversationId: target.conversationId,
+      promptId: crypto.randomUUID(),
+      prompt: { text: 'Implement', hiddenContext: 'User context' },
+    });
+    expect(getHiddenContext).toHaveBeenCalledWith(target.taskId);
+    expect(sendPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: { text: 'Implement', hiddenContext: 'Main agent instructions\n\nUser context' },
+      }),
+      { timeoutMs: 0 }
+    );
+  });
+
   it.each(['UNKNOWN_PROCEDURE', 'DISCONNECTED', 'TIMEOUT'] as const)(
     'does not resend a prompt after %s',
     async (code) => {
@@ -754,6 +772,7 @@ describe('createConversationsWireController', () => {
 function setupController(options: {
   client: Record<string, unknown> & { conversations?: object };
   savedOptions?: ProviderOptionValues;
+  getHiddenContext?: (taskId: string) => Promise<string | undefined>;
   host?: HostRef;
   conversationType?: 'acp' | 'pty';
   runtimeError?: RuntimeResolveError;
@@ -769,6 +788,7 @@ function setupController(options: {
   };
   return createConversationsWireController({
     terminalFileSources: { prepare: vi.fn() },
+    getHiddenContext: options.getHiddenContext,
     db: {} as never,
     logger: { warn: vi.fn() } as never,
     runtimes: {

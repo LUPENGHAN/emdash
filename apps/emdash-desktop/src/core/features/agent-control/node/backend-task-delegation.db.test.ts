@@ -158,3 +158,35 @@ it('refuses an explicit management branch before creating any code task', async 
   ).rejects.toThrow('Management branches');
   expect(test.createTask).not.toHaveBeenCalled();
 });
+
+it('applies worker defaults to delegation and keeps them out of the main runtime preparation', async () => {
+  const test = await setup();
+  const defaults = vi.fn(async () => ({
+    providerId: 'codex',
+    effort: 'high',
+    connection: 'official' as const,
+  }));
+  const service = createBackendTaskDelegation({
+    ...test.dependencies,
+    getDelegationDefaults: defaults,
+  });
+  const action = { kind: 'create_task' as const, name: 'Worker', prompt: 'Implement' };
+  const worker = await service.resources.prepare(test.caller, action, {
+    taskId: 'worker',
+    conversationId: 'worker-conversation',
+  });
+  expect(worker.taskConfig.initialConversation?.provider).toBe('codex');
+  defaults.mockClear();
+  const main = await service.resources.prepare(
+    test.caller,
+    {
+      ...action,
+      providerId: 'claude',
+      connection: 'official',
+      effort: 'low',
+    },
+    { taskId: 'main', conversationId: 'main-conversation', role: 'coordination' }
+  );
+  expect(defaults).not.toHaveBeenCalled();
+  expect(main.taskConfig.initialConversation).toMatchObject({ provider: 'claude', effort: 'low' });
+});

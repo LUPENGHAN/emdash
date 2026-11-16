@@ -54,6 +54,7 @@ type ConversationRuntimeHooks = Readonly<{
 export type CreateConversationsWireControllerOptions = Readonly<{
   db: AppDb;
   getDefaultEffort?: (agentId: string) => Promise<string | undefined>;
+  getHiddenContext?: (taskId: string) => Promise<string | undefined>;
   /** Moves a file or folder to the system trash (agent session files). */
   trashItem?: (target: string) => Promise<void>;
   terminalFileSources: TerminalFileSources;
@@ -373,9 +374,23 @@ export function createConversationsWireController(
       terminate: (input, meta) =>
         run(input.conversationId, (client) => client.acp.terminate(input, callOptions(meta))),
       sendPrompt: (input, meta) =>
-        run(input.conversationId, (client) =>
-          client.acp.sendPrompt(input, { ...callOptions(meta), timeoutMs: 0 })
-        ),
+        run(input.conversationId, async (client, target) => {
+          const context = await options.getHiddenContext?.(target.taskId);
+          return client.acp.sendPrompt(
+            context
+              ? {
+                  ...input,
+                  prompt: {
+                    ...input.prompt,
+                    hiddenContext: [context, input.prompt.hiddenContext]
+                      .filter(Boolean)
+                      .join('\n\n'),
+                  },
+                }
+              : input,
+            { ...callOptions(meta), timeoutMs: 0 }
+          );
+        }),
       editQueuedPrompt: (input, meta) =>
         run(input.conversationId, (client) =>
           client.acp.editQueuedPrompt(input, callOptions(meta))

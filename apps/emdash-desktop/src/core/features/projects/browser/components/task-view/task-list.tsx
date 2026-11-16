@@ -37,7 +37,7 @@ import { TaskRow } from './task-row';
 /** The tasks this surface lists: registered, and not automation runs. */
 function listedTasks(taskManager: TaskManagerStore): ReadyTask[] {
   return Array.from(taskManager.tasks.values()).filter(
-    (t): t is ReadyTask => t.state !== 'unregistered' && t.data.type !== 'automation-run'
+    (t): t is ReadyTask => t.state !== 'unregistered' && t.data.type === 'task'
   );
 }
 

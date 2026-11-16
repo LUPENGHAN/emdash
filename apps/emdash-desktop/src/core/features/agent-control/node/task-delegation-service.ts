@@ -4,6 +4,7 @@ import { KeyedMutex } from '@emdash/shared/concurrency';
 import { z } from 'zod';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
+import type { DelegationResources } from '../api/node/delegation-resources';
 
 export type CreateDelegatedTask = Extract<AgentControlAction, { kind: 'create_task' }>;
 export const delegationRecord = defineVersionedSchema()
@@ -36,6 +37,7 @@ export type TaskDelegationDependencies = {
     ids: {
       taskId: string;
       conversationId: string;
+      role?: 'coordination';
     }
   ): Promise<CreateTaskParams>;
   findTask(taskId: string, projectId: string): Promise<'missing' | 'available' | 'deleted'>;
@@ -43,6 +45,7 @@ export type TaskDelegationDependencies = {
   activate(taskId: string, projectId: string): Promise<{ path: string }>;
   /** Must attach to an observed session or start it idempotently, without replaying a prompt. */
   start(params: CreateTaskParams): Promise<void>;
+  onPrepared?(caller: AgentCaller, params: CreateTaskParams): Promise<void>;
 };
 
 function requestFingerprint(request: CreateDelegatedTask, projectId: string): string {
@@ -68,6 +71,9 @@ function requestFingerprint(request: CreateDelegatedTask, projectId: string): st
 export class TaskDelegationService {
   private readonly requests = new KeyedMutex();
   constructor(private readonly deps: TaskDelegationDependencies) {}
+  get resources(): DelegationResources {
+    return this.deps;
+  }
 
   async dispatch(caller: AgentCaller, request: CreateDelegatedTask): Promise<AgentControlResult> {
     const projectId = request.projectId ?? caller.projectId;
@@ -108,6 +114,7 @@ export class TaskDelegationService {
         await this.deps.store.setOrThrow(key, record);
       };
       try {
+        await this.deps.onPrepared?.(caller, record.params);
         const state = await this.deps.findTask(record.params.id, projectId);
         if (state === 'deleted')
           throw new Error(

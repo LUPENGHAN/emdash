@@ -1,5 +1,8 @@
-import { and, eq } from 'drizzle-orm';
-import { conversationRegistryTable as conversations } from '@core/features/conversations/api/node/registry';
+import { and, eq, isNull } from 'drizzle-orm';
+import {
+  conversationRegistryTable as conversations,
+  liveConversations,
+} from '@core/features/conversations/api/node/registry';
 import type { AppDb } from '@core/services/app-db/node/db';
 import { tasks } from '@core/services/app-db/node/schema';
 import type { AgentCaller } from '../api';
@@ -19,11 +22,19 @@ export async function resolveAgentCaller(
       workspaceId: tasks.workspaceId,
     })
     .from(conversations)
-    .leftJoin(
+    .innerJoin(
       tasks,
       and(eq(tasks.id, conversations.taskId), eq(tasks.projectId, conversations.projectId))
     )
-    .where(eq(conversations.id, conversationId))
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        liveConversations(),
+        isNull(conversations.deletionTombstone),
+        isNull(tasks.deletedAt),
+        isNull(tasks.archivedAt)
+      )
+    )
     .limit(1);
   if (!row?.projectId || !row.taskId || !row.providerId) return null;
   return {

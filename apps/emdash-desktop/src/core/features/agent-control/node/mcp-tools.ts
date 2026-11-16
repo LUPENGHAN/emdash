@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { taskResultSchema } from '@core/features/coordination/api/types';
 import { formatMemoryList, formatMemoryRecord } from '@core/features/memory/api/format';
 import {
   MEMORY_DETAIL_MAX,
@@ -290,12 +291,57 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         ...(project_id && { projectId: project_id }),
         ...(request_id && { requestId: request_id }),
         ...(base_branch && { baseBranch: base_branch }),
-        ...(prompt && { prompt, providerId: agent ?? caller.providerId }),
+        ...(prompt && { prompt, ...(agent && { providerId: agent }) }),
         ...(model && { model }),
         ...(supplier_id && { supplierId: supplier_id }),
         ...(connection && { connection }),
         ...(effort !== undefined && { effort }),
         ...(ui && { ui }),
+      })
+  );
+
+  server.registerTool(
+    'submit_task_result',
+    {
+      description:
+        'Submit a delegated task result to its main agent. Include actual checks and unresolved issues. This requests review; it does not mark the task complete.',
+      inputSchema: {
+        task_id: z.string().optional(),
+        request_id: z.string().min(1),
+        result: taskResultSchema,
+      },
+    },
+    ({ task_id, request_id, result }) =>
+      dispatch({ kind: 'submit_task_result', taskId: task_id, requestId: request_id, result })
+  );
+  server.registerTool(
+    'acknowledge_task_results',
+    {
+      description:
+        'Main agent: acknowledge received result event IDs before taking follow-up actions. Repeated acknowledgment is safe.',
+      inputSchema: { event_ids: z.array(z.string()).min(1) },
+    },
+    ({ event_ids }) => dispatch({ kind: 'acknowledge_task_results', eventIds: event_ids })
+  );
+  server.registerTool(
+    'review_task_result',
+    {
+      description:
+        'Main agent: accept or request changes after checking the task result, diff and evidence. Acceptance marks the task complete.',
+      inputSchema: {
+        task_id: z.string(),
+        result_version: z.number().int().positive(),
+        accepted: z.boolean(),
+        note: z.string().trim().min(1),
+      },
+    },
+    ({ task_id, accepted, note, result_version }) =>
+      dispatch({
+        kind: 'review_task_result',
+        taskId: task_id,
+        accepted,
+        note,
+        resultVersion: result_version,
       })
   );
 

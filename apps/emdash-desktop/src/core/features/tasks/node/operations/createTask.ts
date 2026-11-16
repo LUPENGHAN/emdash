@@ -363,7 +363,7 @@ export function commitCreateTask(
       status: initialStatus,
       workspaceId,
       linkedIssue: params.taskConfig.linkedIssue ?? null,
-      type: 'task',
+      type: params.taskConfig.role === 'coordination' ? 'coordination' : 'task',
       updatedAt: sql`CURRENT_TIMESTAMP`,
       statusChangedAt: sql`CURRENT_TIMESTAMP`,
       lastInteractedAt: sql`CURRENT_TIMESTAMP`,

@@ -40,6 +40,7 @@ import {
 import { conversationSubject } from '@core/features/conversations/contributions/subject';
 import type { ProjectHostAccess } from '@core/features/projects/api/browser/stores/project-context';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
+import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { getHostClient } from '@core/primitives/desktop-host/browser/host-client';
 import { log } from '@core/primitives/logging/browser/logger';
 import {
@@ -692,8 +693,14 @@ export class AcpChatStore {
       });
       return;
     }
-    const providerId = conversationRegistry.get(this.taskId)?.conversations.get(this.conversationId)
-      ?.data.providerId;
+    const conversation = conversationRegistry
+      .get(this.taskId)
+      ?.conversations.get(this.conversationId)?.data;
+    const providerId = conversation?.providerId;
+    const deferFirstStart =
+      !mode &&
+      !conversation?.sessionId &&
+      getTaskStore(this.projectId, this.taskId)?.data.type === 'coordination';
     let clientSession: AcpLiveSession | null = null;
     try {
       const attachedSession = await AcpLiveSession.create(this.conversationId);
@@ -709,10 +716,12 @@ export class AcpChatStore {
         this._subscribeLiveSession(attachedSession);
       });
 
-      const started = await attachedSession.startSession(mode);
-      if (this._disposed || this._historyEpoch !== epoch || this.session !== attachedSession)
-        return;
-      if (!started.success) throw new AcpStartError(started.error);
+      if (!deferFirstStart) {
+        const started = await attachedSession.startSession(mode);
+        if (this._disposed || this._historyEpoch !== epoch || this.session !== attachedSession)
+          return;
+        if (!started.success) throw new AcpStartError(started.error);
+      }
       const history = await attachedSession.loadHistory(undefined, 100);
       if (this._disposed || this._historyEpoch !== epoch || this.session !== attachedSession)
         return;

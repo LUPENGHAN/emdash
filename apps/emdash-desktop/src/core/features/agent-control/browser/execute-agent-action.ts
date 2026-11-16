@@ -134,6 +134,11 @@ export async function executeAgentAction(
       return { text: 'Suggested to the user; they can start it from the notification.' };
     }
 
+    case 'submit_task_result':
+    case 'acknowledge_task_results':
+    case 'review_task_result':
+      throw new Error('Result coordination must run in the background.');
+
     case 'create_task':
       return createTaskForAgent(caller, action, who);
 
@@ -428,6 +433,7 @@ async function listTasks(
     await getConversationsClient()
   ).getConversationsForProject({ projectId: caller.projectId });
   const tasks = [...taskManager.tasks.values()]
+    .filter((task) => task.data.type !== 'coordination')
     .filter((task) => includeArchived || !('archivedAt' in task.data && task.data.archivedAt))
     .sort((left, right) => right.data.createdAt.localeCompare(left.data.createdAt));
   if (tasks.length === 0) return { text: 'No tasks.' };

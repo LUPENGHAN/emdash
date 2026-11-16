@@ -70,6 +70,16 @@ describe('deleteTask', () => {
     });
   }
 
+  it('protects the main agent runtime from ordinary task deletion', async () => {
+    await seedTask();
+    await fixture.db.update(tasks).set({ type: 'coordination' }).where(eq(tasks.id, 'task-1'));
+    const { dependencies, sessionCleanup } = makeDependencies(makeRuntimes().runtimes);
+    const result = await deleteTask(dependencies, { taskId: 'task-1', deleteBranch: true });
+    expect(result).toMatchObject({ success: false, error: { type: 'task-protected' } });
+    expect(sessionCleanup.resolve).not.toHaveBeenCalled();
+    expect((await fixture.db.select().from(tasks))[0].deletedAt).toBeNull();
+  });
+
   function seedTaskConversation(id: string): void {
     const registry = createConversationRegistry(fixture.db);
     registry.adopt({

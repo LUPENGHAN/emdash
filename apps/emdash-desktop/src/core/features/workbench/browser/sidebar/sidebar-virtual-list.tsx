@@ -25,6 +25,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { coordinationBrowserContributions } from '@core/features/coordination/contributions/browser';
 import { projectViewDef } from '@core/features/projects/contributions/views';
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
@@ -242,6 +243,21 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
                   </SortableRow>
                 );
               }
+              if (row.kind === 'main-agent') {
+                return (
+                  <SortableRow
+                    key={`main-agent:${row.projectId}`}
+                    dndId={dndId}
+                    style={vStyle}
+                    disabled
+                  >
+                    <coordinationBrowserContributions.sidebarItem
+                      projectId={row.projectId}
+                      nested={row.nested}
+                    />
+                  </SortableRow>
+                );
+              }
               if (row.kind === 'task') {
                 return (
                   <SortableRow key={`${row.projectId}:${row.taskId}`} dndId={dndId} style={vStyle}>
@@ -303,6 +319,8 @@ type SidebarDndId =
 
 function rowToDndId(row: SidebarRow): string {
   switch (row.kind) {
+    case 'main-agent':
+      return `main-agent::${row.projectId}`;
     case 'project':
       return toProjectDndId(row.projectId);
     case 'task':

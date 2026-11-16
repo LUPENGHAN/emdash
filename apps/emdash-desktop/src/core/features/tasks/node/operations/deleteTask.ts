@@ -88,6 +88,12 @@ export async function deleteTask(
   if (!task) {
     return err({ type: 'task-not-found', message: `Task ${input.taskId} was not found` });
   }
+  if (task.type === 'coordination') {
+    return err({
+      type: 'task-protected',
+      message: 'The project main agent cannot be deleted as an ordinary task.',
+    });
+  }
   if (projectIsBeingDeleted(db, task.projectId)) {
     return err({ type: 'project-deleting', message: 'Project is being deleted.' });
   }

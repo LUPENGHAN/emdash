@@ -19,6 +19,8 @@ export async function archiveTask(
     .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt)))
     .limit(1);
   if (!task) return;
+  if (task.type === 'coordination')
+    throw new Error('The project main agent cannot be archived as an ordinary task.');
 
   await db
     .update(tasks)

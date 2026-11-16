@@ -635,7 +635,7 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
     const [row] = await this.dependencies.db
       .update(tasks)
       .set({ type: 'task', updatedAt: sql`CURRENT_TIMESTAMP` })
-      .where(eq(tasks.id, taskId))
+      .where(and(eq(tasks.id, taskId), eq(tasks.type, 'automation-run')))
       .returning();
     if (!row) return null;
 

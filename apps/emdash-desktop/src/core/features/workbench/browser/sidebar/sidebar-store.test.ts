@@ -32,8 +32,8 @@ function task(id: string, createdAt: string) {
   return {
     state: 'provisioned',
     data: {
+      type: 'task',
       id,
-      type: 'coding-agent',
       isPinned: false,
       createdAt,
       updatedAt: createdAt,
@@ -290,7 +290,7 @@ describe('SidebarStore project ordering', () => {
       {
         id: 'project-1',
         createdAt: '2026-01-01T00:00:00.000Z',
-        taskIds: ['regular-task', 'automation-task'],
+        taskIds: ['regular-task', 'automation-task', 'main-runtime'],
       },
     ]);
     const project = manager.projects.get('project-1')!;
@@ -299,6 +299,8 @@ describe('SidebarStore project ordering', () => {
     tasks.get('regular-task')!.data.isPinned = true;
     tasks.get('automation-task')!.data.isPinned = true;
     tasks.get('automation-task')!.data.type = 'automation-run';
+    tasks.get('main-runtime')!.data.type = 'coordination';
+    tasks.get('main-runtime')!.data.isPinned = true;
 
     const store = new SidebarStore(manager);
     store.toggleProjectExpanded('project-1');
@@ -307,7 +309,10 @@ describe('SidebarStore project ordering', () => {
       { projectId: 'project-1', taskId: 'regular-task' },
     ]);
     expect(store.visibleTaskIdsForProject('project-1')).toEqual([]);
-    expect(store.sidebarRows).toEqual([{ kind: 'project', projectId: 'project-1', nested: false }]);
+    expect(store.sidebarRows).toEqual([
+      { kind: 'project', projectId: 'project-1', nested: false },
+      { kind: 'main-agent', projectId: 'project-1', nested: false },
+    ]);
   });
 });
 
@@ -425,7 +430,7 @@ describe('sidebar project folders and archive', () => {
           state: 'provisioned',
           data: {
             id: 'pinned',
-            type: 'coding-agent',
+            type: 'task',
             isPinned: true,
             createdAt: '2026-01-01T00:00:00.000Z',
             updatedAt: '2026-01-01T00:00:00.000Z',

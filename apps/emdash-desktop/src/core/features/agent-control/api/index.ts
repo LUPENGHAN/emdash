@@ -1,5 +1,6 @@
 import { defineContract, eventStream, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
+import type { TaskResult } from '@core/features/coordination/api/types';
 
 /**
  * Agent control: an MCP server ("emdash") that every local agent gets, so agents can
@@ -64,6 +65,15 @@ export const NAVIGATION_COMMAND_IDS = [
 export type NavigationCommandId = (typeof NAVIGATION_COMMAND_IDS)[number];
 
 export type AgentControlAction =
+  | { kind: 'submit_task_result'; taskId?: string; requestId: string; result: TaskResult }
+  | { kind: 'acknowledge_task_results'; eventIds: string[] }
+  | {
+      kind: 'review_task_result';
+      taskId: string;
+      accepted: boolean;
+      note: string;
+      resultVersion: number;
+    }
   | { kind: 'list_conversations'; scope: 'task' | 'project' }
   | {
       kind: 'create_conversation';

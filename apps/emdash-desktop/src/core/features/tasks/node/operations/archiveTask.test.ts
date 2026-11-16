@@ -64,6 +64,15 @@ describe('archiveTask', () => {
     expect(mocks.selectLimit).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects archiving a main agent before changing state or tearing down its runtime', async () => {
+    mocks.selectLimit.mockResolvedValueOnce([{ id: 'main-agent', type: 'coordination' }]);
+    await expect(
+      archiveTask(db, taskSessions, 'project-1', 'main-agent', { capture: mocks.capture })
+    ).rejects.toThrow('main agent');
+    expect(mocks.updateSet).not.toHaveBeenCalled();
+    expect(mocks.teardownTask).not.toHaveBeenCalled();
+  });
+
   it.each(['error', 'timeout'])(
     'leaves lifecycle ownership with the manager after %s',
     async (type) => {

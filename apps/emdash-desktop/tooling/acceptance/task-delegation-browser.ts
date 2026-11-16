@@ -1,12 +1,14 @@
 import { when } from 'mobx';
 import { getAgentsClient } from '@core/features/agents/api/browser/client';
 import { getConversationsClient } from '@core/features/conversations/api/browser/client';
+import { getCoordinationClient } from '@core/features/coordination/api/browser/client';
 import { getProjectsWireClient } from '@core/features/projects/api/browser/client';
 import {
   asAvailableProject,
   getProjectStore,
 } from '@core/features/projects/api/browser/stores/project-selectors';
 import { getTaskManagerStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
+import { getSidebarStore } from '@core/features/workbench/contributions/browser/app-stores';
 
 /** Test renderer entry: normal typed clients and stores, with isolated paths supplied by the harness. */
 export async function prepareDelegationCaller(input: {
@@ -16,35 +18,8 @@ export async function prepareDelegationCaller(input: {
   sourceTask: string;
   sourceConversation: string;
 }): Promise<string> {
-  const agents = await getAgentsClient();
-  const selected = await agents.setUsedInstallation({
-    host: { type: 'local', id: 'local' },
-    id: 'claude',
-    selection: { kind: 'path', path: input.wrapper },
-  });
-  if (!selected.success) throw new Error(JSON.stringify(selected.error));
-  const projects = await getProjectsWireClient();
-  const created = await projects.createProject({
-    type: 'local',
-    name: 'Delegation acceptance',
-    path: input.repository,
-  });
-  if (!created.success) throw new Error(JSON.stringify(created.error));
-  const project = created.data;
-  await when(() => asAvailableProject(getProjectStore(project.id))?.host.state.kind === 'ready', {
-    timeout: 20000,
-  });
-  const saved = await projects.updateProjectSettings({
-    projectId: project.id,
-    patch: {
-      placement: { stored: { worktreeRoot: input.worktreeRoot } },
-      gitIdentity: { stored: { defaultBranch: { remote: null, branch: 'main' } } },
-    },
-  });
-  if (!saved.success) throw new Error(JSON.stringify(saved.error));
-  const manager = getTaskManagerStore(project.id);
-  if (!manager || !project.repositoryWorkspaceId)
-    throw new Error('The source project is not ready.');
+  const { project, manager } = await prepareProject(input);
+  if (!project.repositoryWorkspaceId) throw new Error('The repository workspace is unavailable.');
   await manager.createTask({
     id: input.sourceTask,
     projectId: project.id,
@@ -78,4 +53,70 @@ export async function prepareDelegationCaller(input: {
   });
   if (!launched.success) throw new Error(JSON.stringify(launched.error));
   return project.id;
+}
+
+async function prepareProject(input: {
+  wrapper: string;
+  repository: string;
+  worktreeRoot: string;
+}) {
+  const agents = await getAgentsClient();
+  const selected = await agents.setUsedInstallation({
+    host: { type: 'local', id: 'local' },
+    id: 'claude',
+    selection: { kind: 'path', path: input.wrapper },
+  });
+  if (!selected.success) throw new Error(JSON.stringify(selected.error));
+  const projects = await getProjectsWireClient();
+  const created = await projects.createProject({
+    type: 'local',
+    name: 'Delegation acceptance',
+    path: input.repository,
+  });
+  if (!created.success) throw new Error(JSON.stringify(created.error));
+  const project = created.data;
+  await when(() => asAvailableProject(getProjectStore(project.id))?.host.state.kind === 'ready', {
+    timeout: 20000,
+  });
+  const saved = await projects.updateProjectSettings({
+    projectId: project.id,
+    patch: {
+      placement: { stored: { worktreeRoot: input.worktreeRoot } },
+      gitIdentity: { stored: { defaultBranch: { remote: null, branch: 'main' } } },
+    },
+  });
+  if (!saved.success) throw new Error(JSON.stringify(saved.error));
+  const manager = getTaskManagerStore(project.id);
+  if (!manager || !project.repositoryWorkspaceId)
+    throw new Error('The source project is not ready.');
+  return { project, manager };
+}
+
+export async function prepareCoordinator(input: {
+  wrapper: string;
+  mainWrapper: string;
+  repository: string;
+  worktreeRoot: string;
+}) {
+  const { project } = await prepareProject(input);
+  const agents = await getAgentsClient();
+  const selected = await agents.setUsedInstallation({
+    host: { type: 'local', id: 'local' },
+    id: 'opencode',
+    selection: { kind: 'path', path: input.mainWrapper },
+  });
+  if (!selected.success) throw new Error(JSON.stringify(selected.error));
+  const client = await getCoordinationClient();
+  const record = (await client.list()).find((entry) => entry.projectId === project.id);
+  if (!record) throw new Error('Project main agent was not created.');
+  await client.update({
+    id: record.id,
+    primary: { agent: 'opencode', connection: 'official', effort: null },
+  });
+  getSidebarStore().revealProject(project.id);
+  return { projectId: project.id, taskId: record.taskId, conversationId: record.conversationId };
+}
+
+export async function coordinatorSnapshot(taskId: string) {
+  return (await getCoordinationClient()).getByTask({ taskId });
 }

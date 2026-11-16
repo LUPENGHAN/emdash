@@ -37,13 +37,14 @@ export function getSortInstant(task: TaskStore, kind: TaskSortKind): string | un
 
 function isVisibleRegularTask(task: TaskStore): boolean {
   return (
-    task.data.type !== 'automation-run' &&
+    task.data.type === 'task' &&
     (task.state === 'unregistered' || !('archivedAt' in task.data && task.data.archivedAt))
   );
 }
 
 export type SidebarRow =
   | { kind: 'project'; projectId: string; nested: boolean }
+  | { kind: 'main-agent'; projectId: string; nested: boolean }
   | { kind: 'task'; projectId: string; taskId: string; nested: boolean }
   | { kind: 'folder'; folderId: string }
   | { kind: 'archived-header'; count: number }
@@ -430,7 +431,9 @@ export class SidebarStore {
     const projectId = project.id;
     rows.push({ kind: 'project', projectId, nested });
     const context = asAvailableProject(project);
-    if (!this.expandedProjectIds.has(projectId) || !context) return;
+    if (!this.expandedProjectIds.has(projectId)) return;
+    rows.push({ kind: 'main-agent', projectId, nested });
+    if (!context) return;
     const tasks = Array.from(context.get(taskManagerStoreToken).tasks.values()).filter(
       isVisibleRegularTask
     );

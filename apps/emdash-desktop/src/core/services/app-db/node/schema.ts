@@ -191,7 +191,7 @@ export const tasks = sqliteTable(
       .default(sql`CURRENT_TIMESTAMP`),
     isPinned: integer('is_pinned').notNull().default(0), // boolean, 0=false, 1=true
     workspaceId: text('workspace_id'),
-    type: text('type').notNull().default('task'), // 'task' | 'automation-run'
+    type: text('type').notNull().default('task'), // 'task' | 'automation-run' | 'coordination'
     automationRunId: text('automation_run_id'), // set when type = 'automation-run'; runtime-owned reference, intentionally no FK
     deletedAt: text('deleted_at'),
   },

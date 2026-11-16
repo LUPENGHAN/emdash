@@ -406,6 +406,52 @@ describe('requirement tools', () => {
 });
 
 describe('registerAgentControlTools task tools', () => {
+  it('validates and dispatches result submission, acknowledgment and versioned review', async () => {
+    const { tool, dispatch } = registeredTools();
+    const result = {
+      summary: 'Implemented',
+      commits: ['abc'],
+      checks: [],
+      unresolved: [],
+      prUrls: [],
+    };
+    await tool('submit_task_result')?.handler({
+      task_id: 'worker',
+      request_id: 'result-1',
+      result,
+    });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'submit_task_result',
+      taskId: 'worker',
+      requestId: 'result-1',
+      result,
+    });
+    await tool('acknowledge_task_results')?.handler({ event_ids: ['event-1'] });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'acknowledge_task_results',
+      eventIds: ['event-1'],
+    });
+    await tool('review_task_result')?.handler({
+      task_id: 'worker',
+      result_version: 2,
+      accepted: false,
+      note: 'Fix the failing test',
+    });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'review_task_result',
+      taskId: 'worker',
+      resultVersion: 2,
+      accepted: false,
+      note: 'Fix the failing test',
+    });
+    const schema = z.object(
+      tool('review_task_result')!.config.inputSchema as Record<string, z.ZodType>
+    );
+    expect(schema.safeParse({ task_id: 'worker', accepted: true, note: 'Checked' }).success).toBe(
+      false
+    );
+  });
+
   it('registers list_tasks, archive_task and delete_task', () => {
     const { tool } = registeredTools();
     expect(tool('list_tasks')?.config.annotations).toEqual({ readOnlyHint: true });

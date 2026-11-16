@@ -31,6 +31,8 @@ import {
   createConversationsWireController,
   type CreateConversationsWireControllerOptions,
 } from '@core/features/conversations/node/wire-controller';
+import type { CoordinatorService } from '@core/features/coordination/node/coordinator-service';
+import { createCoordinationWireController } from '@core/features/coordination/node/wire-controller';
 import {
   createDevPerfWireController,
   type DevPerfOperations,
@@ -178,6 +180,7 @@ export type DesktopControllerContext = {
   readonly previewServerAccess: PreviewServerAccessOperations;
   readonly projectDeletion: ProjectDeletionDependencies;
   readonly promptLibrary: PromptLibraryService;
+  readonly coordination: CoordinatorService;
   readonly requirements: RequirementsService;
   readonly modelGateway: ModelGatewayService;
   readonly memory: MemoryService;
@@ -369,6 +372,7 @@ export const desktopNodeControllers = {
   promptLibrary: {
     create: ({ promptLibrary }) => createPromptLibraryWireController(promptLibrary),
   },
+  coordination: { create: ({ coordination }) => createCoordinationWireController(coordination) },
   requirements: {
     create: ({ requirements }) => createRequirementsWireController(requirements),
   },
@@ -520,6 +524,7 @@ export const desktopNodeControllers = {
   },
   conversations: {
     create: ({
+      coordination,
       compensation,
       db,
       terminalFileSources,
@@ -538,6 +543,7 @@ export const desktopNodeControllers = {
       trashItem,
     }) =>
       createConversationsWireController({
+        getHiddenContext: (taskId) => coordination.instructionsForTask(taskId),
         terminalFileSources,
         db,
         getDefaultEffort: async (agentId) => (await providerSettings.getItem(agentId))?.effort,

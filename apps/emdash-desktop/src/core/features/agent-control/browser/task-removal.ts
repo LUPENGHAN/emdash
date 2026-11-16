@@ -20,6 +20,9 @@ export function removalBlocker(input: {
   if (task.id === callerTaskId) {
     return 'You cannot archive or delete the task you are running in.';
   }
+  if (task.type === 'coordination') {
+    return 'The project main agent cannot be archived or deleted as an ordinary task.';
+  }
   if (task.type === 'automation-run') {
     return 'Automation runs are managed by their automation.';
   }

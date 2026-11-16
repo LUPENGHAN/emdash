@@ -16,6 +16,7 @@ export type LaunchTuiConversationInput = {
   taskId: string;
   conversationId: string;
   initialSize?: { cols: number; rows: number };
+  hiddenContext?: string;
   database: LaunchTuiConversationDb;
   telemetry: Pick<TelemetryService, 'capture'>;
   taskSessions: Pick<TaskSessionManager, 'getTask'>;
@@ -33,6 +34,7 @@ export async function launchTuiConversation({
   taskId,
   conversationId,
   initialSize,
+  hiddenContext,
   database,
   telemetry,
   taskSessions,
@@ -68,7 +70,8 @@ export async function launchTuiConversation({
       conversation,
       mode: isFirstSpawn ? 'start' : 'resume',
       initialSize,
-      initialPrompt,
+      initialPrompt:
+        initialPrompt && hiddenContext ? `${hiddenContext}\n\n${initialPrompt}` : initialPrompt,
     });
 
     if (launched.outcome !== 'attached') {
