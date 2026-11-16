@@ -66,6 +66,7 @@ export const NAVIGATION_COMMAND_IDS = [
 export type NavigationCommandId = (typeof NAVIGATION_COMMAND_IDS)[number];
 
 export type AgentControlAction =
+  | { kind: 'read_management_document'; coordinatorId?: string; path: string; revision?: string }
   | { kind: 'cancel_pending_task'; taskId: string }
   | { kind: 'take_over_task'; taskId: string; expectedOwner: string | null }
   | { kind: 'submit_task_result'; taskId?: string; requestId: string; result: TaskResult }

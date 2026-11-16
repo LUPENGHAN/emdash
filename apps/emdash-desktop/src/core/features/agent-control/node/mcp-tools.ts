@@ -1,5 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import {
+  documentPathSchema,
+  documentRevisionSchema,
+} from '@core/features/coordination/api/documents';
 import { taskResultSchema } from '@core/features/coordination/api/types';
 import { formatMemoryList, formatMemoryRecord } from '@core/features/memory/api/format';
 import {
@@ -354,6 +358,21 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         ...(effort !== undefined && { effort }),
         ...(ui && { ui }),
       })
+  );
+
+  server.registerTool(
+    'read_management_document',
+    {
+      description:
+        'Read an authorized main agent management document as text with its version. Paths are relative to its management workspace. Omit coordinator_id for your responsible main agent. A disk version is valid only while the saved content is unchanged; use a full commit ID for historical content.',
+      inputSchema: {
+        coordinator_id: z.string().min(1).optional(),
+        path: documentPathSchema,
+        revision: documentRevisionSchema.optional(),
+      },
+    },
+    ({ coordinator_id, path, revision }) =>
+      dispatch({ kind: 'read_management_document', coordinatorId: coordinator_id, path, revision })
   );
 
   server.registerTool(

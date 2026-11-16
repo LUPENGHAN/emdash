@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useState, type ReactNode } from 'react';
 import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
+import { openFileInTaskEditor } from '@core/features/editor/api/browser/open-file-in-file-editor';
 import { PROVIDER_CAPABLE_AGENTS } from '@core/features/model-providers/api';
 import {
   getProjectStore,
@@ -12,9 +13,11 @@ import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-s
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
+import { useTaskComposition } from '@core/features/workbench/api/browser/task-composition-context';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
 import type { AgentSelection, AssignedTask, Coordinator, ProjectAccess } from '../api/types';
+import { CoordinatorDocumentsPanel } from './coordinator-documents-panel';
 import { CreateCrossProjectMainAgent } from './cross-project-main-agents';
 import { TakeOverTaskForm } from './take-over-task-form';
 
@@ -36,7 +39,10 @@ const CoordinatorContent = observer(function CoordinatorContent({
   taskId: string;
   children: ReactNode;
 }) {
-  const [tab, setTab] = useState<'conversation' | 'tasks' | 'settings'>('conversation');
+  const [tab, setTab] = useState<'conversation' | 'tasks' | 'documents' | 'settings'>(
+    'conversation'
+  );
+  const composition = useTaskComposition();
   const queryClient = useQueryClient();
   const key = ['coordinator', taskId];
   const { data: record } = useQuery({
@@ -74,7 +80,19 @@ const CoordinatorContent = observer(function CoordinatorContent({
         <Button
           data-testid="coordinator-conversation-tab"
           variant={tab === 'conversation' ? 'secondary' : 'ghost'}
-          onClick={() => setTab('conversation')}
+          onClick={() => {
+            if (record) {
+              const conversation = getConversationsForTask(taskId)?.conversations.get(
+                record.conversationId
+              );
+              composition.paneLayout.open(
+                conversation?.data.type === 'acp' ? 'acp-chat' : 'conversation',
+                { conversationId: record.conversationId },
+                { preview: false }
+              );
+            }
+            setTab('conversation');
+          }}
         >
           Conversation
         </Button>
@@ -86,6 +104,18 @@ const CoordinatorContent = observer(function CoordinatorContent({
           Assigned tasks ({Object.keys(record?.tasks ?? {}).length})
         </Button>
         <Button
+          data-testid="coordinator-documents-tab"
+          variant={tab === 'documents' ? 'secondary' : 'ghost'}
+          onClick={() => {
+            setTab('documents');
+            composition.chrome.commands.openSidebarTab('files');
+            const path = composition.editorView.openFilePaths.at(-1);
+            if (record && path) void openFileInTaskEditor(record.projectId, taskId, path);
+          }}
+        >
+          Documents
+        </Button>
+        <Button
           data-testid="coordinator-settings-tab"
           variant={tab === 'settings' ? 'secondary' : 'ghost'}
           onClick={() => setTab('settings')}
@@ -93,7 +123,13 @@ const CoordinatorContent = observer(function CoordinatorContent({
           Delegation defaults
         </Button>
       </div>
-      {tab === 'conversation' ? (
+      {tab === 'documents' ? (
+        record ? (
+          <CoordinatorDocumentsPanel record={record}>{children}</CoordinatorDocumentsPanel>
+        ) : (
+          <p className="p-4">Loading main agent…</p>
+        )
+      ) : tab === 'conversation' ? (
         <div className="min-h-0 flex-1">{children}</div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto p-4">

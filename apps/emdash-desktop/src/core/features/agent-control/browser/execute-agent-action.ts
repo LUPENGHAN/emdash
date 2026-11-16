@@ -134,6 +134,7 @@ export async function executeAgentAction(
       return { text: 'Suggested to the user; they can start it from the notification.' };
     }
 
+    case 'read_management_document':
     case 'list_projects':
     case 'get_task_status':
     case 'cancel_pending_task':

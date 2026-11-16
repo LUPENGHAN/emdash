@@ -8,6 +8,7 @@ import {
   LOCAL_HOST_REF,
   type HostRef,
 } from '@emdash/core/primitives/host/api';
+import { hostFileRef } from '@emdash/core/primitives/path/api';
 import { integrationPluginRegistry } from '@emdash/plugins/integrations';
 import { pullRequestsPluginRegistry } from '@emdash/plugins/pull-requests';
 import { secret } from '@emdash/shared';
@@ -81,6 +82,7 @@ import {
 } from '@core/features/conversations/node/usage-stats/usage-attribution';
 import { createUsageStatsService } from '@core/features/conversations/node/usage-stats/usage-stats-service';
 import type { Coordinator } from '@core/features/coordination/api/types';
+import { CoordinatorDocuments } from '@core/features/coordination/node/coordinator-documents';
 import { CoordinatorService } from '@core/features/coordination/node/coordinator-service';
 import { coordinationEvents } from '@core/features/coordination/node/event-host';
 import { createSelectionResolver } from '@core/features/coordination/node/selection-resolver';
@@ -209,6 +211,7 @@ import type { TaskProviderOpts } from '@core/features/workspaces/api/node/worksp
 import { createWorkspaceDeletionSweepKind } from '@core/features/workspaces/node/sweep/workspace-deletion-sweep';
 import { WorkspaceRegistryBackfillService } from '@core/features/workspaces/node/sync/workspace-registry-backfill';
 import { WorkspaceRegistrySyncService } from '@core/features/workspaces/node/sync/workspace-registry-sync-service';
+import { hostPathFromNative } from '@core/primitives/desktop-runtime/api';
 import { startPeriodicSweep } from '@core/primitives/periodic-sweep/node/periodic-sweep';
 import { DEFAULT_AGENT_GIT_CREDENTIALS } from '@core/primitives/project-settings/api';
 import { projectHostRef } from '@core/primitives/projects/api';
@@ -773,6 +776,7 @@ export async function bootServices(
       }
       if (
         [
+          'read_management_document',
           'submit_task_result',
           'acknowledge_task_results',
           'review_task_result',
@@ -781,6 +785,18 @@ export async function bootServices(
         ].includes(action.kind)
       )
         await assertActiveAgentCaller(caller);
+      if (action.kind === 'read_management_document') {
+        const service = coordinationRuntime.service;
+        if (!service) throw new Error('Main agent coordination is starting.');
+        const id =
+          action.coordinatorId ?? (await service.getTaskCoordination(caller.taskId))?.coordinatorId;
+        if (!id) throw new Error('Choose a main agent document source.');
+        return {
+          text: JSON.stringify(
+            await service.readDocument(id, action.path, action.revision, caller)
+          ),
+        };
+      }
       if (action.kind === 'cancel_pending_task') {
         if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
         const main = await coordinationRuntime.service.getByTask(caller.taskId);
@@ -1288,6 +1304,24 @@ export async function bootServices(
     delegationDrainStopped = true;
   });
   const coordinatorService = new CoordinatorService({
+    documents: new CoordinatorDocuments(async (record) => {
+      const [task] = await db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.id, record.taskId), isNull(tasks.deletedAt)))
+        .limit(1);
+      if (!task?.workspaceId) throw new Error('The management workspace is unavailable.');
+      const identity = await workspaceIdentity.resolve(task.workspaceId);
+      if (!identity) throw new Error('The management workspace host is unavailable.');
+      const runtime = await runtimes.client(identity.host);
+      if (!runtime.success)
+        throw new Error(`The management workspace host is unavailable: ${runtime.error.type}`);
+      return {
+        workspaceId: task.workspaceId,
+        root: hostFileRef(identity.host, hostPathFromNative(identity.path)),
+        runtime: runtime.data,
+      };
+    }),
     onSchedulingChange: scheduleDelegations,
     store: new AppDbKeyValueStore<Record<string, Coordinator>>(db, 'coordinators'),
     resources: () => {

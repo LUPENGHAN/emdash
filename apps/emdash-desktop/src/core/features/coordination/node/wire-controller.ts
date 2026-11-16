@@ -6,6 +6,9 @@ import { coordinationEvents } from './event-host';
 export function createCoordinationWireController(service: CoordinatorService) {
   return createController(coordinationContract, {
     events: coordinationEvents,
+    documentWorkspace: ({ id }) => service.documentWorkspace(id),
+    createDocument: ({ id, path }) => service.createDocument(id, path),
+    readDocument: ({ id, path, revision }) => service.readDocument(id, path, revision),
     cancelPendingTask: ({ id, taskId }) => service.cancelPendingTask(id, taskId),
     inspectTask: ({ id, taskId }) => service.inspectTask(id, taskId),
     takeOverTask: ({ id, taskId, expectedOwner }) =>

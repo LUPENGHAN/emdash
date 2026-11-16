@@ -252,6 +252,25 @@ try {
     !(await readdir(capture)).includes('main-session.json'),
     'Opening a fresh main agent started a process before its first message'
   );
+  await page.getByTestId('coordinator-documents-tab').click();
+  const documents = page.getByTestId('coordinator-documents-panel');
+  await documents.getByRole('textbox', { name: 'Document path' }).fill('plan.md');
+  await documents.getByRole('button', { name: 'Create document', exact: true }).click();
+  const raw = documents.getByRole('button', { name: /^(Raw|原始)$/ });
+  await raw.waitFor();
+  await raw.click();
+  const editor = documents.locator('.monaco-editor .view-lines').first();
+  await editor.click();
+  const documentText =
+    '# Coordination acceptance\n\nSaved through the main agent document editor.\n';
+  await page.keyboard.insertText(documentText);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s');
+  await page.screenshot({ path: join(profile, 'management-document.png') });
+  assert.ok(
+    !(await readdir(capture)).includes('main-session.json'),
+    'Editing documents started an agent process'
+  );
+  await page.getByTestId('coordinator-conversation-tab').click();
   await page
     .locator('[contenteditable="true"]')
     .first()
@@ -280,6 +299,23 @@ try {
     if (result.isError) throw new Error(JSON.stringify(result.content));
     return result.content.find((item) => item.type === 'text').text;
   };
+  const documentRead = JSON.parse(
+    await call(client, 'read_management_document', { path: 'plan.md' })
+  );
+  assert.equal(documentRead.content, documentText);
+  assert.ok(documentRead.revision.startsWith('disk:'));
+  assert.equal(await readFile(join(main.cwd, 'plan.md'), 'utf8'), documentText);
+  await writeFile(join(main.cwd, 'plan.md'), documentText + 'A later edit.\n');
+  const staleDocument = await client.callTool({
+    name: 'read_management_document',
+    arguments: { path: 'plan.md', revision: documentRead.revision },
+  });
+  assert.equal(staleDocument.isError, true);
+  const forbiddenDocument = await client.callTool({
+    name: 'read_management_document',
+    arguments: { path: '../README.md' },
+  });
+  assert.equal(forbiddenDocument.isError, true);
   const args = {
     name: 'Coordinated implementation',
     prompt: 'Simulated implementation',
@@ -320,6 +356,12 @@ try {
   assert.ok(spawned.mcpUrl);
   workerClient = new Client({ name: 'isolated-worker-agent', version: '1' });
   await workerClient.connect(new StreamableHTTPClientTransport(new URL(spawned.mcpUrl)));
+  const unauthorizedDocument = await workerClient.callTool({
+    name: 'read_management_document',
+    arguments: { path: 'plan.md' },
+  });
+  assert.equal(unauthorizedDocument.isError, true);
+  await assert.rejects(readFile(join(created.path, 'plan.md'), 'utf8'), { code: 'ENOENT' });
   const terminalMessageArgs = {
     conversation_id: created.conversation_id,
     text: 'Manually inspect the terminal task',
@@ -981,6 +1023,9 @@ try {
         checks: [
           'real Electron startup and fixed main agent sidebar',
           'main agent ran in an independent management history without code files or baseline changes',
+          'management document created, edited and saved in the existing Monaco editor without starting an agent',
+          'main MCP read returned saved document text and rejected stale or invalid paths',
+          'worker without document grants could not read main documents and its branch contained none',
           'real ACP protocol with a simulated OpenCode executable',
           'authenticated main and worker MCP identities',
           'real worktree and worker CLI startup with high effort',

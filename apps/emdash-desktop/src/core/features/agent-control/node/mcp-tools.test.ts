@@ -752,3 +752,21 @@ describe('memory tools', () => {
     expect(JSON.stringify(globalList)).toContain('imperative');
   });
 });
+
+it('validates management document paths and passes versioned reads to the background', async () => {
+  const { tool, dispatch } = registeredTools();
+  const read = tool('read_management_document')!;
+  const schema = z.object(read.config.inputSchema as Record<string, z.ZodType>);
+  expect(schema.safeParse({ path: '../secret' }).success).toBe(false);
+  expect(schema.safeParse({ path: '.git/config' }).success).toBe(false);
+  expect(schema.safeParse({ path: 'plan.md', revision: 'main' }).success).toBe(false);
+  await read.handler(
+    schema.parse({ coordinator_id: 'project:p1', path: 'plan.md', revision: 'disk:etag' })
+  );
+  expect(dispatch).toHaveBeenLastCalledWith({
+    kind: 'read_management_document',
+    coordinatorId: 'project:p1',
+    path: 'plan.md',
+    revision: 'disk:etag',
+  });
+});

@@ -1,6 +1,12 @@
 import { defineContract, eventStream, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
 import {
+  documentPathSchema,
+  documentRevisionSchema,
+  documentWorkspaceSchema,
+  managementDocumentSchema,
+} from './documents';
+import {
   agentSelectionSchema,
   projectAccessSchema,
   type Coordinator,
@@ -11,6 +17,22 @@ import {
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  documentWorkspace: procedure({
+    input: z.object({ id: z.string() }),
+    output: documentWorkspaceSchema,
+  }),
+  createDocument: procedure({
+    input: z.object({ id: z.string(), path: documentPathSchema }),
+    output: documentWorkspaceSchema,
+  }),
+  readDocument: procedure({
+    input: z.object({
+      id: z.string(),
+      path: documentPathSchema,
+      revision: documentRevisionSchema.optional(),
+    }),
+    output: managementDocumentSchema,
+  }),
   cancelPendingTask: procedure({
     input: z.object({ id: z.string(), taskId: z.string() }),
     output: z.custom<Coordinator>(),

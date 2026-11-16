@@ -17,8 +17,10 @@ import {
   type TakeoverPreview,
 } from '../api/types';
 import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordinator-access';
+import type { CoordinatorDocuments } from './coordinator-documents';
 
 type Dependencies = {
+  documents?: Pick<CoordinatorDocuments, 'describe' | 'create' | 'read'>;
   store: {
     getOrThrow(id: string): Promise<Coordinator | null>;
     setOrThrow(id: string, value: Coordinator): Promise<void>;
@@ -244,6 +246,34 @@ Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ??
       await runtime.activate(record.taskId, record.projectId);
       return record;
     });
+  }
+  private documentService() {
+    if (!this.deps.documents) throw new Error('Management documents are unavailable.');
+    return this.deps.documents;
+  }
+  async documentWorkspace(id: string) {
+    const documents = this.documentService();
+    return documents.describe(await this.open(id));
+  }
+  async createDocument(id: string, path: string) {
+    const documents = this.documentService();
+    return documents.create(await this.open(id), path);
+  }
+  async readDocument(id: string, path: string, revision?: string, caller?: AgentCaller) {
+    const documents = this.documentService();
+    const record = await this.get(id);
+    if (
+      caller &&
+      !(await this.mayAccessTask(
+        caller,
+        { id: record.taskId, projectId: record.projectId },
+        'read'
+      ))
+    )
+      throw new Error('Management document permission denied.');
+    await this.deps.assertProjectAvailable(record.projectId);
+    // Reading cannot allocate or start a main agent on behalf of a worker.
+    return documents.read(record, path, revision);
   }
   async update(
     id: string,

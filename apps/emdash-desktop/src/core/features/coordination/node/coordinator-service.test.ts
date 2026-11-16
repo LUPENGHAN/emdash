@@ -885,3 +885,68 @@ it('preserves a legacy main checkout until its separate document migration runs'
   expect(test.resources.prepare).not.toHaveBeenCalled();
   expect(test.resources.create).not.toHaveBeenCalled();
 });
+
+describe('management document authorization', () => {
+  it('checks worker grants before reading and keeps them bounded by the responsible main scope', async () => {
+    const { records, deps } = setup();
+    const read = vi.fn(async () => ({
+      coordinatorId: 'project:target',
+      path: 'plan.md',
+      revision: 'disk:1',
+      content: 'plan',
+      workspaceId: 'documents',
+    }));
+    const service = new CoordinatorService({
+      ...deps,
+      documents: { read, describe: vi.fn(), create: vi.fn() },
+    });
+    const main = await service.ensureProject('source');
+    const target = await service.ensureProject('target');
+    main.tasks.worker = {
+      taskId: 'worker',
+      projectId: 'source',
+      name: 'Worker',
+      state: 'assigned',
+      resultVersion: 0,
+      submissions: {},
+    };
+    records.set(main.id, main);
+    const worker = caller(main, 'worker');
+    await expect(service.readDocument(target.id, 'plan.md', undefined, worker)).rejects.toThrow(
+      'permission'
+    );
+    expect(read).not.toHaveBeenCalled();
+    main.tasks.worker.grantedProjectIds = ['target'];
+    records.set(main.id, main);
+    await expect(
+      service.readDocument(target.id, 'plan.md', undefined, worker)
+    ).resolves.toMatchObject({ content: 'plan' });
+    read.mockClear();
+    main.projectAccess = { mode: 'selected', projectIds: ['source'] };
+    records.set(main.id, main);
+    await expect(service.readDocument(target.id, 'plan.md', undefined, worker)).rejects.toThrow(
+      'permission'
+    );
+    expect(read).not.toHaveBeenCalled();
+    expect(deps.resources().create).not.toHaveBeenCalled();
+  });
+  it('permits the main authorized read without allocating a task or starting a process', async () => {
+    const { deps } = setup();
+    const read = vi.fn(async () => ({
+      coordinatorId: 'project:source',
+      path: 'plan.md',
+      revision: 'disk:1',
+      content: 'plan',
+      workspaceId: 'documents',
+    }));
+    const service = new CoordinatorService({
+      ...deps,
+      documents: { read, describe: vi.fn(), create: vi.fn() },
+    });
+    const main = await service.ensureProject('source');
+    await service.readDocument(main.id, 'plan.md', 'disk:1', caller(main));
+    expect(read).toHaveBeenCalledWith(main, 'plan.md', 'disk:1');
+    expect(deps.resources().activate).not.toHaveBeenCalled();
+    expect(deps.resources().start).not.toHaveBeenCalled();
+  });
+});
