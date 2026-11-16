@@ -78,6 +78,7 @@ export function createDesktopWireOptions(
     },
     gitlabRepositories: services.gitlabRepositories,
     gitCredentials: services.gitCredentials,
+    projectBaselines: services.projectBaselines,
     hostAvailability: runtimes.hostAvailability,
     hostOperations: {
       openExternal: ({ url }) => appOperations.openExternal(url),

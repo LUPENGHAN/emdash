@@ -39,6 +39,7 @@ import {
 import { providerAccountRefSchema } from '@core/primitives/provider-accounts/api/provider-account-summary';
 import { mutationAckSchema, mutationErrorSchema } from '@core/primitives/wire/api/mutations';
 import { projectAttachmentStateSchema, type ProjectRecoveryRequestError } from './attachments';
+import { projectBaselineConfigSchema, projectBaselineSnapshotSchema } from './baseline-sync';
 import type {
   MigrateProjectConfigResult,
   ProjectSettingsDomainPatch,
@@ -128,6 +129,22 @@ export type ProjectListData = {
 export const projectsDomain = 'projects' as const;
 
 export const projectsWireContract = defineContract({
+  baseline: liveModel({
+    key: projectIdInputSchema,
+    states: { current: liveState({ data: projectBaselineSnapshotSchema }) },
+  }),
+  configureBaseline: procedure({
+    input: projectIdInputSchema.extend({
+      expectedRevision: z.number().int().nonnegative(),
+      config: projectBaselineConfigSchema,
+    }),
+    output: projectBaselineSnapshotSchema,
+  }),
+  synchronizeBaseline: procedure({
+    input: projectIdInputSchema,
+    output: projectBaselineSnapshotSchema,
+    callTimeoutMs: 0,
+  }),
   createProject: procedure({
     input: z.custom<CreateProjectParams>(),
     output: z.custom<CreateProjectResult>(),

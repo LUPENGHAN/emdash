@@ -72,6 +72,7 @@ import type { PreviewServerAccessOperations } from '@core/features/preview-serve
 import { createPreviewServersWireController } from '@core/features/preview-servers/node/wire-controller';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
 import type { ProjectSettingsService } from '@core/features/projects/api/node/settings/project-settings-service';
+import type { ProjectBaselineSyncService } from '@core/features/projects/node/baseline-sync-service';
 import type { ProjectDeletionDependencies } from '@core/features/projects/node/operations/deleteProject';
 import { getProjectById } from '@core/features/projects/node/operations/getProjects';
 import { createProjectsWireController } from '@core/features/projects/node/wire-controller';
@@ -188,6 +189,7 @@ export type DesktopControllerContext = {
   readonly memory: MemoryService;
   readonly projects: ProjectAttachmentManager;
   readonly projectSettings: ProjectSettingsService;
+  readonly projectBaselines: ProjectBaselineSyncService;
   readonly providerSettings: ProviderOverrideSettings;
   readonly effectiveAgentConfig: EffectiveAgentConfig;
   readonly priceCatalog: () => Promise<PriceCatalog>;
@@ -489,6 +491,7 @@ export const desktopNodeControllers = {
       projectDeletion,
       projects,
       projectSettings,
+      projectBaselines,
       runtimes,
       scope,
       workspacePlacement,
@@ -502,6 +505,7 @@ export const desktopNodeControllers = {
           projectAutomations: projectDeletion.automations,
           projects,
           projectSettings,
+          projectBaselines,
           runtimes,
           mintCloneCredentials: gitCredentials.mintCloneCredentials,
         }),

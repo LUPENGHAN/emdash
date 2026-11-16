@@ -9,7 +9,9 @@ import { getProjectsWireClient } from '@core/features/projects/api/browser/clien
 import {
   asAvailableProject,
   getProjectStore,
+  getProjectViewStore,
 } from '@core/features/projects/api/browser/stores/project-selectors';
+import { projectViewDef } from '@core/features/projects/contributions/views';
 import { getTaskPrAssociationStore } from '@core/features/source-control/api/browser/stores/task-source-control-selectors';
 import {
   getTaskManagerStore,
@@ -17,6 +19,7 @@ import {
 } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { getSidebarStore } from '@core/features/workbench/contributions/browser/app-stores';
 import { openModal } from '@core/manifests/browser/modal-api';
+import { getNavigation } from '@core/primitives/navigation/browser/navigation-selectors';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
 
 /** Test renderer entry: normal typed clients and stores, with isolated paths supplied by the harness. */
@@ -132,7 +135,12 @@ export async function prepareCoordinator(input: {
     primary: { agent: 'opencode', connection: 'official', effort: null },
   });
   getSidebarStore().revealProject(project.id);
-  return { projectId: project.id, taskId: record.taskId, conversationId: record.conversationId };
+  return {
+    id: record.id,
+    projectId: project.id,
+    taskId: record.taskId,
+    conversationId: record.conversationId,
+  };
 }
 
 export async function coordinatorSnapshot(taskId: string) {
@@ -224,6 +232,18 @@ export async function prepareAdditionalProject(input: {
 
 export async function allCoordinatorSnapshots() {
   return (await getCoordinationClient()).list();
+}
+
+export function openBaselineFixtureSettings(projectId: string) {
+  const view = getProjectViewStore(projectId);
+  if (!view) throw new Error('The fixture Project view is unavailable.');
+  view.setProjectView('settings');
+  getNavigation().navigate(projectViewDef({ projectId }));
+}
+
+export async function baselineFixtureState(projectId: string) {
+  return (await (await getProjectsWireClient()).baseline.state({ projectId }, 'current').snapshot())
+    .data;
 }
 
 export async function coordinatorDelegationStatus(id: string, taskId: string) {

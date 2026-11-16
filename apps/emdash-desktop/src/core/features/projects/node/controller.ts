@@ -8,6 +8,7 @@ import type {
   MigrateProjectConfigRequest,
   WriteProjectConfigRequest,
 } from '@core/primitives/project-settings/api';
+import type { ProjectBaselineSyncService } from './baseline-sync-service';
 import {
   archiveProject,
   restoreProject,
@@ -37,6 +38,7 @@ export type ProjectOperationDependencies = CreateProjectDependencies & {
   projectDeletion: ProjectDeletionDependencies;
   projectAutomations: ProjectArchiveAutomations;
   projectSettings: ProjectSettingsService;
+  projectBaselines: Pick<ProjectBaselineSyncService, 'get' | 'configure' | 'synchronize'>;
   projects: Pick<ProjectAttachmentManager, 'invalidate' | 'recover' | 'track'>;
   mintCloneCredentials: GitCredentialsService['mintCloneCredentials'];
 };

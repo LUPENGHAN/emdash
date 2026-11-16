@@ -154,7 +154,7 @@ async function launch() {
   await page.getByRole('button', { name: /^(Settings|设置)$/ }).waitFor();
   await page.addScriptTag({
     type: 'module',
-    content: `import { prepareCoordinator, prepareAdditionalProject, configurePrFixture, openPrFixtureDialog, readPrFixtureAssociation } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { prepareCoordinator, prepareAdditionalProject, configurePrFixture, openPrFixtureDialog, readPrFixtureAssociation });`,
+    content: `import { prepareCoordinator, prepareAdditionalProject, configurePrFixture, openPrFixtureDialog, readPrFixtureAssociation, openBaselineFixtureSettings, baselineFixtureState, coordinatorDelegationStatus } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { prepareCoordinator, prepareAdditionalProject, configurePrFixture, openPrFixtureDialog, readPrFixtureAssociation, openBaselineFixtureSettings, baselineFixtureState, coordinatorDelegationStatus });`,
   });
   await page.waitForFunction(() => typeof window.configurePrFixture === 'function');
 }
@@ -205,6 +205,49 @@ try {
   await page.locator('[contenteditable="true"]').first().fill('Prepare the isolated PR workflow.');
   await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
   const mainClient = await captureClient(main.conversationId);
+  await page.evaluate((id) => window.openBaselineFixtureSettings(id), codeProjectId);
+  const baselineSection = page.getByRole('region', { name: 'Code baseline', exact: true });
+  const command = baselineSection.getByLabel('Baseline verification command', { exact: true });
+  await command.fill('printf baseline-failure-evidence; exit 9');
+  await baselineSection
+    .getByRole('button', { name: 'Save baseline settings', exact: true })
+    .click();
+  await baselineSection.getByRole('button', { name: 'Check baseline', exact: true }).click();
+  await baselineSection.getByText('Verification failed', { exact: true }).waitFor();
+  await baselineSection.getByText('baseline-failure-evidence', { exact: true }).waitFor();
+  const blockedDelegation = await mainClient.callTool({
+    name: 'create_task',
+    arguments: {
+      project_id: codeProjectId,
+      request_id: 'baseline-rejected-task',
+      name: 'Rejected baseline task',
+      prompt: 'This must not start.',
+      agent: 'claude',
+      ui: 'terminal',
+    },
+  });
+  assert.equal(blockedDelegation.isError, true);
+  const failedBaseline = await page.evaluate(
+    (id) => window.baselineFixtureState(id),
+    codeProjectId
+  );
+  assert.equal(failedBaseline.canDelegate, false);
+  assert.equal(failedBaseline.attempts.filter((attempt) => attempt.verification?.runId).length, 1);
+  await page.screenshot({ path: join(profile, 'baseline-verification-blocked.png') });
+  await command.fill(`test "$(git rev-parse HEAD)" = '${baseline}' && printf baseline-verified`);
+  await baselineSection
+    .getByRole('button', { name: 'Save baseline settings', exact: true })
+    .click();
+  await baselineSection.getByRole('button', { name: 'Check baseline', exact: true }).click();
+  await baselineSection.getByText('Ready for delegation', { exact: true }).waitFor();
+  await baselineSection.getByText('baseline-verified', { exact: true }).waitFor();
+  const approvedBaseline = await page.evaluate(
+    (id) => window.baselineFixtureState(id),
+    codeProjectId
+  );
+  assert.equal(approvedBaseline.proof.oid, baseline);
+  assert.equal(approvedBaseline.proof.verification, 'succeeded');
+  await page.screenshot({ path: join(profile, 'baseline-verification-approved.png') });
   const task = await call(mainClient, 'create_task', {
     project_id: codeProjectId,
     request_id: 'pr-code-task',
@@ -214,6 +257,12 @@ try {
     ui: 'terminal',
     effort: 'high',
   });
+  const approvedTask = await page.evaluate(
+    (input) => window.coordinatorDelegationStatus(input.id, input.taskId),
+    { id: main.id, taskId: task.task_id }
+  );
+  assert.equal(approvedTask.baselineSelection.oid, baseline);
+  assert.equal(approvedTask.baselineSelection.verification, 'succeeded');
   const taskGit = async (...args) => (await exec('git', args, { cwd: task.path })).stdout.trim();
   await writeFile(join(task.path, 'sdk.ts'), 'export const fixture = true;');
   await taskGit('add', '.');
@@ -257,6 +306,9 @@ try {
     return prs.length === 1 && prs[0].url === own.result.url;
   }, 'The ordinary task did not associate its saved explicit-target PR.');
   assert.equal((await associated())[0].repositoryUrl, forge.repositoryUrl('org'));
+  await page
+    .locator(`[data-testid="project-main-agent"][data-project-id="${main.projectId}"]`)
+    .click();
   await page.getByTestId('coordinator-tasks-tab').click();
   await page
     .getByTestId('task-pr-status')
@@ -269,6 +321,23 @@ try {
   ).length;
   await quit();
   await launch();
+  const restoredBaseline = await page.evaluate(
+    (id) => window.baselineFixtureState(id),
+    codeProjectId
+  );
+  assert.equal(restoredBaseline.proof.oid, baseline);
+  assert.equal(restoredBaseline.proof.verification, 'succeeded');
+  assert.ok(
+    restoredBaseline.attempts.some(
+      (attempt) => attempt.verification?.output === 'baseline-verified'
+    )
+  );
+  await page.evaluate((id) => window.openBaselineFixtureSettings(id), codeProjectId);
+  await page
+    .getByRole('region', { name: 'Code baseline', exact: true })
+    .getByText('Ready for delegation', { exact: true })
+    .waitFor();
+  await page.screenshot({ path: join(profile, 'baseline-verification-restored.png') });
   const expand = page.getByRole('button', { name: /^(Expand|展开) Delegation acceptance$/ });
   if (await expand.isVisible()) await expand.click();
   await page
@@ -335,6 +404,9 @@ try {
         passed: true,
         checks: [
           'real Electron with isolated DB and mock CLI/ACP plus authenticated main and worker MCP',
+          'project settings saved baseline validation and a real Host script failure blocked MCP delegation',
+          'fixed-commit validation passed in a separate checkout and delegation retained its approval snapshot',
+          'baseline proof and output survived complete Electron restart',
           'real smart HTTP Git publication to a loopback personal fork with pinned task OID',
           'main platform response loss persisted and worker creation reused the same PR',
           'complete restart restored the request and UI continued without another platform create',

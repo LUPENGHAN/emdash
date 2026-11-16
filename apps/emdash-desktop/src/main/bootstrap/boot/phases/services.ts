@@ -167,6 +167,9 @@ import {
   loadStoredIntegrationAccounts,
 } from '@core/features/projects/api/node/settings/effective-settings';
 import { ProjectSettingsService } from '@core/features/projects/api/node/settings/project-settings-service';
+import { createBackendProjectBaselineSync } from '@core/features/projects/node/backend-baseline-sync';
+import { createBackendBaselineVerification } from '@core/features/projects/node/backend-baseline-verification';
+import { baselineSyncPokes } from '@core/features/projects/node/baseline-sync-pokes';
 import type { ProjectDeletionDependencies } from '@core/features/projects/node/operations/deleteProject';
 import { getProjects } from '@core/features/projects/node/operations/getProjects';
 import {
@@ -314,6 +317,7 @@ export type ServicesBundle = {
   readonly projectDeletion: ProjectDeletionDependencies;
   readonly projects: ProjectAttachmentManager;
   readonly projectSettings: ProjectSettingsService;
+  readonly projectBaselines: ReturnType<typeof createBackendProjectBaselineSync>;
   readonly providerSettings: ReturnType<typeof createProviderOverrideSettings>;
   /** Agent config for a launch, including its model provider source (both UIs). */
   readonly effectiveAgentConfig: EffectiveAgentConfig;
@@ -1205,6 +1209,7 @@ export async function bootServices(
     scope: appScope,
     projects: projectManager,
     taskService,
+    prepareBaseline: (projectId) => projectBaselines.prepareDelegation(projectId),
     getAcpOptions: async (host, agentId) =>
       (
         await getProviderSettingsService(db).read({
@@ -1836,6 +1841,19 @@ export async function bootServices(
     logger: log,
   });
   const issueProviders = createIssueProviderRegistry({ resolveProjectIntegrationAccount });
+  const projectBaselines = createBackendProjectBaselineSync({
+    db,
+    scope: appScope,
+    projects: projectManager,
+    credentials: gitCredentials,
+    verification: createBackendBaselineVerification({
+      scope: appScope,
+      projects: projectManager,
+      runtimes,
+      placement: workspacePlacement,
+    }),
+    changed: (projectId) => baselineSyncPokes.poke({ projectId }),
+  });
   const taskPullRequests = createBackendTaskPullRequests({
     db,
     scope: appScope,
@@ -2150,6 +2168,7 @@ export async function bootServices(
     projectDeletion,
     projects: projectManager,
     projectSettings: projectSettingsService,
+    projectBaselines,
     providerSettings: providerOverrideSettings,
     effectiveAgentConfig,
     // Costs shown anywhere count prices set by hand (Usage statistics → Prices).

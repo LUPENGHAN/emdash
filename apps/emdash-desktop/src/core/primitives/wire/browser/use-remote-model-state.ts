@@ -68,6 +68,7 @@ export function useRemoteModelState<Group extends LiveModelDef, Name extends Sta
       .current()
       .then((remoteModel) => {
         if (disposed) return;
+        scope.add(remoteModel.retain(keyRef.current));
         const member = remoteModel(keyRef.current);
         const remoteState = member.states[stateName];
         observe(

@@ -12,16 +12,107 @@ import type {
 } from '@emdash/core/runtimes/git/api';
 import { err, ok, type Result } from '@emdash/shared';
 import { createScope } from '@emdash/shared/concurrency';
-import { waitFor } from '@emdash/shared/testing';
+import { createManualClock, waitFor } from '@emdash/shared/testing';
 import { WireError } from '@emdash/wire/rpc';
 import { cell, observe, remote, snapshot, whenReady } from '@emdash/wire/state';
 import { createTestWire } from '@emdash/wire/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { projectsWireContract, type ProjectAttachmentState } from '@core/features/projects/api';
 import type { ProjectAttachmentManager } from '@core/features/projects/api/node/project-attachment-manager';
+import type { ProjectBaselineRecord } from '../api/baseline-sync';
+import { baselineSyncPokes } from './baseline-sync-pokes';
+import { ProjectBaselineSyncService } from './baseline-sync-service';
 import type { ProjectOperationDependencies } from './controller';
 import { getProjectPathStatus } from './operations/project-path-status';
 import { createProjectsWireController } from './wire-controller';
+
+it('streams baseline settings to both windows and rejects an edit from an obsolete revision', async () => {
+  let record: ProjectBaselineRecord | null = null;
+  const changed = vi.fn((projectId: string) => baselineSyncPokes.poke({ projectId }));
+  const service = new ProjectBaselineSyncService({
+    store: {
+      getOrThrow: async () => structuredClone(record),
+      setOrThrow: async (_id, value) => {
+        record = structuredClone(value);
+      },
+    },
+    authorize: async () => {},
+    resolve: async () => {
+      throw new Error('Not used by settings');
+    },
+    synchronize: async () => {
+      throw new Error('Not used by settings');
+    },
+    readLocal: async () => null,
+    verify: async () => {
+      throw new Error('Not used by settings');
+    },
+    recoverVerification: async () => ({ status: 'unknown', output: '' }),
+    changed,
+  });
+  const controller = createProjectsWireController({
+    projectBaselines: service,
+  } as unknown as ProjectOperationDependencies);
+  const wire = createTestWire(projectsWireContract, controller.impl);
+  const otherWire = createTestWire(projectsWireContract, controller.impl);
+  const scope = createScope({ label: 'baseline-settings-windows' });
+  const clock = createManualClock();
+  const first = remote(projectsWireContract.baseline, wire.client.baseline, {
+    scope,
+    clock,
+    lingerMs: 5,
+  });
+  const second = remote(projectsWireContract.baseline, otherWire.client.baseline, {
+    scope,
+    clock,
+    lingerMs: 5,
+  });
+  scope.add(first.retain({ projectId: 'sdk' }));
+  scope.add(second.retain({ projectId: 'sdk' }));
+  const left = first({ projectId: 'sdk' }).states.current;
+  const right = second({ projectId: 'sdk' }).states.current;
+  observe(left, () => {}, { scope });
+  observe(right, () => {}, { scope });
+  try {
+    expect((await whenReady(left, { scope })).value?.revision).toBe(0);
+    await whenReady(right, { scope });
+    await clock.advanceBy(10);
+    await wire.client.configureBaseline({
+      projectId: 'sdk',
+      expectedRevision: 0,
+      config: { verification: { command: 'pnpm test', timeoutMs: 60000 } },
+    });
+    expect(changed).toHaveBeenCalledWith('sdk');
+    await waitFor(
+      () => snapshot(left).value?.revision === 1 && snapshot(right).value?.revision === 1
+    );
+    expect(snapshot(right).value?.config.verification).toEqual({
+      command: 'pnpm test',
+      timeoutMs: 60000,
+    });
+    await expect(
+      wire.client.configureBaseline({
+        projectId: 'sdk',
+        expectedRevision: 0,
+        config: { verification: null },
+      })
+    ).rejects.toThrow();
+    await right.refresh();
+    expect(snapshot(right).value?.config.verification?.command).toBe('pnpm test');
+    await expect(
+      wire.client.configureBaseline({
+        projectId: 'sdk',
+        expectedRevision: 1,
+        config: { verification: { command: '   ' } },
+      })
+    ).rejects.toThrow();
+  } finally {
+    await scope.dispose();
+    await otherWire.dispose();
+    await wire.dispose();
+    await controller.dispose();
+  }
+});
 
 describe('Projects Wire attachments', () => {
   it('does not expose renderer-driven Project opening', () => {

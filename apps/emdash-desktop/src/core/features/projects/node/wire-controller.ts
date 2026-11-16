@@ -14,6 +14,7 @@ import { projectEvents } from '@core/features/projects/node';
 import { nativePathFromHost, resolveRelativePath } from '@core/primitives/desktop-runtime/api';
 import { appDbPokes } from '@core/services/app-db/node/pokes';
 import { forwardLiveModel } from '@core/services/runtime-clients/node/forward-live-model';
+import { baselineSyncPokes } from './baseline-sync-pokes';
 import { createProjectOperations, type ProjectOperationDependencies } from './controller';
 import {
   createProjectFromRemote,
@@ -45,8 +46,26 @@ export function createProjectsWireController(
   const attachments = expose(projectsWireContract.attachments, {
     state: ({ projectId }, scope) => dependencies.projects.track(projectId, scope),
   });
+  const baselineScope = createScope({ label: 'project-baselines-provider' });
+  const baseline = expose(
+    projectsWireContract.baseline,
+    {
+      current: ({ projectId }, scope) =>
+        query({
+          fetch: () => dependencies.projectBaselines.get(projectId),
+          pokes: [baselineSyncPokes.subscription((change) => change.projectId === projectId)],
+          scope,
+        }),
+    },
+    { scope: baselineScope, publish: { current: 'diff' } }
+  );
   return {
     impl: {
+      baseline,
+      configureBaseline: ({ projectId, expectedRevision, config }) =>
+        dependencies.projectBaselines.configure(projectId, expectedRevision, config),
+      synchronizeBaseline: ({ projectId }) =>
+        dependencies.projectBaselines.synchronize(projectId, 'manual'),
       createProject: (input) => projectOperations.createProject(input),
       inspectProjectPath: (input) => projectOperations.inspectProjectPath(input),
       trustRepository: ({ host, path, safeDirectory }) =>
@@ -113,6 +132,8 @@ export function createProjectsWireController(
       },
     },
     async dispose() {
+      await baseline.dispose();
+      await baselineScope.dispose();
       await creation.dispose();
       await attachments.dispose();
       await projectList.dispose();

@@ -13,6 +13,7 @@ import type {
   ProjectDurableSettingsDomains,
   ProjectSettingsDomains,
 } from '../../../api/project-settings-page';
+import { BaselineSettingsSection } from './baseline-settings-section';
 
 export const SettingsPanel = observer(function SettingsPanel() {
   const {
@@ -62,19 +63,26 @@ export const SettingsPanel = observer(function SettingsPanel() {
   }
 
   return (
-    <ProjectSettingsForm
-      key={projectId}
-      projectId={projectId}
-      projectType={context.project.type}
-      domains={domains}
-      configMigrations={configMigrations}
-      hostActionReason={hostActionReason}
-      hostObservationKind={hostDomains?.kind ?? 'unavailable'}
-      onSuccess={() => {}}
-      save={(s) => store.save(s)}
-      writeConfigToRepo={(request) => store.writeConfigToRepo(request)}
-      migrateProjectConfig={(request) => store.migrateProjectConfig(request)}
-    />
+    <>
+      <ProjectSettingsForm
+        key={projectId}
+        projectId={projectId}
+        projectType={context.project.type}
+        domains={domains}
+        configMigrations={configMigrations}
+        hostActionReason={hostActionReason}
+        hostObservationKind={hostDomains?.kind ?? 'unavailable'}
+        onSuccess={() => {}}
+        save={(s) => store.save(s)}
+        writeConfigToRepo={(request) => store.writeConfigToRepo(request)}
+        migrateProjectConfig={(request) => store.migrateProjectConfig(request)}
+      />
+      <BaselineSettingsSection
+        key={`baseline:${projectId}`}
+        project={context.project}
+        disabledReason={hostActionReason}
+      />
+    </>
   );
 });
 
