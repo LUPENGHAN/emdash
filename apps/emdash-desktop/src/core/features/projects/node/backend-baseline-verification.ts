@@ -17,7 +17,7 @@ export function createBackendBaselineVerification(deps: Dependencies) {
   const projectFor = createBackgroundProjectAccess(deps.projects, deps.scope);
   return createBaselineVerification({
     scope: deps.scope,
-    resolve: async (attempt) => {
+    resolve: async (attempt, intent = 'create') => {
       const project = await projectFor(attempt.target.projectId);
       if (
         project.repoPath !== attempt.target.checkout ||
@@ -25,14 +25,15 @@ export function createBackendBaselineVerification(deps: Dependencies) {
         project.project.repositoryWorkspaceId !== attempt.target.workspaceId
       )
         throw new Error('The Project moved before baseline verification. Check it again.');
-      const pool = await deps.placement.resolveWorktreePool(project.project);
-      if (!pool.success)
+      const pool =
+        intent === 'create' ? await deps.placement.resolveWorktreePool(project.project) : null;
+      if (pool && !pool.success)
         throw new Error(`Cannot place the verification checkout: ${pool.error.type}`);
       const runtime = await deps.runtimes.client(project.host);
       if (!runtime.success)
         throw new Error(`The verification Host is unavailable: ${runtime.error.type}`);
       return {
-        pool: pool.data,
+        pool: pool?.success ? pool.data : undefined,
         registry: project.workspaceRegistry,
         git: project.git.checkout,
         scripts: runtime.data.scripts,

@@ -145,6 +145,11 @@ export const projectsWireContract = defineContract({
     output: projectBaselineSnapshotSchema,
     callTimeoutMs: 0,
   }),
+  cleanupBaselineVerification: procedure({
+    input: projectIdInputSchema.extend({ attemptId: z.string().min(1) }),
+    output: projectBaselineSnapshotSchema,
+    callTimeoutMs: 0,
+  }),
   createProject: procedure({
     input: z.custom<CreateProjectParams>(),
     output: z.custom<CreateProjectResult>(),

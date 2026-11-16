@@ -130,7 +130,7 @@ process.exit(result.status ?? 1);
     credentials: { mintOperationCredentials: credentials } as unknown as Parameters<
       typeof createBackendProjectBaselineSync
     >[0]['credentials'],
-    verification: { verify, recoverVerification },
+    verification: { verify, recoverVerification, cleanupVerification: async () => {} },
   };
   let version = 1;
   const advance = async () => {

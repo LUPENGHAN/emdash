@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -258,6 +267,52 @@ try {
   await baselineSection
     .getByRole('status')
     .screenshot({ path: join(profile, 'baseline-verification-approved.png') });
+  const savedCheck = approvedBaseline.attempts.find(
+    (attempt) => attempt.verification?.status === 'succeeded' && attempt.verification.workspacePath
+  );
+  assert.ok(savedCheck);
+  const checkPath = savedCheck.verification.workspacePath;
+  const checkBranch = (
+    await exec('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: checkPath })
+  ).stdout.trim();
+  await appendFile(join(repository, '.git/info/exclude'), '\nemdash-verification-cache/\n');
+  await mkdir(join(checkPath, 'emdash-verification-cache'));
+  await writeFile(join(checkPath, 'emdash-verification-cache/output'), 'retain diagnostic output');
+  await baselineSection.getByText('Verification checkout history', { exact: true }).click();
+  const checkRow = baselineSection.locator('details > div').filter({ hasText: checkPath });
+  await checkRow.getByRole('button', { name: 'Clean verification checkout', exact: true }).click();
+  await checkRow.getByText(/contains changes, untracked files, or ignored files/).waitFor();
+  assert.equal(
+    await readFile(join(checkPath, 'emdash-verification-cache/output'), 'utf8'),
+    'retain diagnostic output'
+  );
+  const refusedCleanup = await page.evaluate(
+    (id) => window.baselineFixtureState(id),
+    codeProjectId
+  );
+  assert.deepEqual(refusedCleanup.proof, approvedBaseline.proof);
+  assert.equal(
+    refusedCleanup.attempts.find((attempt) => attempt.id === savedCheck.id).cleanup.status,
+    'blocked'
+  );
+  await checkRow.screenshot({ path: join(profile, 'baseline-cleanup-refused.png') });
+  await rm(join(checkPath, 'emdash-verification-cache'), { recursive: true });
+  await checkRow.getByRole('button', { name: /^(Retry|重试) cleanup$/ }).click();
+  await checkRow
+    .getByText('Checkout removed; verification evidence retained.', { exact: true })
+    .waitFor();
+  await assert.rejects(lstat(checkPath));
+  assert.equal(await git('rev-parse', checkBranch), baseline);
+  const cleanedBaseline = await page.evaluate(
+    (id) => window.baselineFixtureState(id),
+    codeProjectId
+  );
+  assert.deepEqual(cleanedBaseline.proof, approvedBaseline.proof);
+  assert.equal(
+    cleanedBaseline.attempts.find((attempt) => attempt.id === savedCheck.id).verification.output,
+    'baseline-verified'
+  );
+  await checkRow.screenshot({ path: join(profile, 'baseline-cleanup-complete.png') });
   const task = await call(mainClient, 'create_task', {
     project_id: codeProjectId,
     request_id: 'pr-code-task',
@@ -338,6 +393,11 @@ try {
   );
   assert.equal(restoredBaseline.proof.oid, baseline);
   assert.equal(restoredBaseline.proof.verification, 'succeeded');
+  assert.equal(
+    restoredBaseline.attempts.find((attempt) => attempt.id === savedCheck.id).cleanup.status,
+    'removed'
+  );
+  await assert.rejects(lstat(checkPath));
   assert.ok(
     restoredBaseline.attempts.some(
       (attempt) => attempt.verification?.output === 'baseline-verified'
@@ -593,6 +653,9 @@ try {
           'project settings saved baseline validation and a real Host script failure blocked MCP delegation',
           'fixed-commit validation passed in a separate checkout and delegation retained its approval snapshot',
           'baseline proof and output survived complete Electron restart',
+          'cleanup refused ignored verification output and preserved both the file and baseline approval',
+          'the settings cleanup retry removed only the unchanged checkout and retained its branch and verification evidence',
+          'complete restart retained cleanup completion and approved delegation without recreating the cleaned checkout',
           'real smart HTTP Git publication to a loopback personal fork with pinned task OID',
           'main platform response loss persisted and worker creation reused the same PR',
           'complete restart restored the request and UI continued without another platform create',

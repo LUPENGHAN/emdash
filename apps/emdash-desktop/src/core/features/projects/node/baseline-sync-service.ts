@@ -12,6 +12,7 @@ import {
   projectBaselineTargetSchema,
   projectBaselineSelectionSchema,
   type BaselineVerification,
+  type BaselineCleanup,
   type ProjectBaselineAttempt,
   type ProjectBaselineConfig,
   type ProjectBaselineObservation,
@@ -35,6 +36,7 @@ export type BaselineSyncDependencies = {
     receipt: (value: BaselineVerification) => Promise<void>
   ): Promise<BaselineVerification>;
   recoverVerification(attempt: ProjectBaselineAttempt): Promise<BaselineVerification>;
+  cleanupVerification(attempt: ProjectBaselineAttempt): Promise<void>;
   changed?(projectId: string): void;
   now?(): number;
   id?(): string;
@@ -99,6 +101,7 @@ export class ProjectBaselineSyncService {
   private readonly records = new KeyedMutex();
   private readonly repositories = new KeyedMutex();
   private readonly active = new Map<string, Promise<ProjectBaselineSnapshot>>();
+  private readonly cleanups = new KeyedMutex();
   private readonly now: () => number;
   constructor(private readonly deps: BaselineSyncDependencies) {
     this.now = deps.now ?? Date.now;
@@ -162,6 +165,53 @@ export class ProjectBaselineSyncService {
       const updated = { ...record, revision: record.revision + 1, config, proof: undefined };
       await this.write(projectId, updated);
       return this.view(projectId, updated);
+    });
+  }
+  /** Cleanup changes only artifact state; approval and diagnostic evidence remain durable. */
+  async cleanupVerification(
+    projectId: string,
+    attemptId: string
+  ): Promise<ProjectBaselineSnapshot> {
+    await this.deps.authorize(projectId, 'control');
+    return this.cleanups.runExclusive(JSON.stringify([projectId, attemptId]), async () => {
+      const attempt = (await this.load(projectId)).attempts.find((entry) => entry.id === attemptId);
+      if (!attempt) throw new Error('The baseline check no longer exists. Reload its status.');
+      if (attempt.cleanup?.status === 'removed') return this.get(projectId);
+      if (
+        attempt.finishedAt === undefined ||
+        !attempt.verification ||
+        !['succeeded', 'failed'].includes(attempt.verification.status)
+      )
+        throw new Error('Only a completed check with a saved verification result can be cleaned.');
+      return this.repositories.runExclusive(attempt.target.repositoryKey, async () => {
+        await this.deps.authorize(projectId, 'control');
+        if (this.active.has(projectId))
+          throw new Error('Wait for the running baseline check before cleaning.');
+        const patch = (cleanup: BaselineCleanup) =>
+          this.records.runExclusive(projectId, async () => {
+            const record = await this.load(projectId);
+            const index = record.attempts.findIndex((entry) => entry.id === attemptId);
+            if (index === -1) throw new Error('The baseline check no longer exists.');
+            const attempts = [...record.attempts];
+            attempts[index] = { ...attempts[index], cleanup };
+            const updated = { ...record, attempts };
+            await this.write(projectId, updated);
+            return this.view(projectId, updated);
+          });
+        const requestedAt = attempt.cleanup?.requestedAt ?? this.now();
+        await patch({ status: 'pending', requestedAt });
+        try {
+          await this.deps.cleanupVerification(attempt);
+        } catch (error) {
+          return patch({
+            status: 'blocked',
+            requestedAt,
+            finishedAt: this.now(),
+            message: redactSecrets(error instanceof Error ? error.message : String(error)),
+          });
+        }
+        return patch({ status: 'removed', requestedAt, finishedAt: this.now() });
+      });
     });
   }
   private async save(

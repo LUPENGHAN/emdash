@@ -102,6 +102,7 @@ function setup(pool = '/checks/sdk') {
   const host = {
     pool,
     registry: {
+      removeUnchangedWorktree: vi.fn(async () => ok(undefined)),
       createWorktree: create,
       getProjectConfig: config,
       records: { state: () => ({ snapshot: async () => ({ data: records }) }) },
@@ -126,6 +127,7 @@ function setup(pool = '/checks/sdk') {
     wait,
     config,
     readHead,
+    remove: host.registry.removeUnchangedWorktree,
     savedAttempt,
     setHead: (value: string) => {
       head = value;
@@ -135,6 +137,37 @@ function setup(pool = '/checks/sdk') {
     },
   };
 }
+
+it('cleans the saved workspace identity through the restricted Host verb without replay or placement changes', async () => {
+  const t = setup();
+  const receipt = await t.executor().verify(t.attempt, t.save);
+  await t.executor().cleanupVerification({ ...t.attempt, verification: receipt });
+  expect(t.remove).toHaveBeenCalledWith(
+    expect.objectContaining({
+      workspaceId: receipt.workspaceId,
+      path: receipt.workspacePath,
+      repositoryId: 'root',
+      repositoryPath: '/repo',
+      oid,
+    }),
+    expect.anything()
+  );
+  expect(t.start).toHaveBeenCalledTimes(1);
+  expect(t.create).toHaveBeenCalledTimes(1);
+  await expect(
+    t.executor().cleanupVerification({
+      ...t.attempt,
+      verification: { ...receipt, workspaceId: 'another-workspace' },
+    })
+  ).rejects.toThrow('identity is required');
+  await expect(
+    t.executor().cleanupVerification({
+      ...t.attempt,
+      verification: { ...receipt, status: 'unknown' },
+    })
+  ).rejects.toThrow('identity is required');
+  expect(t.remove).toHaveBeenCalledTimes(1);
+});
 
 it('checks the pinned checkout and saves artifact and run receipts before waiting', async () => {
   const t = setup();

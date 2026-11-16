@@ -24,7 +24,10 @@ type Dependencies = {
   scope: Scope;
   projects: ProjectAttachmentManager;
   credentials: Pick<GitCredentialsService, 'mintOperationCredentials'>;
-  verification: Pick<BaselineSyncDependencies, 'verify' | 'recoverVerification'>;
+  verification: Pick<
+    BaselineSyncDependencies,
+    'verify' | 'recoverVerification' | 'cleanupVerification'
+  >;
   changed?(projectId: string): void;
 };
 

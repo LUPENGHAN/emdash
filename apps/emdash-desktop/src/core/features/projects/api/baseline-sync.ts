@@ -86,6 +86,13 @@ export const projectBaselineTriggerSchema = z.enum([
   'pr-merged',
 ]);
 export type ProjectBaselineTrigger = z.infer<typeof projectBaselineTriggerSchema>;
+export const baselineCleanupSchema = z.object({
+  status: z.enum(['pending', 'removed', 'blocked']),
+  requestedAt: z.number(),
+  finishedAt: z.number().optional(),
+  message: z.string().optional(),
+});
+export type BaselineCleanup = z.infer<typeof baselineCleanupSchema>;
 export const projectBaselineAttemptSchema = z.object({
   id: z.string().min(1),
   revision: z.number().int().nonnegative(),
@@ -97,6 +104,7 @@ export const projectBaselineAttemptSchema = z.object({
   observation: projectBaselineObservationSchema.optional(),
   verificationConfig: baselineVerificationConfigSchema.nullable(),
   verification: baselineVerificationSchema.optional(),
+  cleanup: baselineCleanupSchema.optional(),
   error: z.object({ code: z.string(), message: z.string() }).optional(),
 });
 export type ProjectBaselineAttempt = z.infer<typeof projectBaselineAttemptSchema>;

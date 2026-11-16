@@ -48,6 +48,7 @@ it('streams baseline settings to both windows and rejects an edit from an obsole
       throw new Error('Not used by settings');
     },
     recoverVerification: async () => ({ status: 'unknown', output: '' }),
+    cleanupVerification: async () => {},
     changed,
   });
   const controller = createProjectsWireController({

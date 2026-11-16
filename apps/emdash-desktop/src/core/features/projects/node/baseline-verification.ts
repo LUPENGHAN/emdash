@@ -8,10 +8,10 @@ import type { BaselineVerification, ProjectBaselineAttempt } from '../api/baseli
 import type { BaselineSyncDependencies } from './baseline-sync-service';
 
 type VerificationHost = {
-  pool: string;
+  pool?: string;
   registry: Pick<
     ProjectProvider['workspaceRegistry'],
-    'createWorktree' | 'getProjectConfig' | 'records'
+    'createWorktree' | 'getProjectConfig' | 'records' | 'removeUnchangedWorktree'
   >;
   git: Pick<ProjectProvider['git']['checkout'], 'readHead'>;
   scripts: Pick<HostRuntimesClient['scripts'], 'start' | 'wait' | 'runs'>;
@@ -19,7 +19,10 @@ type VerificationHost = {
 
 type Dependencies = {
   scope: Scope;
-  resolve(attempt: ProjectBaselineAttempt): Promise<VerificationHost>;
+  resolve(
+    attempt: ProjectBaselineAttempt,
+    intent?: 'create' | 'inspect'
+  ): Promise<VerificationHost>;
 };
 
 function identity(attempt: ProjectBaselineAttempt) {
@@ -34,7 +37,7 @@ function identity(attempt: ProjectBaselineAttempt) {
 /** Verification uses a pinned checkout; receipts outlive the desktop and never replay a script. */
 export function createBaselineVerification(
   deps: Dependencies
-): Pick<BaselineSyncDependencies, 'verify' | 'recoverVerification'> {
+): Pick<BaselineSyncDependencies, 'verify' | 'recoverVerification' | 'cleanupVerification'> {
   const options = () => ({ signal: deps.scope.signal, timeoutMs: 0 });
   const assertHead = async (
     host: VerificationHost,
@@ -120,6 +123,7 @@ export function createBaselineVerification(
       if (!attempt.verificationConfig || !attempt.observation?.oid)
         throw new Error('Baseline verification requires a command and a pinned commit.');
       const host = await deps.resolve(attempt);
+      if (!host.pool) throw new Error('The verification worktree pool is unavailable.');
       const expected = identity(attempt);
       const workspacePath = joinHostPath(host.pool, expected.workspaceId);
       let receipt: BaselineVerification = {
@@ -176,6 +180,33 @@ export function createBaselineVerification(
         ? wait(host, attempt, receipt)
         : settle(host, attempt, receipt, started.data);
     },
+    cleanupVerification: async (attempt) => {
+      const receipt = attempt.verification;
+      const expected = identity(attempt);
+      if (
+        !receipt ||
+        !['succeeded', 'failed'].includes(receipt.status) ||
+        !receipt.workspacePath ||
+        receipt.workspaceId !== expected.workspaceId ||
+        !attempt.observation?.oid
+      )
+        throw new Error(
+          'A saved terminal verification workspace identity is required for cleanup.'
+        );
+      const host = await deps.resolve(attempt, 'inspect');
+      const result = await host.registry.removeUnchangedWorktree(
+        {
+          workspaceId: expected.workspaceId,
+          repositoryId: attempt.target.workspaceId,
+          repositoryPath: attempt.target.checkout,
+          path: receipt.workspacePath,
+          branch: expected.branch,
+          oid: attempt.observation.oid,
+        },
+        options()
+      );
+      if (!result.success) throw new Error(`Verification cleanup refused: ${result.error.message}`);
+    },
     recoverVerification: async (attempt) => {
       const receipt = attempt.verification ?? { status: 'unknown', output: '' };
       if (!receipt.runId || !receipt.workspacePath)
@@ -186,7 +217,7 @@ export function createBaselineVerification(
             'No confirmed verification run receipt is available. Retry the check explicitly.',
         };
       try {
-        const host = await deps.resolve(attempt);
+        const host = await deps.resolve(attempt, 'inspect');
         await assertWorkspace(host, attempt, receipt);
         const runs = await host.scripts.runs
           .state({ workspacePath: receipt.workspacePath }, 'current')

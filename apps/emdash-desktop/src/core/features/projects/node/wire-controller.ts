@@ -66,6 +66,8 @@ export function createProjectsWireController(
         dependencies.projectBaselines.configure(projectId, expectedRevision, config),
       synchronizeBaseline: ({ projectId }) =>
         dependencies.projectBaselines.synchronize(projectId, 'manual'),
+      cleanupBaselineVerification: ({ projectId, attemptId }) =>
+        dependencies.projectBaselines.cleanupVerification(projectId, attemptId),
       createProject: (input) => projectOperations.createProject(input),
       inspectProjectPath: (input) => projectOperations.inspectProjectPath(input),
       trustRepository: ({ host, path, safeDirectory }) =>

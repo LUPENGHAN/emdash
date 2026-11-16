@@ -38,7 +38,10 @@ export type ProjectOperationDependencies = CreateProjectDependencies & {
   projectDeletion: ProjectDeletionDependencies;
   projectAutomations: ProjectArchiveAutomations;
   projectSettings: ProjectSettingsService;
-  projectBaselines: Pick<ProjectBaselineSyncService, 'get' | 'configure' | 'synchronize'>;
+  projectBaselines: Pick<
+    ProjectBaselineSyncService,
+    'get' | 'configure' | 'synchronize' | 'cleanupVerification'
+  >;
   projects: Pick<ProjectAttachmentManager, 'invalidate' | 'recover' | 'track'>;
   mintCloneCredentials: GitCredentialsService['mintCloneCredentials'];
 };

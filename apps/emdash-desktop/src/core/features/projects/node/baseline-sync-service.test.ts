@@ -94,6 +94,7 @@ function setup() {
     readLocal: vi.fn(async () => localOid),
     verify: vi.fn(async () => success),
     recoverVerification: vi.fn(async () => success),
+    cleanupVerification: vi.fn(async () => {}),
     now: () => clock++,
     id: () => `attempt-${++ids}`,
   };
@@ -133,6 +134,100 @@ it('records Git-only approval without claiming that validation commands ran', as
   expect(state.lastContactAt).not.toBeNull();
   expect(t.deps.verify).not.toHaveBeenCalled();
   expect((await service.prepareDelegation('sdk')).oid).toBe(firstOid);
+});
+
+it('cleans artifacts without changing approval, diagnostic evidence, or retrying verification', async () => {
+  const t = setup();
+  const service = t.service();
+  await service.configure('sdk', 0, { verification: { command: 'check' } });
+  const checked = await service.synchronize('sdk', 'manual');
+  const attempt = checked.attempts.at(-1)!;
+  const result = await service.cleanupVerification('sdk', attempt.id);
+  expect(result.canDelegate).toBe(true);
+  expect(result.proof).toEqual(checked.proof);
+  expect(result.attempts.at(-1)?.verification).toEqual(attempt.verification);
+  expect(result.attempts.at(-1)?.cleanup).toMatchObject({ status: 'removed' });
+  expect(t.deps.verify).toHaveBeenCalledTimes(1);
+  expect(t.deps.cleanupVerification).toHaveBeenCalledWith(attempt);
+  await t.service().cleanupVerification('sdk', attempt.id);
+  expect(t.deps.cleanupVerification).toHaveBeenCalledTimes(1);
+});
+
+it('preserves a cleanup refusal across restart and retries the same historical identity after settings change', async () => {
+  const t = setup();
+  const service = t.service();
+  await service.configure('sdk', 0, { verification: { command: 'check' } });
+  const attempt = (await service.synchronize('sdk', 'manual')).attempts.at(-1)!;
+  vi.mocked(t.deps.cleanupVerification).mockRejectedValueOnce(
+    new Error('Checkout contains ignored files')
+  );
+  expect(
+    (await service.cleanupVerification('sdk', attempt.id)).attempts.at(-1)?.cleanup
+  ).toMatchObject({ status: 'blocked', message: 'Checkout contains ignored files' });
+  const restored = t.service();
+  await restored.configure('sdk', 1, { verification: { command: 'another check' } });
+  const cleaned = await restored.cleanupVerification('sdk', attempt.id);
+  expect(cleaned.revision).toBe(2);
+  expect(cleaned.attempts.at(-1)?.cleanup?.status).toBe('removed');
+  expect(vi.mocked(t.deps.cleanupVerification).mock.calls[1][0].target).toEqual(attempt.target);
+  expect(t.deps.verify).toHaveBeenCalledTimes(1);
+});
+
+it('serializes two window cleanups and resumes a lost final persistence response without replaying the command', async () => {
+  const t = setup();
+  const service = t.service();
+  await service.configure('sdk', 0, { verification: { command: 'check' } });
+  const attempt = (await service.synchronize('sdk', 'manual')).attempts.at(-1)!;
+  const persist = vi.mocked(t.deps.store.setOrThrow).getMockImplementation()!;
+  let loseResponse = true;
+  vi.mocked(t.deps.store.setOrThrow).mockImplementation(async (id, record) => {
+    if (loseResponse && record.attempts.at(-1)?.cleanup?.status === 'removed') {
+      loseResponse = false;
+      throw new Error('Interrupted before saving completion');
+    }
+    await persist(id, record);
+  });
+  await expect(service.cleanupVerification('sdk', attempt.id)).rejects.toThrow('Interrupted');
+  expect((await service.get('sdk')).attempts.at(-1)?.cleanup?.status).toBe('pending');
+  const restored = t.service();
+  const results = await Promise.all([
+    restored.cleanupVerification('sdk', attempt.id),
+    restored.cleanupVerification('sdk', attempt.id),
+  ]);
+  expect(results.every((state) => state.attempts.at(-1)?.cleanup?.status === 'removed')).toBe(true);
+  expect(t.deps.cleanupVerification).toHaveBeenCalledTimes(2);
+  expect(t.deps.verify).toHaveBeenCalledTimes(1);
+});
+
+it('rejects cleanup without a terminal persisted verification result', async () => {
+  const t = setup();
+  const state = await t.service().synchronize('sdk', 'manual');
+  await expect(t.service().cleanupVerification('sdk', state.attempts.at(-1)!.id)).rejects.toThrow(
+    'Only a completed check'
+  );
+  await expect(t.service().cleanupVerification('sdk', 'other-check')).rejects.toThrow(
+    'no longer exists'
+  );
+  expect(t.deps.cleanupVerification).not.toHaveBeenCalled();
+});
+
+it('keeps a failed commit denied after its verification checkout is cleaned', async () => {
+  const t = setup();
+  const service = t.service();
+  await service.configure('sdk', 0, { verification: { command: 'check' } });
+  vi.mocked(t.deps.verify).mockResolvedValue({
+    status: 'failed',
+    exitCode: 9,
+    output: 'Failure evidence',
+  });
+  const failed = await service.synchronize('sdk', 'manual');
+  expect(failed.canDelegate).toBe(false);
+  const cleaned = await service.cleanupVerification('sdk', failed.attempts.at(-1)!.id);
+  expect(cleaned.canDelegate).toBe(false);
+  expect(cleaned.denied).toEqual(failed.denied);
+  expect(cleaned.proof).toBeUndefined();
+  expect(cleaned.attempts.at(-1)?.verification).toEqual(failed.attempts.at(-1)?.verification);
+  expect(cleaned.attempts.at(-1)?.cleanup?.status).toBe('removed');
 });
 
 it('verifies the pinned commit and retains bounded redacted evidence', async () => {

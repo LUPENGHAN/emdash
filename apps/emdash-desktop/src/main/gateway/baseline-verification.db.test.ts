@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -116,21 +116,6 @@ async function setup() {
   await writeFile(join(repo, 'version.txt'), 'root-is-newer');
   await git('commit', '-am', 'Advance root checkout');
   const rootOid = await git('rev-parse', 'HEAD');
-  const handle = await workspaceRegistryStore.openTemp();
-  cleanup.push(async () => handle.close());
-  const registry = new WorkspaceRegistryRuntime({
-    handle,
-    attachments: new LocalAttachmentStore(join(dir, 'attachments')),
-  });
-  cleanup.push(async () => registry.dispose());
-  const registryWire = createTestWire(
-    workspaceRegistryContract,
-    createWorkspaceRegistryController(registry)
-  );
-  cleanup.push(async () => registryWire.dispose());
-  expect(
-    (await registryWire.client.createWorkspace({ workspaceId: 'root', path: repo })).success
-  ).toBe(true);
   const gitRuntime = new GitRuntime({
     watcher: {
       watch: () => ({ ready: async () => ok(undefined), release: async () => {} }),
@@ -161,6 +146,22 @@ async function setup() {
     })
   );
   cleanup.push(async () => scriptsWire.dispose());
+  const handle = await workspaceRegistryStore.openTemp();
+  cleanup.push(async () => handle.close());
+  const registry = new WorkspaceRegistryRuntime({
+    handle,
+    attachments: new LocalAttachmentStore(join(dir, 'attachments')),
+    scripts: scriptsWire.client,
+  });
+  cleanup.push(async () => registry.dispose());
+  const registryWire = createTestWire(
+    workspaceRegistryContract,
+    createWorkspaceRegistryController(registry)
+  );
+  cleanup.push(async () => registryWire.dispose());
+  expect(
+    (await registryWire.client.createWorkspace({ workspaceId: 'root', path: repo })).success
+  ).toBe(true);
   const provider = {
     projectId: 'sdk',
     project: { id: 'sdk', repositoryWorkspaceId: 'root' },
@@ -223,6 +224,7 @@ async function setup() {
     wait,
     registryWire,
     scripts,
+    deps,
   };
 }
 
@@ -277,5 +279,42 @@ it('retains a real script timeout as failed verification', async () => {
   const result = await t.factory().verify(t.attempt, t.save);
   expect(result).toMatchObject({ status: 'failed' });
   expect(result.message).toMatch(/timed out|timed-out/i);
+  expect(t.spawner.paths).toHaveLength(1);
+});
+
+it('cleans a completed real verification checkout after restart using its saved path, preserving evidence and all branches', async () => {
+  const t = await setup();
+  const receipt = await t.factory().verify(t.attempt, t.save);
+  const attempt = { ...t.attempt, verification: receipt, finishedAt: Date.now() };
+  const branch = (await t.registryWire.client.records.state(undefined, 'list').snapshot()).data[
+    receipt.workspaceId!
+  ].creation!.branch;
+  // Placement changes must not redirect cleanup or prevent inspecting the saved artifact.
+  t.deps.placement.resolveWorktreePool = async () => {
+    throw new Error('Do not resolve placement');
+  };
+  await t.factory().cleanupVerification(attempt);
+  await expect(lstat(receipt.workspacePath!)).rejects.toThrow();
+  expect(await t.git('rev-parse', branch)).toBe(t.oid);
+  expect(await t.git('rev-parse', 'develop')).toBe(t.rootOid);
+  expect(await t.git('rev-parse', 'task/keep')).toBe(t.oid);
+  expect(await t.git('rev-parse', 'emdash/manage/keep')).toBe(t.oid);
+  expect(receipt.output).toBe('verified');
+  expect(t.spawner.paths).toHaveLength(1);
+  await t.factory().cleanupVerification(attempt);
+});
+
+it('refuses real ignored verification output and can clean it after explicit removal', async () => {
+  const t = await setup();
+  const receipt = await t.factory().verify(t.attempt, t.save);
+  const attempt = { ...t.attempt, verification: receipt, finishedAt: Date.now() };
+  await writeFile(join(receipt.workspacePath!, '.gitignore'), 'cache/\n');
+  await mkdir(join(receipt.workspacePath!, 'cache'));
+  await writeFile(join(receipt.workspacePath!, 'cache/output'), 'diagnostic output');
+  await expect(t.factory().cleanupVerification(attempt)).rejects.toThrow('contains changes');
+  expect((await lstat(receipt.workspacePath!)).isDirectory()).toBe(true);
+  await rm(join(receipt.workspacePath!, 'cache'), { recursive: true });
+  await rm(join(receipt.workspacePath!, '.gitignore'));
+  await t.factory().cleanupVerification(attempt);
   expect(t.spawner.paths).toHaveLength(1);
 });

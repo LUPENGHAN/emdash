@@ -256,6 +256,62 @@ export function BaselineSettingsSection({
               {verification.output}
             </pre>
           ) : null}
+          {value.attempts.some((attempt) => attempt.verification?.workspacePath) ? (
+            <details className="space-y-2 pt-2">
+              <summary className="cursor-pointer">Verification checkout history</summary>
+              <p className="text-foreground-muted">
+                Clean finished, unchanged checkouts while keeping their verification evidence and
+                branches. Local changes and ignored files must be handled before cleaning.
+              </p>
+              {value.attempts
+                .filter((attempt) => attempt.verification?.workspacePath)
+                .map((attempt) => {
+                  const receipt = attempt.verification;
+                  const terminal =
+                    attempt.finishedAt !== undefined &&
+                    (receipt?.status === 'succeeded' || receipt?.status === 'failed');
+                  const removed = attempt.cleanup?.status === 'removed';
+                  return (
+                    <div key={attempt.id} className="space-y-1 rounded border border-border p-2">
+                      <p>
+                        {new Date(attempt.startedAt).toLocaleString()} · {receipt?.status}
+                      </p>
+                      <p className="break-all">{attempt.observation?.oid}</p>
+                      <p className="break-all">{receipt?.workspacePath}</p>
+                      <p>
+                        {removed
+                          ? 'Checkout removed; verification evidence retained.'
+                          : attempt.cleanup?.status === 'pending'
+                            ? 'Cleanup completion is unconfirmed. Resume to check its outcome.'
+                            : attempt.cleanup?.message}
+                      </p>
+                      {terminal && !removed ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          disabled={busy || pending || !!blocked}
+                          onClick={() =>
+                            void run(async () => {
+                              await (
+                                await getProjectsWireClient()
+                              ).cleanupBaselineVerification({ projectId, attemptId: attempt.id });
+                              await state.refresh();
+                            })
+                          }
+                        >
+                          {attempt.cleanup?.status === 'pending'
+                            ? 'Resume cleanup'
+                            : attempt.cleanup?.status === 'blocked'
+                              ? 'Retry cleanup'
+                              : 'Clean verification checkout'}
+                        </Button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+            </details>
+          ) : null}
         </div>
       ) : state.isLoading ? (
         <p className="text-xs">Loading baseline status…</p>
