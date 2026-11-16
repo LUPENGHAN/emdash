@@ -30,6 +30,8 @@ await writeFile(join(repository, 'README.md'), 'Isolated PR acceptance');
 await git('add', '.');
 await git('commit', '-m', 'Baseline');
 const baseline = await git('rev-parse', 'HEAD');
+const managementRepository = join(profile, 'management-repo');
+await exec('git', ['clone', repository, managementRepository]);
 const forge = await startGitForgeFixture(join(profile, 'forge'), repository);
 await git('remote', 'add', 'upstream', forge.gitUrl('org'));
 await git('remote', 'add', 'personal', forge.gitUrl('personal'));
@@ -152,7 +154,7 @@ async function launch() {
   await page.getByRole('button', { name: /^(Settings|设置)$/ }).waitFor();
   await page.addScriptTag({
     type: 'module',
-    content: `import { prepareCoordinator, configurePrFixture, openPrFixtureDialog } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { prepareCoordinator, configurePrFixture, openPrFixtureDialog });`,
+    content: `import { prepareCoordinator, prepareAdditionalProject, configurePrFixture, openPrFixtureDialog, readPrFixtureAssociation } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { prepareCoordinator, prepareAdditionalProject, configurePrFixture, openPrFixtureDialog, readPrFixtureAssociation });`,
   });
   await page.waitForFunction(() => typeof window.configurePrFixture === 'function');
 }
@@ -182,12 +184,20 @@ try {
   const main = await page.evaluate((input) => window.prepareCoordinator(input), {
     wrapper,
     mainWrapper,
-    repository,
+    repository: managementRepository,
     worktreeRoot: join(profile, 'worktrees'),
   });
+  const codeProjectId = await page.evaluate((input) => window.prepareAdditionalProject(input), {
+    wrapper,
+    repository,
+    worktreeRoot: join(profile, 'code-worktrees'),
+    name: 'SDK acceptance',
+    baselineBranch: 'main',
+  });
   await page.evaluate((input) => window.configurePrFixture(input), {
-    projectId: main.projectId,
+    projectId: codeProjectId,
     apiBaseUrl: forge.origin,
+    baseRemote: 'personal',
   });
   await page
     .locator(`[data-testid="project-main-agent"][data-project-id="${main.projectId}"]`)
@@ -196,6 +206,7 @@ try {
   await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
   const mainClient = await captureClient(main.conversationId);
   const task = await call(mainClient, 'create_task', {
+    project_id: codeProjectId,
     request_id: 'pr-code-task',
     name: 'PR code task',
     prompt: 'Wait for the isolated test code change.',
@@ -236,6 +247,16 @@ try {
   });
   assert.equal(own.phase, 'complete');
   assert.equal(forge.prs.length, 1);
+  const associated = async () =>
+    page.evaluate((input) => window.readPrFixtureAssociation(input), {
+      projectId: codeProjectId,
+      taskId: task.task_id,
+    });
+  await wait(async () => {
+    const prs = await associated();
+    return prs.length === 1 && prs[0].url === own.result.url;
+  }, 'The ordinary task did not associate its saved explicit-target PR.');
+  assert.equal((await associated())[0].repositoryUrl, forge.repositoryUrl('org'));
   await page.getByTestId('coordinator-tasks-tab').click();
   await page
     .getByTestId('task-pr-status')
@@ -271,6 +292,10 @@ try {
     posts
   );
   await page.screenshot({ path: join(profile, 'task-pr-recovered.png') });
+  await wait(
+    async () => (await associated()).some((pr) => pr.url === own.result.url),
+    'The ordinary task did not restore its explicit-target PR association.'
+  );
   await taskGit('fetch', 'personal');
   await taskGit('branch', '--set-upstream-to', `personal/${branch}`);
   const workspaceId = status.task.workspaceId;
@@ -278,13 +303,15 @@ try {
     request.path.endsWith('/git-receive-pack')
   ).length;
   await page.evaluate((input) => window.openPrFixtureDialog(input), {
-    projectId: main.projectId,
+    projectId: codeProjectId,
     taskId: task.task_id,
     workspaceId,
     repositoryUrl: forge.repositoryUrl('org'),
     branchName: branch,
   });
   const dialog = page.getByRole('dialog');
+  await dialog.getByRole('combobox').first().click();
+  await page.getByRole('option', { name: /upstream/ }).click();
   const create = dialog.getByRole('button', { name: 'Create MR', exact: true });
   if (!(await create.isVisible())) {
     await dialog.locator('[data-slot="dropdown-menu-trigger"]').last().click();
@@ -312,6 +339,8 @@ try {
           'main platform response loss persisted and worker creation reused the same PR',
           'complete restart restored the request and UI continued without another platform create',
           'ordinary create-only dialog used the same durable pipeline and preserved source and baseline',
+          'ordinary task association followed the saved organization target despite a different project base remote, including after restart',
+          'main agent created and resumed a PR for another repository while its task page was never opened',
         ],
         taskId: task.task_id,
         oid,

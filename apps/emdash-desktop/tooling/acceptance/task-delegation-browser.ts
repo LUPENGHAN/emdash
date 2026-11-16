@@ -10,6 +10,7 @@ import {
   asAvailableProject,
   getProjectStore,
 } from '@core/features/projects/api/browser/stores/project-selectors';
+import { getTaskPrAssociationStore } from '@core/features/source-control/api/browser/stores/task-source-control-selectors';
 import {
   getTaskManagerStore,
   getTaskStore,
@@ -237,7 +238,11 @@ export async function deleteFixtureProject(projectId: string) {
   await (await getProjectsWireClient()).deleteProject({ projectId });
 }
 
-export async function configurePrFixture(input: { projectId: string; apiBaseUrl: string }) {
+export async function configurePrFixture(input: {
+  projectId: string;
+  apiBaseUrl: string;
+  baseRemote?: string;
+}) {
   const connected = await (
     await getIntegrationsClient()
   ).connect({
@@ -253,7 +258,7 @@ export async function configurePrFixture(input: { projectId: string; apiBaseUrl:
     patch: {
       gitIdentity: {
         stored: {
-          baseRemote: 'upstream',
+          baseRemote: input.baseRemote ?? 'upstream',
           pushRemote: 'personal',
           defaultBranch: { remote: 'upstream', branch: 'main' },
         },
@@ -264,6 +269,16 @@ export async function configurePrFixture(input: { projectId: string; apiBaseUrl:
     },
   });
   if (!saved.success) throw new Error(JSON.stringify(saved.error));
+}
+
+export function readPrFixtureAssociation(input: { projectId: string; taskId: string }) {
+  const task = getTaskStore(input.projectId, input.taskId);
+  return task
+    ? getTaskPrAssociationStore(task).pullRequests.map((pr) => ({
+        url: pr.url,
+        repositoryUrl: pr.repositoryUrl,
+      }))
+    : [];
 }
 
 export function openPrFixtureDialog(input: {
