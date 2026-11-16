@@ -6,6 +6,7 @@ type CheckoutImplementation = NonNullable<ContractImpl<GitContract>['checkout']>
 
 export function createCheckoutProcedures(runtime: GitCheckoutRuntime) {
   return {
+    syncBaseline: { run: (input, context) => runtime.syncBaseline(input, context) },
     readHead: (input) => runtime.readHead(input),
     getChangedFiles: (input) => runtime.getChangedFiles(input),
     getMergeBase: (input) => runtime.getMergeBase(input),

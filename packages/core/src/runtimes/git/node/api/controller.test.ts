@@ -15,7 +15,7 @@ import {
   type LiveUpdate,
 } from '@emdash/wire/rpc';
 import { describe, expect, it } from 'vitest';
-import { gitContract } from '#runtimes/git/api';
+import { gitContract, localBranchRefSchema } from '#runtimes/git/api';
 import { GitRuntime } from '#runtimes/git/node/git-runtime';
 import { gitPath, hostPath } from '#runtimes/git/node/testing/paths';
 import type { IWatchService, WatchEvent, WatchOptions } from '#services/fs-watch/api';
@@ -86,6 +86,76 @@ async function waitFor(condition: () => boolean, message: string): Promise<void>
 }
 
 describe('createGitController', () => {
+  it('serializes baseline jobs and refreshes checkout facts without moving task branches', async () => {
+    const { repo, remote } = await makeRepoWithRemote();
+    const source = await mkdtemp(path.join(tmpdir(), 'emdash-baseline-wire-'));
+    const runtime = new GitRuntime({ watcher: createNoopWatcher() });
+    const { client: git, dispose } = makeClient(runtime);
+    const jobs = createLiveJobReplicaCache(
+      gitContract.checkout.syncBaseline,
+      git.checkout.syncBaseline
+    );
+    try {
+      const before = (
+        await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repo })
+      ).stdout.trim();
+      await execFileAsync('git', ['push', 'origin', 'main'], { cwd: repo });
+      await execFileAsync('git', ['branch', 'feature/task'], { cwd: repo });
+      await execFileAsync('git', ['clone', '--branch', 'main', remote, source]);
+      await writeFile(path.join(source, 'tracked.txt'), 'Upstream update\n');
+      await execFileAsync('git', ['add', '.'], { cwd: source });
+      await execFileAsync(
+        'git',
+        [
+          '-c',
+          'user.name=Baseline test',
+          '-c',
+          'user.email=test@example.invalid',
+          'commit',
+          '-m',
+          'Upstream change',
+        ],
+        { cwd: source }
+      );
+      await execFileAsync('git', ['push', 'origin', 'main'], { cwd: source });
+      const target = (
+        await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: source })
+      ).stdout.trim();
+      const checkout = checkoutSelector(repo);
+      expect((await git.checkout.model.state(checkout, 'head').snapshot()).data).toMatchObject({
+        oid: before,
+      });
+      const input = {
+        ...checkout,
+        remote: 'origin',
+        upstreamRef: localBranchRefSchema.parse('refs/heads/main'),
+        baselineRef: localBranchRefSchema.parse('refs/heads/main'),
+      };
+      const leases = await Promise.all([jobs.start(input), jobs.start(input)]);
+      try {
+        const handles = await Promise.all(leases.map((lease) => lease.ready()));
+        const results = await Promise.all(handles.map((handle) => handle.result));
+        expect(results.map((result) => result.kind).sort()).toEqual(['current', 'updated']);
+        expect(results.every((result) => result.afterOid === target)).toBe(true);
+        expect((await git.checkout.model.state(checkout, 'head').snapshot()).data).toMatchObject({
+          oid: target,
+        });
+        expect(
+          (await execFileAsync('git', ['rev-parse', 'feature/task'], { cwd: repo })).stdout.trim()
+        ).toBe(before);
+      } finally {
+        await Promise.all(leases.map((lease) => lease.release()));
+      }
+    } finally {
+      await jobs.dispose();
+      dispose();
+      await runtime.dispose();
+      await Promise.all(
+        [repo, remote, source].map((directory) => rm(directory, { recursive: true, force: true }))
+      );
+    }
+  });
+
   it('mounts live models and mutations under a parent wire contract', async () => {
     const repo = await makeRepo();
     const runtime = new GitRuntime({ watcher: createNoopWatcher() });

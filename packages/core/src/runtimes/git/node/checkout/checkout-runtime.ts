@@ -21,6 +21,7 @@ import {
   type PushJobInput,
   type PushBranchJobInput,
 } from '#runtimes/git/api';
+import type { SyncBaselineJobInput } from '#runtimes/git/api/checkout/baseline-sync';
 import type { ReadRemoteBranchInput } from '#runtimes/git/api/checkout/schemas';
 import type { GitAllocationGraph } from '#runtimes/git/node/allocation/allocation-graph';
 import { expectedGitCommandError } from '#runtimes/git/node/api/errors';
@@ -86,6 +87,16 @@ export class GitCheckoutRuntime {
     });
     this.fileContentHosts.set(contract.id, host);
     return host;
+  }
+
+  syncBaseline(input: SyncBaselineJobInput, context: LiveJobContext<GitTransferProgress>) {
+    return this.run(input, (checkout) =>
+      checkout.syncBaseline(input, {
+        signal: context.signal,
+        onProgress: context.progress,
+        env: credentialOperationEnv(input.credentials),
+      })
+    );
   }
 
   readHead(input: CheckoutSelector) {

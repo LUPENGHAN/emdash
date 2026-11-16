@@ -14,6 +14,7 @@ import { checkoutStatusStateSchema } from '#runtimes/git/api/checkout/states/sta
 import {
   commitErrorSchema,
   downloadErrorSchema,
+  fetchErrorSchema,
   gitCommandErrorSchema,
   pullErrorSchema,
   pushErrorSchema,
@@ -21,6 +22,7 @@ import {
 import { gitBranchRefSchema, localBranchRefSchema } from '#runtimes/git/api/repository/states/refs';
 import { transferProgressSchema } from '#runtimes/git/api/schemas';
 import { checkoutSelectorSchema } from '#runtimes/git/api/selectors';
+import { baselineSyncResultSchema, syncBaselineJobInputSchema } from './baseline-sync';
 import { gitFileContentKeySchema } from './file-content-key';
 import {
   blameResultSchema,
@@ -42,6 +44,12 @@ import {
 } from './schemas';
 
 export const gitCheckoutContract = defineContract({
+  syncBaseline: liveJob({
+    input: syncBaselineJobInputSchema,
+    progress: transferProgressSchema,
+    result: baselineSyncResultSchema,
+    error: fetchErrorSchema,
+  }),
   readHead: fallible({
     input: checkoutSelectorSchema,
     data: checkoutHeadStateSchema,

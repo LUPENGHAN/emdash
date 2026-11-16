@@ -215,6 +215,17 @@ export class CheckoutResource {
     return result;
   }
 
+  async syncBaseline(
+    input: Parameters<GitCheckout['syncBaseline']>[0],
+    context: GitOperationContext
+  ) {
+    try {
+      return await this.execute(() => this.commands.syncBaseline(input, context), true);
+    } finally {
+      this.syncChanged();
+    }
+  }
+
   async inspectPushTarget(remote: string) {
     return this.execute(() => this.commands.inspectPushTarget(remote));
   }

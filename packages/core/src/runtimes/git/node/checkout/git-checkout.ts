@@ -31,6 +31,7 @@ import {
   type PushTarget,
   type PushBranchJobInput,
 } from '#runtimes/git/api';
+import type { SyncBaselineJobInput } from '#runtimes/git/api/checkout/baseline-sync';
 import type { ReadRemoteBranchInput } from '#runtimes/git/api/checkout/schemas';
 import type { CheckoutIdentity } from '#runtimes/git/node/allocation/identity';
 import { blame as readBlame } from '#runtimes/git/node/checkout/ops/blame';
@@ -44,6 +45,7 @@ import {
   getLog as readLog,
 } from '#runtimes/git/node/checkout/ops/log';
 import { computeStatusState } from '#runtimes/git/node/checkout/ops/status';
+import { syncBaseline as synchronizeBaseline } from '#runtimes/git/node/checkout/ops/sync-baseline';
 import { commandFailed, pushFailed } from '#runtimes/git/node/exec/errors';
 import type { GitOperationContext } from '#runtimes/git/node/exec/operation-context';
 import { execGitWithProgress } from '#runtimes/git/node/exec/transfer-progress';
@@ -264,6 +266,13 @@ export class GitCheckout {
   }
 
   // -- Sync --------------------------------------------------------------------
+
+  syncBaseline(
+    input: Omit<SyncBaselineJobInput, 'checkout' | 'credentials'>,
+    context: GitOperationContext = {}
+  ) {
+    return synchronizeBaseline(this.exec, this.identity, input, context);
+  }
 
   async inspectPushTarget(remote: string): Promise<Result<PushTarget, GitCommandError>> {
     try {
