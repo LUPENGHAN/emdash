@@ -32,6 +32,21 @@ export const DocumentStorageSetup = observer(function DocumentStorageSetup({
       setBusy(false);
     }
   };
+  const cancel = async () => {
+    if (busy || !record.documentStorage) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await (
+        await getCoordinationClient()
+      ).cancelDocumentStorageSetup({ id: record.id, taskId: record.documentStorage.taskId });
+      await queryClient.invalidateQueries({ queryKey: ['coordinator', record.taskId] });
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div className="space-y-3 p-4" data-testid="document-storage-setup">
       <p>Choose a Git repository to store this main agent's management documents.</p>
@@ -62,6 +77,16 @@ export const DocumentStorageSetup = observer(function DocumentStorageSetup({
       >
         {record.documentStorage ? 'Retry document storage setup' : 'Use repository for documents'}
       </Button>
+      {record.documentStorage && (
+        <Button
+          disabled={busy}
+          variant="secondary"
+          data-testid="cancel-document-storage-setup"
+          onClick={() => void cancel()}
+        >
+          Cancel setup and choose another repository
+        </Button>
+      )}
       {error && (
         <p role="alert" className="text-sm text-foreground-destructive">
           {error}

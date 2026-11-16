@@ -9,8 +9,12 @@ import {
   asAvailableProject,
   getProjectStore,
 } from '@core/features/projects/api/browser/stores/project-selectors';
-import { getTaskManagerStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
+import {
+  getTaskManagerStore,
+  getTaskStore,
+} from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { getSidebarStore } from '@core/features/workbench/contributions/browser/app-stores';
+import type { CreateTaskParams } from '@core/primitives/tasks/api';
 
 /** Test renderer entry: normal typed clients and stores, with isolated paths supplied by the harness. */
 export async function prepareDelegationCaller(input: {
@@ -132,6 +136,63 @@ export async function coordinatorSnapshot(taskId: string) {
   return (await getCoordinationClient()).getByTask({ taskId });
 }
 
+/** Creates resources through normal APIs; the stopped-app harness attaches the legacy KV record. */
+export async function prepareLegacyCoordinatorFixture(input: {
+  wrapper: string;
+  repository: string;
+  worktreeRoot: string;
+}) {
+  const { project, manager } = await prepareProject({
+    ...input,
+    name: 'Legacy management fixture',
+  });
+  const client = await getCoordinationClient();
+  const record = (await client.list()).find((entry) => entry.projectId === project.id);
+  if (!record) throw new Error('Missing legacy main identity');
+  await client.update({
+    id: record.id,
+    primary: { agent: 'opencode', connection: 'official', effort: null },
+  });
+  const params: CreateTaskParams = {
+    id: record.taskId,
+    projectId: project.id,
+    taskConfig: {
+      version: '1',
+      name: 'Main agent',
+      role: 'coordination',
+      initialConversation: {
+        id: record.conversationId,
+        provider: asAgentProviderId('opencode'),
+        type: 'acp',
+        title: 'Legacy main',
+        modelSource: null,
+        effort: null,
+      },
+    },
+    workspaceConfig: {
+      version: '2',
+      git: {
+        kind: 'create-branch',
+        branchName: `legacy-main-${record.taskId.slice(0, 8)}`,
+        fromBranch: { type: 'local', branch: 'main' },
+      },
+      workspace: { kind: 'new-worktree' },
+    },
+  };
+  await manager.createTask(params);
+  await manager.provisionTask(record.taskId);
+  const task = getTaskStore(project.id, record.taskId);
+  if (!task?.workspacePath) throw new Error('Legacy workspace was not provisioned');
+  return {
+    id: record.id,
+    projectId: project.id,
+    taskId: record.taskId,
+    conversationId: record.conversationId,
+    params,
+    path: task.workspacePath,
+  };
+}
+
 export async function createReplacementMain(input: { projectId: string; taskId: string }) {
   const manager = getConversationsForTask(input.taskId);
   if (!manager) throw new Error('Main agent conversations are unavailable.');
@@ -164,6 +225,14 @@ export async function allCoordinatorSnapshots() {
 
 export async function coordinatorDelegationStatus(id: string, taskId: string) {
   return (await getCoordinationClient()).delegationStatus({ id, taskId });
+}
+
+export async function archiveFixtureProject(projectId: string) {
+  await (await getProjectsWireClient()).archiveProject({ projectId });
+}
+
+export async function deleteFixtureProject(projectId: string) {
+  await (await getProjectsWireClient()).deleteProject({ projectId });
 }
 
 export async function createTerminalMain(input: { projectId: string; taskId: string }) {

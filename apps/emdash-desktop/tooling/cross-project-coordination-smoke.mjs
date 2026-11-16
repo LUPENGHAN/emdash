@@ -5,6 +5,8 @@ import { watch } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -157,6 +159,16 @@ let replacementClient;
 let crossWorkerClient;
 let independentClient;
 let grantedWorkerClient;
+// Playwright's browser predicate treats a returned Promise as truthy before it resolves.
+// Await typed Wire snapshots in Node so a pending migration cannot satisfy the condition.
+const waitForSnapshot = async (predicate, argument) => {
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    if (await page.evaluate(predicate, argument)) return;
+    await delay(100);
+  }
+  throw new Error('Timed out waiting for the persisted coordination state.');
+};
 const waitForCapture = async (id) => {
   const file = join(capture, id + '.json');
   if (!(await readdir(capture)).includes(id + '.json')) {
@@ -536,7 +548,7 @@ try {
   await page.getByTestId('coordinator-tasks-tab').click();
   await page.getByText('Simulated task result', { exact: true }).waitFor();
   await page.getByTestId('coordinator-accept-result').waitFor();
-  await page.waitForFunction(async (id) => {
+  await waitForSnapshot(async (id) => {
     const record = await window.coordinatorSnapshot(id);
     return record.events.some((event) => event.state === 'queued');
   }, coordinator.taskId);
@@ -673,7 +685,7 @@ try {
   await page.getByTestId('coordinator-project-access').click();
   await page.getByTestId('coordinator-access-selected').click();
   await page.getByTestId('coordinator-save-access').click();
-  await page.waitForFunction(
+  await waitForSnapshot(
     async (id) => (await window.coordinatorSnapshot(id)).projectAccess?.mode === 'selected',
     coordinator.taskId
   );
@@ -695,7 +707,7 @@ try {
   await page.getByTestId('coordinator-project-access').click();
   await page.getByTestId('coordinator-access-all').click();
   await page.getByTestId('coordinator-save-access').click();
-  await page.waitForFunction(
+  await waitForSnapshot(
     async (id) => (await window.coordinatorSnapshot(id)).projectAccess?.mode === 'all',
     coordinator.taskId
   );
@@ -735,7 +747,7 @@ try {
   await page.getByTestId('coordinator-main-conversation').click();
   await page.getByRole('option', { name: /Replacement main/ }).click();
   await page.getByTestId('coordinator-bind-main').click();
-  await page.waitForFunction(
+  await waitForSnapshot(
     async ({ taskId, conversationId }) =>
       (await window.coordinatorSnapshot(taskId)).conversationId === conversationId,
     { taskId: coordinator.taskId, conversationId: replacement.id }
@@ -1188,7 +1200,7 @@ try {
   await page.getByRole('button', { name: /^(Settings|设置)$/ }).waitFor();
   await page.addScriptTag({
     type: 'module',
-    content: `import { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator, coordinatorDelegationStatus } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator, coordinatorDelegationStatus });`,
+    content: `import { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator, coordinatorDelegationStatus, prepareLegacyCoordinatorFixture } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator, coordinatorDelegationStatus, prepareLegacyCoordinatorFixture });`,
   });
   await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
   const restored = await page.evaluate(() => window.allCoordinatorSnapshots());
@@ -1501,10 +1513,43 @@ try {
   }
 
   assert.ok(directoryStorage);
+  const legacyRepository = join(profile, 'legacy-repository');
+  await mkdir(legacyRepository);
+  const legacyGit = async (...args) =>
+    (await promisify(execFile)('git', args, { cwd: legacyRepository })).stdout.trim();
+  await legacyGit('init', '-b', 'main');
+  await legacyGit('config', 'user.name', 'Legacy acceptance');
+  await legacyGit('config', 'user.email', 'legacy@example.invalid');
+  await writeFile(join(legacyRepository, 'README.md'), 'Product documentation stays in code.\n');
+  await legacyGit('add', 'README.md');
+  await legacyGit('commit', '-m', 'Code baseline');
+  const legacyBaseline = await legacyGit('rev-parse', 'HEAD');
+  const legacy = await page.evaluate((input) => window.prepareLegacyCoordinatorFixture(input), {
+    wrapper,
+    repository: legacyRepository,
+    worktreeRoot: join(profile, 'legacy-worktrees'),
+  });
+  await mkdir(join(legacy.path, 'plans'));
+  const legacyPlan = '# Legacy plan\n\nMove this selected management document only.\n';
+  await writeFile(join(legacy.path, 'plans', 'legacy-plan.md'), legacyPlan);
   const beforeStorageRestart = directoryStorage;
   const stoppedWithStorage = await quitApplication(app);
   assert.equal(stoppedWithStorage.exitCode, 0);
   app = undefined;
+  // Seed an upgrade fixture only while its isolated application is fully stopped.
+  const fixtureDb = new DatabaseSync(join(profile, 'scratch.db'));
+  try {
+    const key = `coordinators:${legacy.id}`;
+    const row = fixtureDb.prepare('SELECT value FROM kv WHERE key = ?').get(key);
+    assert.ok(row);
+    const record = JSON.parse(row.value);
+    assert.equal(record.taskId, legacy.taskId);
+    fixtureDb
+      .prepare('UPDATE kv SET value = ?, updated_at = ? WHERE key = ?')
+      .run(JSON.stringify({ ...record, version: '1', params: legacy.params }), Date.now(), key);
+  } finally {
+    fixtureDb.close();
+  }
   app = await _electron.launch({
     executablePath: electronPath,
     args: [appRoot],
@@ -1554,6 +1599,191 @@ try {
   await page.screenshot({ path: join(profile, 'associated-document-storage-restarted.png') });
   await assert.rejects(readFile(join(beforeStorageRestart.root, '.git')), { code: 'ENOENT' });
 
+  const expandLegacy = page.getByRole('button', {
+    name: /^(Expand|展开) Legacy management fixture$/,
+  });
+  if (await expandLegacy.isVisible()) await expandLegacy.click();
+  await page
+    .locator(`[data-testid="project-main-agent"][data-project-id="${legacy.projectId}"]`)
+    .click();
+  await page
+    .locator(`[data-testid="coordinator-panel"][data-task-id="${legacy.taskId}"]`)
+    .waitFor();
+  await page.getByTestId('coordinator-documents-tab').click();
+  const migrationForm = page.getByTestId('document-migration-form');
+  await migrationForm.getByTestId('migration-destination-project').click();
+  await page.getByRole('option', { name: 'Delegation acceptance', exact: true }).click();
+  await migrationForm.getByTestId('migration-document-paths').fill('plans/legacy-plan.md');
+  await migrationForm.getByTestId('prepare-document-migration').click();
+  await migrationForm.getByTestId('run-document-migration').waitFor();
+  const plannedLegacy = (await page.evaluate(() => window.allCoordinatorSnapshots())).find(
+    (record) => record.id === legacy.id
+  );
+  assert.equal(plannedLegacy.documentMigration.phase, 'prepared');
+  assert.equal(plannedLegacy.documentStorage, undefined);
+  assert.equal(plannedLegacy.documentMigration.files[0].content, legacyPlan);
+  await page.screenshot({ path: join(profile, 'legacy-document-migration-prepared.png') });
+  const stoppedWithPlan = await quitApplication(app);
+  assert.equal(stoppedWithPlan.exitCode, 0);
+  app = undefined;
+  app = await _electron.launch({
+    executablePath: electronPath,
+    args: [appRoot],
+    env,
+    timeout: 30000,
+  });
+  page = await app.firstWindow();
+  page.setDefaultTimeout(20000);
+  await page.waitForLoadState('domcontentloaded');
+  await page.getByRole('button', { name: /^(Settings|设置)$/ }).waitFor();
+  await page.addScriptTag({
+    type: 'module',
+    content: `import { allCoordinatorSnapshots, readCoordinatorDocument } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument });`,
+  });
+  await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
+  const resumedLegacy = (await page.evaluate(() => window.allCoordinatorSnapshots())).find(
+    (record) => record.id === legacy.id
+  );
+  assert.deepEqual(resumedLegacy.documentMigration, plannedLegacy.documentMigration);
+  const expandResumedLegacy = page.getByRole('button', {
+    name: /^(Expand|展开) Legacy management fixture$/,
+  });
+  if (await expandResumedLegacy.isVisible()) await expandResumedLegacy.click();
+  await page
+    .locator(`[data-testid="project-main-agent"][data-project-id="${legacy.projectId}"]`)
+    .click();
+  await page
+    .locator(`[data-testid="coordinator-panel"][data-task-id="${legacy.taskId}"]`)
+    .waitFor();
+  await page.getByTestId('coordinator-documents-tab').click();
+  await page.getByTestId('run-document-migration').click();
+  await page.getByTestId('document-migration-result').waitFor();
+  const migratedPanel = page.getByTestId('coordinator-documents-panel');
+  await migratedPanel.getByRole('button', { name: /^(Raw|原始)$/ }).click();
+  await page.waitForFunction(() =>
+    Array.from(document.querySelectorAll('.monaco-editor .view-lines')).some((element) =>
+      element.textContent
+        .replace(/\u00a0/g, ' ')
+        .includes('Move this selected management document only.')
+    )
+  );
+  const migratedLegacy = (await page.evaluate(() => window.allCoordinatorSnapshots())).find(
+    (record) => record.id === legacy.id
+  );
+  assert.equal(migratedLegacy.documentMigration.phase, 'complete');
+  assert.equal(migratedLegacy.taskId, legacy.taskId);
+  assert.equal(migratedLegacy.conversationId, legacy.conversationId);
+  assert.deepEqual(migratedLegacy.params, legacy.params);
+  assert.equal(
+    migratedLegacy.documentStorage.taskId,
+    plannedLegacy.documentMigration.target.taskId
+  );
+  assert.equal(migratedLegacy.documentStorageHistory[0].taskId, legacy.taskId);
+  assert.equal(await readFile(join(legacy.path, 'plans', 'legacy-plan.md'), 'utf8'), legacyPlan);
+  assert.equal(
+    await readFile(join(legacy.path, 'README.md'), 'utf8'),
+    'Product documentation stays in code.\n'
+  );
+  assert.equal(await legacyGit('rev-parse', 'HEAD'), legacyBaseline);
+  const migratedBlock = (await git('worktree', 'list', '--porcelain'))
+    .split('\n\n')
+    .find((block) =>
+      block.includes(`branch refs/heads/emdash/manage/${migratedLegacy.documentStorage.taskId}`)
+    );
+  assert.ok(migratedBlock);
+  const migratedPath = migratedBlock.split('\n')[0].slice('worktree '.length);
+  assert.equal(await readFile(join(migratedPath, 'plans', 'legacy-plan.md'), 'utf8'), legacyPlan);
+  await assert.rejects(readFile(join(migratedPath, 'README.md')), { code: 'ENOENT' });
+  assert.equal(await git('rev-parse', 'HEAD'), baseline);
+  await page.screenshot({ path: join(profile, 'legacy-document-migration-complete.png') });
+  await page.getByTestId('coordinator-conversation-tab').click();
+  await page
+    .locator('[contenteditable="true"]')
+    .first()
+    .fill('Continue the original legacy conversation after document migration.');
+  await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
+  const legacyCapture = await waitForCapture(legacy.conversationId);
+  await waitForPrompt(
+    'Continue the original legacy conversation after document migration.',
+    legacyCapture.sessionId
+  );
+  const legacyMain = await waitForCapture('main-session');
+  assert.equal(legacyMain.sessionId, legacyCapture.sessionId);
+  assert.equal(
+    await readFile(join(legacyMain.cwd, 'README.md'), 'utf8'),
+    'Product documentation stays in code.\n'
+  );
+  const legacyClient = new Client({ name: 'migrated-legacy-main', version: '1' });
+  try {
+    await legacyClient.connect(new StreamableHTTPClientTransport(new URL(legacyCapture.mcpUrl)));
+    const read = JSON.parse(
+      await call(legacyClient, 'read_management_document', { path: 'plans/legacy-plan.md' })
+    );
+    assert.equal(read.content, legacyPlan);
+    await page.addScriptTag({
+      type: 'module',
+      content: `import { archiveFixtureProject, deleteFixtureProject } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { archiveFixtureProject, deleteFixtureProject });`,
+    });
+    await page.waitForFunction(() => typeof window.archiveFixtureProject === 'function');
+    const deletion = await page.evaluate(async (projectId) => {
+      try {
+        await window.deleteFixtureProject(projectId);
+        return { deleted: true };
+      } catch (error) {
+        return { deleted: false, message: String(error) };
+      }
+    }, coordinator.projectId);
+    assert.equal(
+      deletion.deleted,
+      false,
+      'Deleting document storage was allowed while other main agents use it'
+    );
+    assert.match(deletion.message, /management documents|pending migration/);
+    await page.evaluate(
+      (projectId) => window.archiveFixtureProject(projectId),
+      coordinator.projectId
+    );
+    const unavailable = await legacyClient.callTool({
+      name: 'read_management_document',
+      arguments: { path: 'plans/legacy-plan.md' },
+    });
+    assert.equal(unavailable.isError, true);
+    const archivedBinding = (await page.evaluate(() => window.allCoordinatorSnapshots())).find(
+      (record) => record.id === legacy.id
+    );
+    assert.equal(archivedBinding.documentStorage.taskId, migratedLegacy.documentStorage.taskId);
+    await page.getByTestId('coordinator-documents-tab').click();
+    await page.getByTestId('document-migration-settings').locator('summary').first().click();
+    const recoveryForm = page.getByTestId('document-migration-form');
+    await recoveryForm.getByTestId('migration-destination-project').click();
+    await page.getByRole('option', { name: 'Legacy management fixture', exact: true }).click();
+    await recoveryForm.getByTestId('migration-document-paths').fill('plans/legacy-plan.md');
+    await recoveryForm.getByTestId('prepare-document-migration').click();
+    await recoveryForm.getByTestId('run-document-migration').click();
+    await waitForSnapshot(
+      async ({ coordinatorId, projectId }) => {
+        const record = (await window.allCoordinatorSnapshots()).find(
+          (entry) => entry.id === coordinatorId
+        );
+        if (record?.documentMigration?.error) throw new Error(record.documentMigration.error);
+        return (
+          record?.documentStorage?.projectId === projectId &&
+          record.documentMigration?.phase === 'complete'
+        );
+      },
+      { coordinatorId: legacy.id, projectId: legacy.projectId }
+    );
+    const recoveredRead = JSON.parse(
+      await call(legacyClient, 'read_management_document', { path: 'plans/legacy-plan.md' })
+    );
+    assert.equal(recoveredRead.content, legacyPlan);
+    assert.equal(await readFile(join(migratedPath, 'plans', 'legacy-plan.md'), 'utf8'), legacyPlan);
+    assert.equal(await legacyGit('rev-parse', 'HEAD'), legacyBaseline);
+    await page.screenshot({ path: join(profile, 'archived-document-storage-migrated.png') });
+  } finally {
+    await legacyClient.close();
+  }
+
   await writeFile(
     join(profile, 'result.json'),
     JSON.stringify(
@@ -1580,6 +1810,10 @@ try {
           'directory main explicitly selected another Git project for independent document storage without moving its active conversation',
           'associated storage reused Monaco saving and controlled MCP reads and writes; stale and foreign writes refused',
           'independent document storage binding and content survived another complete application restart and reopened in the editor',
+          'legacy code worktree and version-1 coordinator fixture upgraded without changing original files, branch or conversation identity',
+          'selected management document migration plan survived complete restart and copied only the reviewed file before switching storage',
+          'migrated document reopened in Monaco while original main continued in its code worktree and read management content through MCP',
+          'deleting an in-use document project was refused before data removal; archived storage stayed bound and explicitly migrated without losing its source files',
           'task worktree contained no copied management documents',
           'real ACP protocol with a simulated OpenCode executable',
           'authenticated main and worker MCP identities',

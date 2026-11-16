@@ -2,7 +2,7 @@ import { hostRefEquals } from '@emdash/core/primitives/host/api';
 import { Button, Input } from '@emdash/ui/react/primitives';
 import { useQuery } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { openFileInTaskEditor } from '@core/features/editor/api/browser/open-file-in-file-editor';
 import type { FileTabResource } from '@core/features/editor/api/browser/task-editor/stores/file-tab-resource';
 import { EditorFileTree } from '@core/features/editor/contributions/browser/editor-file-tree';
@@ -15,6 +15,7 @@ import { getCoordinationClient } from '../api/browser/client';
 import { documentPathSchema } from '../api/documents';
 import type { Coordinator } from '../api/types';
 import { CoordinatorDocumentPush } from './coordinator-document-push';
+import { DocumentMigrationForm } from './document-migration-form';
 import { DocumentStorageSetup } from './document-storage-setup';
 
 export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsPanel({
@@ -26,18 +27,67 @@ export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsP
 }) {
   if (record.documentStorage?.state === 'preparing')
     return <DocumentStorageSetup record={record} />;
+  const legacy =
+    !record.documentStorage &&
+    record.params &&
+    !['none', 'management'].includes(record.params.workspaceConfig.git.kind);
+  if (legacy)
+    return (
+      <div className="overflow-auto">
+        <DocumentMigrationForm record={record} />
+      </div>
+    );
+  const migration = (
+    <details
+      className="shrink-0 border-b border-border"
+      data-testid="document-migration-settings"
+      open={
+        record.documentMigration &&
+        !['complete', 'cancelled'].includes(record.documentMigration.phase)
+          ? true
+          : undefined
+      }
+    >
+      <summary className="cursor-pointer px-3 py-2 text-xs">Move document storage</summary>
+      <DocumentMigrationForm record={record} />
+    </details>
+  );
+  const migrated =
+    record.documentMigration?.phase === 'complete' ? (
+      <p
+        role="status"
+        className="shrink-0 px-3 py-2 text-xs"
+        data-testid="document-migration-result"
+      >
+        Documents moved. Original files and conversations are preserved.
+      </p>
+    ) : null;
   if (record.documentStorage)
     return (
-      <tasksBrowserContributions.embeddedWorkspace
-        projectId={record.documentStorage.projectId}
-        taskId={record.documentStorage.taskId}
-      >
-        {(workspace) => (
-          <CoordinatorDocumentEditor record={record}>{workspace}</CoordinatorDocumentEditor>
-        )}
-      </tasksBrowserContributions.embeddedWorkspace>
+      <div className="flex h-full min-h-0 flex-col">
+        {migrated}
+        {migration}
+        <div className="min-h-0 flex-1">
+          <tasksBrowserContributions.embeddedWorkspace
+            projectId={record.documentStorage.projectId}
+            taskId={record.documentStorage.taskId}
+          >
+            {(workspace) => (
+              <CoordinatorDocumentEditor record={record}>{workspace}</CoordinatorDocumentEditor>
+            )}
+          </tasksBrowserContributions.embeddedWorkspace>
+        </div>
+      </div>
     );
-  return <CoordinatorDocumentEditor record={record}>{children}</CoordinatorDocumentEditor>;
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {migrated}
+      {migration}
+      <div className="min-h-0 flex-1">
+        <CoordinatorDocumentEditor record={record}>{children}</CoordinatorDocumentEditor>
+      </div>
+    </div>
+  );
 });
 
 const CoordinatorDocumentEditor = observer(function CoordinatorDocumentEditor({
@@ -49,6 +99,15 @@ const CoordinatorDocumentEditor = observer(function CoordinatorDocumentEditor({
 }) {
   const { projectId, taskId } = useTaskViewContext();
   const composition = useTaskComposition();
+  const migratedPath =
+    record.documentMigration?.phase === 'complete' &&
+    record.documentMigration.target.taskId === taskId
+      ? record.documentMigration.files[0]?.path
+      : undefined;
+  useEffect(() => {
+    if (migratedPath && composition.editorView.openFilePaths.length === 0)
+      void openFileInTaskEditor(projectId, taskId, migratedPath);
+  }, [composition, migratedPath, projectId, taskId]);
   const [path, setPath] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
