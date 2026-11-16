@@ -39,8 +39,10 @@ import {
   type SourceControlWorkspaceIdentity as WorkspaceIdentity,
   type SourceControlWorkspaceIdentityResolver,
 } from '../api/runtime-adapter';
+import type { TaskPullRequestService } from './task-pull-request-service';
 
 export type CreateSourceControlWireControllerOptions = Readonly<{
+  taskPullRequests?: TaskPullRequestService;
   runtimes: SourceControlRuntimeBroker;
   workspaceIdentity: SourceControlWorkspaceIdentityResolver;
   projects: Pick<ProjectAttachmentManager, 'requireAttached'>;
@@ -59,6 +61,20 @@ export function createSourceControlWireController(
   const checkoutModel = createCheckoutModelProvider(options);
 
   return createController(sourceControlContract, {
+    taskPullRequests: {
+      prepare: (input) => {
+        if (!options.taskPullRequests) throw new Error('Task PR creation is unavailable.');
+        return options.taskPullRequests.prepare(input);
+      },
+      run: ({ taskId, requestId }) => {
+        if (!options.taskPullRequests) throw new Error('Task PR creation is unavailable.');
+        return options.taskPullRequests.run(taskId, requestId);
+      },
+      list: ({ taskId }) => {
+        if (!options.taskPullRequests) throw new Error('Task PR creation is unavailable.');
+        return options.taskPullRequests.list(taskId);
+      },
+    },
     repository: {
       model: repositoryModel,
       listWorktrees: (input, meta) =>

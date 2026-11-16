@@ -57,6 +57,9 @@ export async function executeAgentAction(
 ): Promise<AgentControlResult> {
   const who = `${agentDisplayName(caller.providerId)} (“${caller.title}”)`;
   switch (action.kind) {
+    case 'create_pull_request':
+    case 'retry_pull_request':
+      throw new Error('Task pull requests must be handled by the authenticated backend.');
     case 'list_conversations':
       return listConversations(caller, action.scope);
 

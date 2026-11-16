@@ -20,6 +20,7 @@ import {
   runtimeResolveErrorUnion,
 } from '@core/primitives/desktop-runtime/api/fallible-contract';
 import { providerAccountRefSchema } from '@core/primitives/provider-accounts/api';
+import { taskPullRequestInputSchema, taskPullRequestRecord } from './task-pull-requests';
 
 const projectKeySchema = z.object({ projectId: z.string() });
 const workspaceKeySchema = z.object({ workspaceId: z.string() });
@@ -186,6 +187,17 @@ const sourceControlCheckoutContract = defineContract({
 export const sourceControlDomain = 'sourceControl' as const;
 
 export const sourceControlContract = defineContract({
+  taskPullRequests: defineContract({
+    prepare: procedure({ input: taskPullRequestInputSchema, output: taskPullRequestRecord.schema }),
+    run: procedure({
+      input: z.object({ taskId: z.string(), requestId: z.string() }),
+      output: taskPullRequestRecord.schema,
+    }),
+    list: procedure({
+      input: z.object({ taskId: z.string() }),
+      output: z.array(taskPullRequestRecord.schema),
+    }),
+  }),
   repository: sourceControlRepositoryContract,
   checkout: sourceControlCheckoutContract,
 });

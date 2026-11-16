@@ -82,6 +82,7 @@ const instruction = `You are this project's main agent. Coordinate existing Emda
 Delegate implementation into task worktrees; keep code changes on their own branches.
 Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort. Use depends_on for tasks that must wait for approved prerequisite results. Attach only relevant management documents with document_refs; their versions and content are frozen for that task.
 If a saved task fails to start, inspect get_task_status and use retry_task with its task ID after fixing the failure. This also works after a receiver switch or explicit task takeover; do not create a replacement task to recover startup.
+Use create_pull_request with the assigned task ID and a stable request_id to push its code branch and open a PR. Specify the push remote and target repository/branch when project defaults are insufficient. Inspect get_task_status.pullRequests and use retry_pull_request to resume a saved request without changing its frozen source or target.
 Workers must call submit_task_result with commits, checks and unresolved issues. Inspect their changes and evidence before reviewing a result.
 When a result notification arrives, call acknowledge_task_results with its event IDs before taking follow-up actions.
 Agent startup, an idle process and a created PR do not prove task completion. Do not automatically merge branches or PRs.`;

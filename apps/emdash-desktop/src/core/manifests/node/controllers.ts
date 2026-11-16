@@ -85,6 +85,7 @@ import { createRequirementsWireController } from '@core/features/requirements/no
 import type { SearchService } from '@core/features/search/node/search-service';
 import { createSearchWireController } from '@core/features/search/node/wire-controller';
 import { createSkillsWireController } from '@core/features/skills/node/wire-controller';
+import type { TaskPullRequestService } from '@core/features/source-control/node/task-pull-request-service';
 import { createSourceControlWireController } from '@core/features/source-control/node/wire-controller';
 import type { TaskService } from '@core/features/tasks/api/node/task-service';
 import type { TaskSessionLaunchContextResolver } from '@core/features/tasks/api/node/task-session-launch-context';
@@ -181,6 +182,7 @@ export type DesktopControllerContext = {
   readonly projectDeletion: ProjectDeletionDependencies;
   readonly promptLibrary: PromptLibraryService;
   readonly coordination: CoordinatorService;
+  readonly taskPullRequests: TaskPullRequestService;
   readonly requirements: RequirementsService;
   readonly modelGateway: ModelGatewayService;
   readonly memory: MemoryService;
@@ -394,12 +396,13 @@ export const desktopNodeControllers = {
     create: ({ telemetry }) => createTelemetryWireController(telemetry),
   },
   sourceControl: {
-    create: ({ gitCredentials, runtimes, workspaceIdentity, projects }) =>
+    create: ({ gitCredentials, runtimes, workspaceIdentity, projects, taskPullRequests }) =>
       createSourceControlWireController({
         runtimes,
         workspaceIdentity,
         projects,
         mintOperationCredentials: gitCredentials.mintOperationCredentials,
+        taskPullRequests,
       }),
   },
   mcp: {

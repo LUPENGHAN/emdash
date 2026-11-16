@@ -441,6 +441,58 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
   );
 
   server.registerTool(
+    'create_pull_request',
+    {
+      description:
+        'Push a code task branch and create or reuse its pull request. Main agents may act on their own assigned tasks; task agents may act only on themselves. Supply a stable request_id and reuse it on retries. Source commit, push destination and PR target are frozen before pushing. Defaults come from the target project settings. No automatic merge.',
+      inputSchema: {
+        task_id: z.string().min(1).optional(),
+        request_id: z.string().min(1).max(200),
+        title: z.string().trim().min(1).max(1000),
+        body: z.string().max(100_000).optional(),
+        draft: z.boolean().default(false),
+        source_branch: z.string().min(1).optional(),
+        push_remote: z.string().min(1).optional(),
+        target_repository: z.string().min(1).optional(),
+        target_branch: z.string().min(1).optional(),
+      },
+    },
+    ({
+      task_id,
+      request_id,
+      title,
+      body,
+      draft,
+      source_branch,
+      push_remote,
+      target_repository,
+      target_branch,
+    }) =>
+      dispatch({
+        kind: 'create_pull_request',
+        taskId: task_id,
+        requestId: request_id,
+        title,
+        body,
+        draft,
+        sourceBranch: source_branch,
+        pushRemote: push_remote,
+        repositoryUrl: target_repository,
+        base: target_branch,
+      })
+  );
+  server.registerTool(
+    'retry_pull_request',
+    {
+      description:
+        'Resume a saved task PR request using its frozen source, push remote and target. Inspect get_task_status.pullRequests for the request ID, phase, error and result. The current main agent or the task itself may retry; this never resolves defaults again or automatically merges.',
+      inputSchema: { task_id: z.string().min(1), request_id: z.string().min(1).max(200) },
+    },
+    ({ task_id, request_id }) =>
+      dispatch({ kind: 'retry_pull_request', taskId: task_id, requestId: request_id })
+  );
+
+  server.registerTool(
     'cancel_pending_task',
     {
       description:

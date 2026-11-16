@@ -5,6 +5,7 @@ import type {
   DocumentWrite,
 } from '@core/features/coordination/api/documents';
 import type { TaskResult } from '@core/features/coordination/api/types';
+import type { TaskPullRequestInput } from '@core/features/source-control/api/task-pull-requests';
 import { pendingAgentMessageSchema } from './pending-messages';
 
 /**
@@ -70,6 +71,8 @@ export const NAVIGATION_COMMAND_IDS = [
 export type NavigationCommandId = (typeof NAVIGATION_COMMAND_IDS)[number];
 
 export type AgentControlAction =
+  | ({ kind: 'create_pull_request' } & Omit<TaskPullRequestInput, 'taskId'> & { taskId?: string })
+  | { kind: 'retry_pull_request'; taskId: string; requestId: string }
   | ({ kind: 'write_management_document'; coordinatorId?: string } & DocumentWrite)
   | { kind: 'read_management_document'; coordinatorId?: string; path: string; revision?: string }
   | { kind: 'cancel_pending_task'; taskId: string }

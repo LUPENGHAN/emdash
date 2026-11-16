@@ -10,6 +10,7 @@ import {
   getProjectManagerStore,
 } from '@core/features/projects/api/browser/stores/project-selectors';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
+import { TaskPullRequestStatus } from '@core/features/source-control/contributions/browser/task-pull-requests';
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
@@ -74,10 +75,12 @@ const CoordinatorContent = observer(function CoordinatorContent({
           onEvent: () => {
             void queryClient.invalidateQueries({ queryKey: ['coordinator', taskId] });
             void queryClient.invalidateQueries({ queryKey: ['coordinator-delegation-status'] });
+            void queryClient.invalidateQueries({ queryKey: ['task-pull-requests'] });
           },
           onGap: () => {
             void queryClient.invalidateQueries({ queryKey: ['coordinator', taskId] });
             void queryClient.invalidateQueries({ queryKey: ['coordinator-delegation-status'] });
+            void queryClient.invalidateQueries({ queryKey: ['task-pull-requests'] });
           },
         });
         if (disposed) next();
@@ -195,6 +198,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
                     taskId={task.taskId}
                     cancelled={task.state === 'cancelled'}
                   />
+                  {task.taskCreated !== false && <TaskPullRequestStatus taskId={task.taskId} />}
                   {!!task.dependsOn?.length && (
                     <p className="mt-2 text-xs text-foreground-muted">
                       Prerequisites: {task.dependsOn.join(', ')}

@@ -68,6 +68,42 @@ it('retries a saved task by stable ID without taking replacement startup paramet
   expect(Object.keys(tool.config.inputSchema ?? {})).toEqual(['task_id']);
 });
 
+it('carries explicit PR source and target choices and retries only the saved request', async () => {
+  const registered = registeredTools();
+  const create = registered.tool('create_pull_request');
+  const retry = registered.tool('retry_pull_request');
+  if (!create || !retry) throw new Error('Missing task PR tools');
+  await create.handler({
+    task_id: 'worker',
+    request_id: 'pr-1',
+    title: 'SDK change',
+    draft: true,
+    source_branch: 'feat/sdk',
+    push_remote: 'personal',
+    target_repository: 'https://github.com/org/sdk',
+    target_branch: 'develop',
+  });
+  expect(registered.dispatch).toHaveBeenCalledWith({
+    kind: 'create_pull_request',
+    taskId: 'worker',
+    requestId: 'pr-1',
+    title: 'SDK change',
+    body: undefined,
+    draft: true,
+    sourceBranch: 'feat/sdk',
+    pushRemote: 'personal',
+    repositoryUrl: 'https://github.com/org/sdk',
+    base: 'develop',
+  });
+  await retry.handler({ task_id: 'worker', request_id: 'pr-1' });
+  expect(registered.dispatch).toHaveBeenLastCalledWith({
+    kind: 'retry_pull_request',
+    taskId: 'worker',
+    requestId: 'pr-1',
+  });
+  expect(Object.keys(retry.config.inputSchema ?? {})).toEqual(['task_id', 'request_id']);
+});
+
 it('carries a management document write and its expected disk version to the backend', async () => {
   const registered = registeredTools();
   const tool = registered.tool('write_management_document');

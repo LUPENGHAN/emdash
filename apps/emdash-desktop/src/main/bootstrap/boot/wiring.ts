@@ -136,6 +136,7 @@ export function createDesktopWireOptions(
     projectSettings: services.projectSettings,
     providerSettings: services.providerSettings,
     coordination: services.coordination,
+    taskPullRequests: services.taskPullRequests,
     effectiveAgentConfig: services.effectiveAgentConfig,
     priceCatalog: services.priceCatalog,
     modelProviderKeys: services.modelProviderKeys,

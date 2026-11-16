@@ -52,6 +52,7 @@ type Dependencies = {
   tasks(projectId: string): Promise<AgentTaskSnapshot[]>;
   task(taskId: string): Promise<AgentTaskSnapshot | null>;
   delegationStatus?(taskId: string): Promise<TaskDelegationStatus | null>;
+  pullRequests?(taskId: string, caller: AgentCaller): Promise<unknown[]>;
   conversations(projectId: string): Promise<Conversation[]>;
   conversation(id: string): Promise<Conversation | null>;
   messages: {
@@ -188,6 +189,7 @@ export class BackgroundAgentControl {
           task,
           coordination: await this.deps.access.getTaskCoordination(task.id),
           delegation: (await this.deps.delegationStatus?.(task.id)) ?? null,
+          pullRequests: (await this.deps.pullRequests?.(task.id, caller)) ?? [],
         });
       }
       case 'list_conversations': {

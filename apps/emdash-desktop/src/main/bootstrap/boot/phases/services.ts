@@ -190,6 +190,8 @@ import type { ProjectRequirements } from '@core/features/requirements/api/types'
 import { requirementsEvents } from '@core/features/requirements/node/event-host';
 import { RequirementsService } from '@core/features/requirements/node/requirements-service';
 import { createSearchService } from '@core/features/search/node/search-service';
+import { createBackendTaskPullRequests } from '@core/features/source-control/node/backend-task-pull-requests';
+import type { TaskPullRequestService } from '@core/features/source-control/node/task-pull-request-service';
 import { TaskService } from '@core/features/tasks/api/node/task-service';
 import type { TaskSessionCleanup } from '@core/features/tasks/api/node/task-session-cleanup';
 import { TaskSessionLaunchContextResolver } from '@core/features/tasks/api/node/task-session-launch-context';
@@ -305,6 +307,7 @@ export type ServicesBundle = {
   readonly previewServerAccess: PreviewServerAccessService;
   readonly promptLibrary: ReturnType<typeof createPromptLibraryService>;
   readonly coordination: CoordinatorService;
+  readonly taskPullRequests: TaskPullRequestService;
   readonly requirements: RequirementsService;
   readonly modelGateway: ModelGatewayService;
   readonly memory: MemoryService;
@@ -707,8 +710,11 @@ export async function bootServices(
     emit: (event) => memoryEvents.emit(undefined, event),
   });
   // Agent control: Emdash's own MCP tools for every local agent (see agent-control).
-  const coordinationRuntime: { service?: CoordinatorService; background?: BackgroundAgentControl } =
-    {};
+  const coordinationRuntime: {
+    service?: CoordinatorService;
+    background?: BackgroundAgentControl;
+    pullRequests?: TaskPullRequestService;
+  } = {};
   const taskDelegation: { service?: TaskDelegationService } = {};
   const assertActiveAgentCaller = async (caller: AgentCaller) => {
     const actual = await resolveAgentCaller(
@@ -759,6 +765,15 @@ export async function bootServices(
       },
     },
     backend: async (caller, action) => {
+      if (action.kind === 'create_pull_request' || action.kind === 'retry_pull_request') {
+        const service = coordinationRuntime.pullRequests;
+        if (!service) throw new Error('Task PR creation is starting.');
+        const record =
+          action.kind === 'create_pull_request'
+            ? await service.create({ ...action, taskId: action.taskId ?? caller.taskId }, caller)
+            : await service.run(action.taskId, action.requestId, caller);
+        return { text: JSON.stringify(record) };
+      }
       if (
         [
           'list_projects',
@@ -1486,6 +1501,17 @@ export async function bootServices(
       };
     });
   coordinationRuntime.background = new BackgroundAgentControl({
+    pullRequests: async (taskId, caller) => {
+      if (!coordinationRuntime.pullRequests) throw new Error('Task PR creation is starting.');
+      // Planned dependency tasks are already authorized by background discovery and have no DB row.
+      const [task] = await db
+        .select({ id: tasks.id })
+        .from(tasks)
+        .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt)))
+        .limit(1);
+      if (!task) return [];
+      return coordinationRuntime.pullRequests.list(taskId, caller);
+    },
     delegationStatus: async (taskId) => {
       if (!taskDelegation.service) throw new Error('Task delegation is still starting.');
       return taskDelegation.service.status(taskId);
@@ -1810,6 +1836,24 @@ export async function bootServices(
     logger: log,
   });
   const issueProviders = createIssueProviderRegistry({ resolveProjectIntegrationAccount });
+  const taskPullRequests = createBackendTaskPullRequests({
+    db,
+    projects: projectManager,
+    workspaceIdentity,
+    runtimes,
+    credentials: gitCredentials,
+    pullRequests: getPullRequestsRuntimeClient,
+    access: coordinatorService,
+    assertCaller: assertActiveAgentCaller,
+    changed: (taskId) => {
+      void coordinatorService
+        .notifyTaskChanged(taskId)
+        .catch((error) =>
+          log.warn('Could not notify task PR change', { taskId, error: String(error) })
+        );
+    },
+  });
+  coordinationRuntime.pullRequests = taskPullRequests;
   const pullRequestsRegistration = new PullRequestsRegistration({
     getClient: getPullRequestsRuntimeClient,
     onResume: (handler) => {
@@ -2094,6 +2138,7 @@ export async function bootServices(
     previewServerAccess,
     promptLibrary: promptLibraryService,
     coordination: coordinatorService,
+    taskPullRequests,
     requirements: requirementsService,
     memory: memoryService,
     modelGateway,
