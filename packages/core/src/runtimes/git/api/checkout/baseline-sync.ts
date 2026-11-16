@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { fetchErrorSchema } from '#runtimes/git/api/errors';
 import { localBranchRefSchema } from '#runtimes/git/api/repository/states/refs';
 import { gitOperationCredentialsSchema } from '#runtimes/git/api/schemas';
 import { checkoutSelectorSchema } from '#runtimes/git/api/selectors';
@@ -26,6 +27,11 @@ const baselineSyncObservationSchema = z.object({
   afterOid: oidSchema.nullable(),
   previousUpstreamOid: oidSchema.nullable(),
 });
+export type BaselineSyncObservation = z.infer<typeof baselineSyncObservationSchema>;
+export const baselineSyncErrorSchema = fetchErrorSchema.and(
+  z.object({ observation: baselineSyncObservationSchema.optional() })
+);
+export type BaselineSyncError = z.infer<typeof baselineSyncErrorSchema>;
 
 export const baselineSyncResultSchema = z.discriminatedUnion('kind', [
   baselineSyncObservationSchema.extend({

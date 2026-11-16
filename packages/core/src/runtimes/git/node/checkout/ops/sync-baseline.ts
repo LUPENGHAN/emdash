@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
-import { ok, type Result } from '@emdash/shared';
-import { gitErr, type FetchError, type CheckoutHeadState } from '#runtimes/git/api';
+import { err, ok, type Result } from '@emdash/shared';
+import { gitErr, type CheckoutHeadState } from '#runtimes/git/api';
 import {
   syncBaselineJobInputSchema,
   type SyncBaselineJobInput,
   type BaselineSyncResult,
+  type BaselineSyncError,
+  type BaselineSyncObservation,
 } from '#runtimes/git/api/checkout/baseline-sync';
 import type { CheckoutIdentity } from '#runtimes/git/node/allocation/identity';
 import { gitFailure } from '#runtimes/git/node/exec/errors';
@@ -25,7 +27,7 @@ export async function syncBaseline(
   identity: CheckoutIdentity,
   raw: Input,
   context: GitOperationContext
-): Promise<Result<BaselineSyncResult, FetchError>> {
+): Promise<Result<BaselineSyncResult, BaselineSyncError>> {
   const input = syncBaselineJobInputSchema.omit({ checkout: true, credentials: true }).parse(raw);
   const run = (args: string[]) => exec.exec(args, { signal: context.signal });
   const readOid = async (ref: string): Promise<string | null> => {
@@ -67,6 +69,7 @@ export async function syncBaseline(
       .split('\n')
       .includes(ref);
   const candidate = `refs/emdash/baseline-candidates/${randomUUID()}`;
+  let diagnostic: BaselineSyncObservation | undefined;
   try {
     const url = await remoteUrl();
     if (!url) return gitErr.commandFailed('Choose an upstream remote with exactly one fetch URL.');
@@ -86,6 +89,7 @@ export async function syncBaseline(
       previousUpstreamOid: null as string | null,
     };
     observation.afterOid = observation.beforeOid;
+    diagnostic = observation;
     const blocked = async (reason: BlockedReason) =>
       ok({
         ...observation,
@@ -208,7 +212,12 @@ export async function syncBaseline(
     return ok({ ...observation, kind: 'updated', upstreamOid: target, afterOid: target });
   } catch (error) {
     if (context.signal?.aborted) throw error;
-    return repositoryFailures.fetch(error, input.remote);
+    const failure = repositoryFailures.fetch(error, input.remote);
+    if (!diagnostic) return failure;
+    return err({
+      ...failure.error,
+      observation: { ...diagnostic, afterOid: await readOid(input.baselineRef) },
+    });
   } finally {
     // Cleanup owns only this request's private ref and never follows a symbolic ref.
     await exec.exec(['update-ref', '--no-deref', '-d', candidate]).catch(() => {});

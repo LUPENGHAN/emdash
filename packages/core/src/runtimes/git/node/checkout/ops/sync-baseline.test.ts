@@ -230,7 +230,13 @@ it.each(['local-ahead', 'diverged'] as const)('preserves a %s local baseline', a
 it('reports an unavailable remote without changing a usable local baseline', async () => {
   const t = await setup();
   await t.git(t.repo, 'remote', 'set-url', 'upstream', path.join(t.dir, 'missing.git'));
-  expect(await t.run()).toMatchObject({ success: false, error: { type: 'remote_not_found' } });
+  expect(await t.run()).toMatchObject({
+    success: false,
+    error: {
+      type: 'remote_not_found',
+      observation: { beforeOid: t.before, afterOid: t.before, upstreamOid: null },
+    },
+  });
   expect(await t.git(t.repo, 'rev-parse', 'develop')).toBe(t.before);
 });
 
