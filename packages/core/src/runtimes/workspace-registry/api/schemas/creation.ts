@@ -48,6 +48,7 @@ export type WorkspacePublishTarget = z.infer<typeof workspacePublishTargetSchema
  * for registered-existing and adopted records.
  */
 export const workspaceCreationSchema = z.object({
+  purpose: z.literal('management').optional(),
   branch: z.string(),
   /** Null when gitSetup.fetchBranch materialized the branch instead of a base ref. */
   baseRef: z.string().nullable(),
@@ -87,3 +88,14 @@ export const createWorktreeInputSchema = z
     }
   });
 export type CreateWorktreeInput = z.infer<typeof createWorktreeInputSchema>;
+
+/** Separate verb: hosts without management-worktree support fail instead of checking out code. */
+export const createManagementWorktreeInputSchema = z
+  .object({
+    workspaceId: z.string().min(1),
+    repositoryId: z.string().min(1),
+    branch: z.string().min(1),
+    path: z.string().min(1),
+  })
+  .strict();
+export type CreateManagementWorktreeInput = z.infer<typeof createManagementWorktreeInputSchema>;

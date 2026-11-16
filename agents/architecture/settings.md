@@ -167,3 +167,14 @@ ACP permissions use the provider access mode; Emdash never auto-approves ACP req
 Provider-option changes patch only their own fields through the host's
 `conversations.patchConfig` operation. The host merges synchronously against its current record;
 the desktop mirror must not replace the host config or suppress writes based on cached equality.
+
+
+## Management workspace execution
+
+Workspace-registry records created through `createManagementWorktree` carry immutable
+`creation.purpose: management`. Their empty independent history contains management documents.
+The registry skips project lifecycle scripts and preserved-artifact copying for these records,
+including after restart; manual lifecycle runs also report that scripts do not apply. This is
+an execution policy, not a personal/team settings override. The config model still exposes its
+raw layers; environment and shell setup retain their owning resolver. Code worktrees continue
+using normal lifecycle and artifact settings.

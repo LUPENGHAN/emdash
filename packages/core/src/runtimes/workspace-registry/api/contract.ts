@@ -17,6 +17,7 @@ import {
   activateWorkspaceInputSchema,
   cleanArtifactsInputSchema,
   createWorkspaceInputSchema,
+  createManagementWorktreeInputSchema,
   createWorktreeInputSchema,
   deactivateWorkspaceInputSchema,
   deleteWorkspaceInputSchema,
@@ -127,6 +128,12 @@ export const workspaceRegistryContract = defineContract({
    * succeeded → no-op (incomplete background steps re-run); failed/interrupted →
    * re-execute; divergent spec → typed mismatch.
    */
+  createManagementWorktree: fallible({
+    input: createManagementWorktreeInputSchema,
+    data: workspaceRecordSchema,
+    error: createWorktreeErrorSchema,
+    callTimeoutMs: 0,
+  }),
   createWorktree: fallible({
     input: createWorktreeInputSchema,
     data: workspaceRecordSchema,

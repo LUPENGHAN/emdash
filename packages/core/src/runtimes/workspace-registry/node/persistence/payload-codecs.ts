@@ -17,7 +17,15 @@ import {
 } from '../../api/schemas';
 
 const storedCreation = defineVersionedSchema()
-  .initial('1', z.object({ version: z.literal('1'), value: workspaceCreationSchema }))
+  .initial(
+    '1',
+    z.object({ version: z.literal('1'), value: workspaceCreationSchema.omit({ purpose: true }) })
+  )
+  .version(
+    '2',
+    z.object({ version: z.literal('2'), value: workspaceCreationSchema }),
+    (record) => ({ version: '2' as const, value: record.value })
+  )
   .build();
 
 const storedCreateOutcome = defineVersionedSchema()
@@ -117,7 +125,7 @@ function migrateLegacyBackground(legacy: LegacyBackground): WorkspaceLifecycle {
 }
 
 export function serializeCreationPayload(creation: WorkspaceCreation): string {
-  return storedCreation.serialize({ version: '1', value: creation });
+  return storedCreation.serialize({ version: '2', value: creation });
 }
 
 export function parseCreationPayload(payload: string): WorkspaceCreation {

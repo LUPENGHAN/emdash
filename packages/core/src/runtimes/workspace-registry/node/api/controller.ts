@@ -29,6 +29,7 @@ export function createWorkspaceRegistryController(runtime: WorkspaceRegistryRunt
     cleanArtifacts: (input) => runtime.cleanArtifacts(input),
     createWorkspace: (input) => runtime.createWorkspace(input),
     createWorktree: (input) => runtime.createWorktree(input),
+    createManagementWorktree: (input) => runtime.createManagementWorktree(input),
     deactivateWorkspace: (input) => runtime.deactivateWorkspace(input),
     deleteWorkspace: (input) => runtime.deleteWorkspace(input),
     deleteWorktree: (input) => runtime.deleteWorktree(input),

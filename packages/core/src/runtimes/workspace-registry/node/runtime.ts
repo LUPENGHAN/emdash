@@ -43,6 +43,7 @@ import type {
   CleanArtifactsInput,
   CreateWorkspaceInput,
   CreateWorktreeInput,
+  CreateManagementWorktreeInput,
   DeactivateWorkspaceInput,
   DeleteWorkspaceInput,
   DeleteWorktreeInput,
@@ -156,6 +157,8 @@ export type WorkspaceRegistryRuntimeOptions = {
     teardownTimeoutMs?: number;
   };
 };
+
+type WorktreeCreationInput = CreateWorktreeInput & { purpose?: 'management' };
 
 /**
  * The sole writer of the host workspace registry (ADR 0005): clients mutate only through
@@ -368,6 +371,14 @@ export class WorkspaceRegistryRuntime {
       resolveLifecycleConfig: async (id) => {
         await this.bootConfigHydration;
         const resolved = await this.resolveProjectConfigFor(id);
+        if (this.store.get(id)?.creation?.purpose === 'management')
+          return {
+            scripts: {},
+            shellSetup: resolved?.resolved.shellSetup?.value ?? '',
+            env: { ...(resolved?.resolved.env.value ?? {}) },
+            autoRunSetup: false,
+            autoRunRun: false,
+          };
         return {
           scripts: {
             prepare: resolved?.resolved.prepare?.value,
@@ -745,8 +756,22 @@ export class WorkspaceRegistryRuntime {
    * for a creation still in flight (a desktop that restarted mid-create and replayed
    * it) joins that run: same outcome, no second pipeline over the same path.
    */
-  async createWorktree(
+  createWorktree(
     input: CreateWorktreeInput
+  ): Promise<Result<WorkspaceRecord, CreateWorktreeError>> {
+    return this.createWorktreeWithPurpose(input);
+  }
+  createManagementWorktree(
+    input: CreateManagementWorktreeInput
+  ): Promise<Result<WorkspaceRecord, CreateWorktreeError>> {
+    return this.createWorktreeWithPurpose({
+      ...input,
+      preservePatterns: [],
+      purpose: 'management',
+    });
+  }
+  private async createWorktreeWithPurpose(
+    input: WorktreeCreationInput
   ): Promise<Result<WorkspaceRecord, CreateWorktreeError>> {
     for (;;) {
       const admission = await this.enqueue(() => this.admitWorktreeCreation(input));
@@ -763,7 +788,7 @@ export class WorkspaceRegistryRuntime {
    * promises and wait for the pipeline.
    */
   private admitWorktreeCreation(
-    input: CreateWorktreeInput
+    input: WorktreeCreationInput
   ):
     | { run: Promise<Result<WorkspaceRecord, CreateWorktreeError>> }
     | { settling: Promise<unknown> } {
@@ -790,7 +815,7 @@ export class WorkspaceRegistryRuntime {
   }
 
   private async runWorktreeCreation(
-    input: CreateWorktreeInput,
+    input: WorktreeCreationInput,
     repository: DurableWorkspaceRecord
   ): Promise<Result<WorkspaceRecord, CreateWorktreeError>> {
     const created = await this.gitContext.schedule.withRepoHold(repository.path, async () => {
@@ -809,6 +834,7 @@ export class WorkspaceRegistryRuntime {
         branch: input.branch,
         baseRef: input.baseRef ?? null,
         gitSetup: input.gitSetup,
+        managementId: input.purpose === 'management' ? input.workspaceId : undefined,
         onStage: (stage) => {
           stageStarts.push({ stage, at: Date.now() });
           this.updateOverlay(input.workspaceId, (overlay) => ({
@@ -987,6 +1013,7 @@ export class WorkspaceRegistryRuntime {
 
   /** The workspace's resolved preserve patterns: the ignored files it never counts as artifacts. */
   private async preservePatternsFor(id: string): Promise<string[]> {
+    if (this.store.get(id)?.creation?.purpose === 'management') return [];
     await this.bootConfigHydration;
     const config = await this.resolveProjectConfigFor(id);
     return config?.resolved.preservePatterns.value ?? [];
@@ -1221,7 +1248,7 @@ export class WorkspaceRegistryRuntime {
    * before any git work begins, so a crash mid-flight leaves a visible, retryable fact.
    */
   private registerWorktreeCreation(
-    input: CreateWorktreeInput
+    input: WorktreeCreationInput
   ): Result<
     | { action: 'replay'; record: DurableWorkspaceRecord }
     | { action: 'join' | 'wait'; run: Promise<Result<WorkspaceRecord, CreateWorktreeError>> }
@@ -1239,6 +1266,7 @@ export class WorkspaceRegistryRuntime {
       const spec = existing.creation;
       const matches =
         spec !== null &&
+        spec.purpose === input.purpose &&
         spec.branch === input.branch &&
         spec.baseRef === (input.baseRef ?? null) &&
         sameGitSetup(spec.gitSetup, input.gitSetup) &&
@@ -1294,6 +1322,7 @@ export class WorkspaceRegistryRuntime {
       // "interrupted" after a daemon crash — exactly the diagnostic the spec wants.
       observedStatus: 'missing',
       creation: {
+        ...(input.purpose && { purpose: input.purpose }),
         branch: input.branch,
         baseRef: input.baseRef ?? null,
         requestedPath: input.path,
@@ -1315,7 +1344,7 @@ export class WorkspaceRegistryRuntime {
 
   /** The durable tail of createWorktree: outcome lands, overlay clears, record settles. */
   private async finalizeWorktreeCreation(
-    input: CreateWorktreeInput,
+    input: WorktreeCreationInput,
     result: Awaited<ReturnType<typeof executeCreateWorktree>>,
     stages: CreationStageTimeline
   ): Promise<Result<WorkspaceRecord, CreateWorktreeError>> {
@@ -1338,7 +1367,10 @@ export class WorkspaceRegistryRuntime {
     // The legacy request field remains wire-compatible but is no longer a config layer.
     await this.bootConfigHydration;
     const sourceConfig = await this.resolveProjectConfigFor(input.repositoryId);
-    const preservePatterns = [...(sourceConfig?.resolved.preservePatterns.value ?? [])];
+    const preservePatterns =
+      input.purpose === 'management'
+        ? []
+        : [...(sourceConfig?.resolved.preservePatterns.value ?? [])];
     const lifecycle = buildCreationLifecycle({ ...input, preservePatterns }, result, stages, now);
 
     if (result.status === 'failed') {
@@ -1426,6 +1458,11 @@ export class WorkspaceRegistryRuntime {
     if (!record) {
       return err({ type: 'workspace-not-found', workspaceId: input.workspaceId });
     }
+    if (record.creation?.purpose === 'management')
+      return err({
+        type: 'script-not-configured',
+        message: 'Management workspaces do not run project lifecycle scripts.',
+      });
     if (!this.scriptsClient) {
       return err({ type: 'spawn-failed', message: 'No scripts runtime is available on this host' });
     }

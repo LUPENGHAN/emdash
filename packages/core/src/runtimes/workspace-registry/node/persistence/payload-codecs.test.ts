@@ -225,3 +225,16 @@ describe('lifecycle payload codec', () => {
     });
   });
 });
+
+it('persists management purpose in creation version 2 and rejects unknown future creation versions', () => {
+  const creation = {
+    branch: 'emdash/manage/test',
+    baseRef: null,
+    requestedPath: '/tmp/documents',
+    purpose: 'management' as const,
+  };
+  const stored = serializeCreationPayload(creation);
+  expect(JSON.parse(stored).version).toBe('2');
+  expect(parseCreationPayload(stored)).toEqual(creation);
+  expect(() => parseCreationPayload(JSON.stringify({ version: '99', value: creation }))).toThrow();
+});

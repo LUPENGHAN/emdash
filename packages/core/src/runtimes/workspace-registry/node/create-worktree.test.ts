@@ -442,3 +442,155 @@ describe('executeCreateWorktree gitSetup', () => {
     await expect(fs.access(path.join(root, 'locked-wt'))).rejects.toThrow();
   });
 });
+
+describe('independent management worktrees', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'ws-management-')));
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  it('creates an empty independent history and preserves document commits and dirty files on replay', async () => {
+    const repositoryPath = await makeRepo(root, 'code');
+    const baseline = git(repositoryPath, 'rev-parse', 'HEAD');
+    const worktreePath = path.join(root, 'documents');
+    const spec = {
+      git: gitContext,
+      repositoryPath,
+      worktreePath,
+      branch: 'emdash/manage/main',
+      baseRef: null,
+      managementId: 'management-workspace',
+      onStage: () => {},
+    };
+    expect(await executeCreateWorktree(spec)).toMatchObject({
+      status: 'succeeded',
+      createdBranch: true,
+    });
+    expect(git(worktreePath, 'ls-tree', '--name-only', 'HEAD')).toBe('');
+    expect(git(worktreePath, 'rev-list', '--count', 'HEAD')).toBe('1');
+    expect(() => git(repositoryPath, 'merge-base', 'main', spec.branch)).toThrow();
+    await fs.writeFile(path.join(worktreePath, 'plan.md'), 'Document history\n');
+    git(worktreePath, 'add', 'plan.md');
+    git(worktreePath, 'commit', '-m', 'Save plan');
+    const saved = git(worktreePath, 'rev-parse', 'HEAD');
+    await fs.writeFile(path.join(worktreePath, 'plan.md'), 'Unsaved changes\n');
+    expect(await executeCreateWorktree(spec)).toMatchObject({
+      status: 'succeeded',
+      createdWorktree: false,
+    });
+    expect(git(worktreePath, 'rev-parse', 'HEAD')).toBe(saved);
+    expect(await fs.readFile(path.join(worktreePath, 'plan.md'), 'utf8')).toBe('Unsaved changes\n');
+    expect(git(repositoryPath, 'rev-parse', 'HEAD')).toBe(baseline);
+    expect(git(repositoryPath, 'status', '--porcelain')).toBe('');
+  });
+  it('does not reuse code history or another management workspace branch', async () => {
+    const repositoryPath = await makeRepo(root, 'code');
+    const baseline = git(repositoryPath, 'rev-parse', 'main');
+    const spec = {
+      git: gitContext,
+      repositoryPath,
+      worktreePath: path.join(root, 'documents'),
+      branch: 'main',
+      baseRef: null,
+      managementId: 'management-workspace',
+      onStage: () => {},
+    };
+    expect(await executeCreateWorktree(spec)).toMatchObject({
+      status: 'failed',
+      stage: 'initialize-management',
+    });
+    expect(git(repositoryPath, 'rev-parse', 'main')).toBe(baseline);
+    expect(await executeCreateWorktree({ ...spec, branch: 'emdash/manage/owned' })).toMatchObject({
+      status: 'succeeded',
+    });
+    expect(
+      await executeCreateWorktree({
+        ...spec,
+        branch: 'emdash/manage/owned',
+        managementId: 'other-workspace',
+      })
+    ).toMatchObject({ status: 'failed', stage: 'inspect' });
+  });
+  it('retains an initialized branch after an interrupted checkout and safely resumes it', async () => {
+    const repositoryPath = await makeRepo(root, 'code');
+    const context = createRegistryGitContext();
+    const exec = context.exec;
+    let fail = true;
+    context.exec = (cwd, options) => {
+      const inner = exec(cwd, options);
+      return {
+        ...inner,
+        exec: async (args, options) => {
+          if (fail && args[0] === 'worktree' && args[1] === 'add') {
+            fail = false;
+            throw new Error('Interrupted checkout');
+          }
+          return inner.exec(args, options);
+        },
+      };
+    };
+    const spec = {
+      git: context,
+      repositoryPath,
+      worktreePath: path.join(root, 'documents'),
+      branch: 'emdash/manage/recover',
+      baseRef: null,
+      managementId: 'management-workspace',
+      onStage: () => {},
+    };
+    expect(await executeCreateWorktree(spec)).toMatchObject({
+      status: 'failed',
+      stage: 'add-worktree',
+    });
+    const initial = git(repositoryPath, 'rev-parse', spec.branch);
+    expect(await executeCreateWorktree(spec)).toMatchObject({
+      status: 'succeeded',
+      createdBranch: false,
+    });
+    expect(git(spec.worktreePath, 'rev-parse', 'HEAD')).toBe(initial);
+  });
+  it('creates document history in an unborn repository without creating the code baseline', async () => {
+    const repositoryPath = path.join(root, 'unborn');
+    await fs.mkdir(repositoryPath);
+    git(repositoryPath, 'init', '--initial-branch=main');
+    const spec = {
+      git: gitContext,
+      repositoryPath,
+      worktreePath: path.join(root, 'documents'),
+      branch: 'emdash/manage/unborn',
+      baseRef: null,
+      managementId: 'management-workspace',
+      onStage: () => {},
+    };
+    expect(await executeCreateWorktree(spec)).toMatchObject({ status: 'succeeded' });
+    expect(() => git(repositoryPath, 'show-ref', '--verify', 'refs/heads/main')).toThrow();
+    expect(git(repositoryPath, 'symbolic-ref', 'HEAD')).toBe('refs/heads/main');
+  });
+});
+
+it('does not replace a pre-existing dangling symbolic branch for a management workspace', async () => {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), 'ws-management-symbolic-'))
+  );
+  try {
+    const repositoryPath = await makeRepo(root, 'code');
+    git(repositoryPath, 'symbolic-ref', 'refs/heads/emdash/manage/symbolic', 'refs/heads/absent');
+    const result = await executeCreateWorktree({
+      git: gitContext,
+      repositoryPath,
+      worktreePath: path.join(root, 'documents'),
+      branch: 'emdash/manage/symbolic',
+      baseRef: null,
+      managementId: 'management',
+      onStage: () => {},
+    });
+    expect(result.status).toBe('failed');
+    expect(git(repositoryPath, 'symbolic-ref', 'refs/heads/emdash/manage/symbolic')).toBe(
+      'refs/heads/absent'
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

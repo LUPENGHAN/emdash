@@ -5,6 +5,7 @@ import type { BoundExec } from '#services/exec/api';
 import type { WorkspaceGitSetup } from '../api/schemas';
 import type { RegistryGitContext } from './git-context';
 import { retryTransientLock } from './git-schedule';
+import { assertManagementBranch, ensureManagementBranch } from './management-branch';
 import { parseWorktreeList, type WorktreeListEntry } from './scan/observe-git';
 import { validateWorktreePath } from './worktree-path-safety';
 
@@ -17,6 +18,8 @@ export type CreateWorktreeExecution = {
   branch: string;
   /** Null when gitSetup.fetchBranch materializes the branch instead. */
   baseRef: string | null;
+  /** Stable identity for an independent-history management worktree. */
+  managementId?: string;
   /** Structured branch setup (spec: pr-workspace-model provisioning). */
   gitSetup?: WorkspaceGitSetup;
   /** Overlay feeder: called as each stage begins. */
@@ -54,7 +57,8 @@ export async function executeCreateWorktree(
   let createdBranch = false;
 
   const fail = async (stage: string, error: unknown): Promise<CreateWorktreeExecutionResult> => {
-    await rollback(exec, execution, { createdWorktree, createdBranch });
+    if (!execution.managementId)
+      await rollback(exec, execution, { createdWorktree, createdBranch });
     return {
       status: 'failed',
       stage,
@@ -73,11 +77,21 @@ export async function executeCreateWorktree(
       return { status: 'failed', stage: 'inspect', message: safe.error.message };
     }
     const target = await pathIdentity(execution.worktreePath);
+    if (execution.managementId && (execution.baseRef !== null || execution.gitSetup))
+      throw new Error(
+        'Management worktrees cannot inherit code refs or branch publication settings.'
+      );
     const worktrees = await listWorktrees(exec);
     await pruneBlockingRegistrations(exec, worktrees, target, execution.branch);
     // A prunable registration's directory is gone: there is nothing to reuse.
     existing = worktrees.some((worktree) => !worktree.prunable && worktree.identity === target);
     if (existing) {
+      if (execution.managementId)
+        await assertManagementBranch(
+          exec,
+          `refs/heads/${execution.branch}`,
+          execution.managementId
+        );
       const current = (
         await execution.git
           .exec(execution.worktreePath, { tier: 'creation', repository: execution.repositoryPath })
@@ -98,6 +112,18 @@ export async function executeCreateWorktree(
   }
 
   if (!existing) {
+    if (execution.managementId) {
+      execution.onStage('initialize-management');
+      try {
+        createdBranch = await ensureManagementBranch(
+          exec,
+          execution.branch,
+          execution.managementId
+        );
+      } catch (error) {
+        return await fail('initialize-management', error);
+      }
+    }
     // Branch materialization from an arbitrary source ref (spec: pr-workspace-model
     // provisioning). Replay rule: an existing refs/heads/<branch> is never touched —
     // the fetch is skipped entirely and the branch reused. The destination is always
