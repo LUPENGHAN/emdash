@@ -5,6 +5,7 @@ import type { DelegationResources } from '@core/features/agent-control/api/node/
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
 import {
   taskResultSchema,
+  agentSelectionSchema,
   coordinatorRecord,
   type AgentSelection,
   type Coordinator,
@@ -77,6 +78,63 @@ export class CoordinatorService {
         delegationDefaults: {},
         tasks: {},
         events: [],
+      };
+      await this.save(record);
+      return record;
+    });
+  }
+  async createCrossProject(input: {
+    id: string;
+    name: string;
+    projectId: string;
+    projectIds: string[];
+    primary?: AgentSelection;
+    delegationDefaults?: AgentSelection;
+  }): Promise<Coordinator> {
+    const id = `cross:${input.id}`;
+    const name = input.name.trim();
+    if (!name) throw new Error('Name the cross-project main agent.');
+    const projectIds = [...new Set([input.projectId, ...input.projectIds])].sort();
+    const primary = agentSelectionSchema.parse(input.primary ?? {});
+    const delegationDefaults = agentSelectionSchema.parse(input.delegationDefaults ?? {});
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          name,
+          projectId: input.projectId,
+          projectIds,
+          primary,
+          delegationDefaults,
+        })
+      )
+      .digest('hex');
+    return this.locks.runExclusive(id, async () => {
+      const saved = await this.deps.store.getOrThrow(id);
+      if (saved) {
+        const record = this.parseRecord(saved);
+        if (record.creationFingerprint !== fingerprint)
+          throw new Error('This creation request has different main agent parameters.');
+        return record;
+      }
+      for (const projectId of projectIds) await this.deps.assertProjectAvailable(projectId);
+      for (const selection of [primary, delegationDefaults]) {
+        const resolved = await this.deps.resolveSelection(selection);
+        if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
+      }
+      const record: Coordinator = {
+        version: '2',
+        id,
+        name,
+        kind: 'cross-project',
+        projectId: input.projectId,
+        projectIds,
+        taskId: randomUUID(),
+        conversationId: randomUUID(),
+        primary: { agent: await this.deps.defaultAgent(), ...primary },
+        delegationDefaults,
+        tasks: {},
+        events: [],
+        creationFingerprint: fingerprint,
       };
       await this.save(record);
       return record;

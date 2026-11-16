@@ -15,6 +15,7 @@ import { taskViewDef } from '@core/features/tasks/contributions/views';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
 import type { AgentSelection, AssignedTask, Coordinator, ProjectAccess } from '../api/types';
+import { CreateCrossProjectMainAgent } from './cross-project-main-agents';
 
 export const CoordinatorTaskPanel = observer(function CoordinatorTaskPanel({
   children,
@@ -70,6 +71,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
         <Button
+          data-testid="coordinator-conversation-tab"
           variant={tab === 'conversation' ? 'secondary' : 'ghost'}
           onClick={() => setTab('conversation')}
         >
@@ -101,6 +103,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
               <ProjectAccessSettings record={record} />
               <MainConversationSettings record={record} />
               <DelegationDefaults record={record} />
+              <CreateCrossProjectMainAgent record={record} />
             </div>
           ) : (
             <>

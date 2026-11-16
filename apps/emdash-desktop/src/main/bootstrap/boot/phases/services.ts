@@ -1150,6 +1150,9 @@ export async function bootServices(
     authorize: async (caller, targetProjectId, request) => {
       await assertActiveAgentCaller(caller);
       if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+      const main = await coordinationRuntime.service.getByTask(caller.taskId);
+      if (main?.kind === 'cross-project' && !request?.projectId)
+        throw new Error('Specify project_id when a cross-project main agent delegates code work.');
       if (
         !(await coordinationRuntime.service.mayAccessProject(caller, targetProjectId, 'delegate'))
       )

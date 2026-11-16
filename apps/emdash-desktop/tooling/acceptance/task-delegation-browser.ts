@@ -152,3 +152,7 @@ export async function prepareAdditionalProject(input: {
   const { project } = await prepareProject(input);
   return project.id;
 }
+
+export async function allCoordinatorSnapshots() {
+  return (await getCoordinationClient()).list();
+}

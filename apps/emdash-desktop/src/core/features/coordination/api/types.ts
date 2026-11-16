@@ -65,6 +65,7 @@ export type Coordinator = {
   params?: CreateTaskParams;
   tasks: Record<string, AssignedTask>;
   events: ResultEvent[];
+  creationFingerprint?: string;
 };
 export type CoordinationEvent = { coordinatorId: string; projectId: string };
 
@@ -108,6 +109,7 @@ const coordinatorV1 = z.object({
       error: z.string().optional(),
     })
   ),
+  creationFingerprint: z.string().optional(),
 });
 
 export const coordinatorRecord = defineVersionedSchema()

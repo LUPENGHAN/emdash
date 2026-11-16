@@ -670,7 +670,7 @@ const ComposerForStore = observer(function ComposerForStore({
           )}
         </div>
       )}
-      <div>
+      <div data-acp-conversation-id={store.conversationId}>
         <ChatComposer
           model={store.composerModel}
           isWorking={a.isWorking}

@@ -433,6 +433,34 @@ describe('main agent coordination', () => {
     expect((test.records.get(record.id) as unknown as { version: string }).version).toBe('99');
   });
 
+  it('creates independent cross-project main agents idempotently without allocating runtime resources', async () => {
+    const test = setup();
+    const project = await test.service.ensureProject('project');
+    const input = {
+      id: 'cross-request',
+      name: 'Business integration',
+      projectId: 'project',
+      projectIds: ['other'],
+      primary: { agent: 'opencode' },
+    };
+    const [one, two] = await Promise.all([
+      test.service.createCrossProject(input),
+      test.service.createCrossProject(input),
+    ]);
+    expect(two).toEqual(one);
+    expect(one.kind).toBe('cross-project');
+    expect(one.projectIds).toEqual(['other', 'project']);
+    expect(one.taskId).not.toBe(project.taskId);
+    expect(test.resources.prepare).not.toHaveBeenCalled();
+    expect(
+      (await test.service.list()).filter((record) => record.kind === 'cross-project')
+    ).toHaveLength(1);
+    await expect(test.service.createCrossProject({ ...input, name: 'Changed' })).rejects.toThrow(
+      'different main agent parameters'
+    );
+    expect((await new CoordinatorService(test.deps).createCrossProject(input)).id).toBe(one.id);
+  });
+
   it('uses the configured default worker agent independently of the primary agent', async () => {
     const test = setup();
     const record = await test.service.ensureProject('project');

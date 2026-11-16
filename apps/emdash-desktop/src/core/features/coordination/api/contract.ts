@@ -10,6 +10,18 @@ import {
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  createCrossProject: procedure({
+    input: z.object({
+      id: z.uuid(),
+      name: z.string().trim().min(1).max(100),
+      projectId: z.string().min(1),
+      projectIds: z.array(z.string().min(1)),
+      primary: agentSelectionSchema.optional(),
+      delegationDefaults: agentSelectionSchema.optional(),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  open: procedure({ input: z.object({ id: z.string() }), output: z.custom<Coordinator>() }),
   bindConversation: procedure({
     input: z.object({ id: z.string(), conversationId: z.string().min(1) }),
     output: z.custom<Coordinator>(),

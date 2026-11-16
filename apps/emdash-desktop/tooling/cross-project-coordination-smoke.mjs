@@ -128,6 +128,8 @@ let client;
 let workerClient;
 let replacementClient;
 let crossWorkerClient;
+let independentClient;
+let grantedWorkerClient;
 const waitForCapture = async (id) => {
   const file = join(capture, id + '.json');
   if (!(await readdir(capture)).includes(id + '.json')) {
@@ -140,7 +142,7 @@ const waitForCapture = async (id) => {
       });
       const timer = setTimeout(() => {
         cleanup();
-        reject(new Error('The simulated agent did not spawn.'));
+        reject(new Error(`The simulated agent ${id} did not spawn.`));
       }, 15000);
       const cleanup = () => {
         clearTimeout(timer);
@@ -225,8 +227,8 @@ try {
 
   await page.addScriptTag({
     type: 'module',
-    content: `import { prepareCoordinator, coordinatorSnapshot, createReplacementMain, prepareAdditionalProject } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
-      Object.assign(window, { prepareCoordinator, coordinatorSnapshot, createReplacementMain, prepareAdditionalProject });`,
+    content: `import { prepareCoordinator, coordinatorSnapshot, createReplacementMain, prepareAdditionalProject, allCoordinatorSnapshots } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
+      Object.assign(window, { prepareCoordinator, coordinatorSnapshot, createReplacementMain, prepareAdditionalProject, allCoordinatorSnapshots });`,
   });
   await page.waitForFunction(() => typeof window.prepareCoordinator === 'function');
   const coordinator = await page.evaluate((input) => window.prepareCoordinator(input), {
@@ -554,14 +556,121 @@ try {
   assert.ok(switched.events.every((event) => event.state === 'acknowledged'));
   await page.getByTestId('coordinator-tasks-tab').click();
   await page.screenshot({ path: join(profile, 'coordinator-result.png') });
+  await page.getByTestId('coordinator-settings-tab').click();
+  const createForm = page.getByTestId('cross-project-agent-form');
+  await createForm.getByTestId('cross-project-agent-name').fill('Independent integration');
+  await createForm.getByTestId('cross-project-agent-type').click();
+  await page.getByRole('option', { name: 'opencode', exact: true }).click();
+  await createForm.getByLabel('Related repository', { exact: true }).check();
+  await createForm.getByTestId('create-cross-project-agent').click();
+  const independentRow = page
+    .getByTestId('cross-project-main-agents')
+    .getByRole('button', { name: 'Independent integration', exact: true });
+  await independentRow.waitFor();
+  const independent = await page.evaluate(async () =>
+    (await window.allCoordinatorSnapshots()).find(
+      (record) => record.name === 'Independent integration'
+    )
+  );
+  assert.ok(independent && independent.kind === 'cross-project');
+  assert.notEqual(independent.taskId, coordinator.taskId);
+  assert.ok(independent.projectIds.includes(relatedProjectId));
+  await independentRow.click();
+  await page.getByTestId('coordinator-conversation-tab').click();
+  const independentComposer = page.locator(
+    `[data-acp-conversation-id="${independent.conversationId}"]`
+  );
+  await independentComposer
+    .locator('[contenteditable="true"]')
+    .fill('Coordinate two repositories explicitly.');
+  await independentComposer.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
+  const independentCapture = await waitForCapture(independent.conversationId);
+  independentClient = new Client({ name: 'independent-cross-main', version: '1' });
+  await independentClient.connect(
+    new StreamableHTTPClientTransport(new URL(independentCapture.mcpUrl))
+  );
+  const implicitTarget = await independentClient.callTool({
+    name: 'create_task',
+    arguments: { name: 'Ambiguous target', request_id: 'ambiguous-target' },
+  });
+  assert.equal(
+    implicitTarget.isError,
+    true,
+    'Independent main used its document project as an implicit code target'
+  );
+  const grantedTask = JSON.parse(
+    await call(independentClient, 'create_task', {
+      project_id: relatedProjectId,
+      project_grants: [coordinator.projectId],
+      name: 'Independent related task',
+      request_id: 'independent-work',
+      agent: 'opencode',
+      ui: 'chat',
+      prompt: 'Independent delegated task',
+      connection: 'official',
+      effort: null,
+    })
+  );
+  const grantedCapture = await waitForCapture(grantedTask.conversation_id);
+  grantedWorkerClient = new Client({ name: 'explicitly-granted-worker', version: '1' });
+  await grantedWorkerClient.connect(
+    new StreamableHTTPClientTransport(new URL(grantedCapture.mcpUrl))
+  );
+  const grantedProjects = JSON.parse(await call(grantedWorkerClient, 'list_projects', {}));
+  assert.equal(grantedProjects.length, 2);
+  const child = JSON.parse(
+    await call(grantedWorkerClient, 'create_task', {
+      project_id: coordinator.projectId,
+      name: 'Granted repository work',
+      request_id: 'granted-child',
+    })
+  );
+  assert.equal(child.project_id, coordinator.projectId);
+  const childStatus = JSON.parse(
+    await call(independentClient, 'get_task_status', { task_id: child.task_id })
+  );
+  assert.equal(childStatus.coordination.coordinatorId, independent.id);
+  const expandedGrant = await grantedWorkerClient.callTool({
+    name: 'create_task',
+    arguments: {
+      project_id: coordinator.projectId,
+      project_grants: [relatedProjectId],
+      name: 'Expanded child grant',
+      request_id: 'expanded-child-grant',
+    },
+  });
+  assert.equal(expandedGrant.isError, true);
+  const independentResult = JSON.parse(
+    await call(grantedWorkerClient, 'submit_task_result', {
+      task_id: grantedTask.task_id,
+      request_id: 'independent-result',
+      result: {
+        summary: 'Independent coordination result',
+        commits: [relatedBaseline],
+        checks: [],
+        unresolved: [],
+        prUrls: [],
+      },
+    })
+  );
+  await waitForPrompt(independentResult.eventId, independentCapture.sessionId);
+  await call(independentClient, 'acknowledge_task_results', {
+    event_ids: [independentResult.eventId],
+  });
+  await call(independentClient, 'review_task_result', {
+    task_id: grantedTask.task_id,
+    result_version: 1,
+    accepted: true,
+    note: 'Inspected independent main task result',
+  });
+  await page.getByTestId('coordinator-tasks-tab').click();
+  await page.getByText('Independent coordination result', { exact: true }).waitFor();
+  await page.screenshot({ path: join(profile, 'independent-main-result.png') });
   await page.close();
   const backgroundList = JSON.parse(
     await call(replacementClient, 'list_tasks', { project_id: relatedProjectId })
   );
-  assert.deepEqual(
-    backgroundList.map((task) => task.id),
-    [cross.task_id]
-  );
+  assert.ok(backgroundList.some((task) => task.id === cross.task_id));
   const backgroundMessage = JSON.parse(
     await call(replacementClient, 'send_message', {
       conversation_id: cross.conversation_id,
@@ -593,6 +702,9 @@ try {
           'project access narrowed and restored through the UI; denied requests created no branches',
           'both repositories returned results to one main agent',
           'renderer closed before cross-project task reads and a new ACP follow-up',
+          'independent cross-project main created and opened through the sidebar',
+          'independent main requires an explicit code target project',
+          'explicit worker grant allowed cross-repository delegation and capped child grants',
           'main conversation switched through the UI without losing task history',
           'unconfirmed result redirected and old main consumption authority revoked',
         ],
@@ -614,6 +726,8 @@ try {
   console.error(`Acceptance evidence: ${profile}`);
   throw error;
 } finally {
+  await grantedWorkerClient?.close().catch(() => {});
+  await independentClient?.close().catch(() => {});
   await crossWorkerClient?.close().catch(() => {});
   await replacementClient?.close().catch(() => {});
   await workerClient?.close().catch(() => {});

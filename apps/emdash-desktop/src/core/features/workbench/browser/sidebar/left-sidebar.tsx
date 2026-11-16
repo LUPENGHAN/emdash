@@ -2,6 +2,7 @@ import { Clock, FolderInput, MessageSquareShare, Settings } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { automationsViewDef } from '@core/features/automations/contributions/views';
+import { coordinationBrowserContributions } from '@core/features/coordination/contributions/browser';
 import { UsageLimitsPanel } from '@core/features/model-providers/contributions/browser/usage-limits-panel';
 import { ConnectionSwitcher } from '@core/features/remote-access/contributions/browser/connection-switcher';
 import { settingsViewDef } from '@core/features/settings/contributions/views';
@@ -60,6 +61,7 @@ export const LeftSidebar: React.FC = observer(function LeftSidebar() {
       <SidebarSpace />
       <SidebarContainer className="min-h-0 w-full flex-1 border-r-0">
         <SidebarContent className="flex flex-col">
+          <coordinationBrowserContributions.crossProjectSidebar />
           <SidebarPinnedTaskList />
           <SidebarGroup className="mb-0 flex min-h-0 flex-1 flex-col">
             <ProjectsGroupLabel />

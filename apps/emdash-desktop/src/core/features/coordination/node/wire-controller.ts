@@ -6,6 +6,8 @@ import { coordinationEvents } from './event-host';
 export function createCoordinationWireController(service: CoordinatorService) {
   return createController(coordinationContract, {
     events: coordinationEvents,
+    createCrossProject: (input) => service.createCrossProject(input),
+    open: ({ id }) => service.open(id),
     bindConversation: ({ id, conversationId }) => service.bindConversation(id, conversationId),
     selectionOptions: ({ id, selection }) => service.selectionOptions(id, selection),
     list: () => service.list(),
