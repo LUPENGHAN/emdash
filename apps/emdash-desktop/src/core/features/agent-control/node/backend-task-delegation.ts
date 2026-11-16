@@ -77,6 +77,8 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
       } as typeof request;
       const projectId = request.projectId ?? caller.projectId;
       const project = await projectFor(projectId);
+      if (!project.hasRepository && ids.role !== 'coordination')
+        throw new Error('A code task needs a Git repository.');
       const baselineSelection =
         ids.role !== 'coordination' && !request.baseBranch && deps.prepareBaseline
           ? projectBaselineSelectionSchema.parse(await deps.prepareBaseline(projectId))
@@ -90,7 +92,6 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
       let git: WorkspaceConfig['git'];
       let workspace: WorkspaceConfig['workspace'] = { kind: 'new-worktree' };
       if (!project.hasRepository) {
-        if (ids.role !== 'coordination') throw new Error('A code task needs a Git repository.');
         const workspaceId = project.project.repositoryWorkspaceId;
         if (!workspaceId) throw new Error('The directory project workspace is unavailable.');
         git = { kind: 'none' };

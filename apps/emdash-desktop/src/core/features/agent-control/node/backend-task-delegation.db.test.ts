@@ -338,7 +338,10 @@ it('opens a directory main on its registered workspace without Git reads or allo
   if (!attached.success) throw new Error('Project unavailable');
   const facts = vi.spyOn(attached.data.repoFacts, 'get');
   const remotes = vi.spyOn(attached.data.git.repository.model, 'state');
-  const service = createBackendTaskDelegation(test.dependencies);
+  const prepareBaseline = vi.fn(async () => {
+    throw new Error('Directory baseline checks must not run');
+  });
+  const service = createBackendTaskDelegation({ ...test.dependencies, prepareBaseline });
   const request = {
     kind: 'create_task' as const,
     name: 'Directory main',
@@ -363,6 +366,7 @@ it('opens a directory main on its registered workspace without Git reads or allo
   expect(facts).not.toHaveBeenCalled();
   expect(remotes).not.toHaveBeenCalled();
   await expect(service.dispatch(test.caller, request)).rejects.toThrow('needs a Git repository');
+  expect(prepareBaseline).not.toHaveBeenCalled();
   expect(test.createTask).not.toHaveBeenCalled();
   expect(test.dependencies.startConversation).not.toHaveBeenCalled();
 });
