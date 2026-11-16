@@ -60,7 +60,7 @@ export type ResultEvent = {
   error?: string;
 };
 export type Coordinator = {
-  version: '8';
+  version: '9';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -77,12 +77,24 @@ export type Coordinator = {
   creationFingerprint?: string;
   documentPushTarget?: PushTarget;
   documentStorage?: DocumentStorage;
+  documentMigration?: DocumentMigration;
+  documentStorageHistory?: DocumentStorage[];
 };
 export type DocumentStorage = {
   projectId: string;
   taskId: string;
   params: CreateTaskParams;
   state: 'preparing' | 'ready';
+};
+export type DocumentMigration = {
+  id: string;
+  fingerprint: string;
+  source: DocumentStorage;
+  target: DocumentStorage;
+  files: ManagementDocument[];
+  copied: { path: string; revision: string }[];
+  phase: 'prepared' | 'copying' | 'verified' | 'complete' | 'cancelled';
+  error?: string;
 };
 export type CoordinationEvent = { coordinatorId: string; projectId: string; taskId?: string };
 export type TakeoverPreview = {
@@ -185,6 +197,16 @@ const coordinatorV7 = coordinatorV6.extend({
   version: z.literal('7'),
   documentPushTarget: pushTargetSchema.optional(),
 });
+const documentStorageSchema = z.object({
+  projectId: z.string(),
+  taskId: z.string(),
+  params: z.custom<CreateTaskParams>(),
+  state: z.enum(['preparing', 'ready']),
+});
+const coordinatorV8 = coordinatorV7.extend({
+  version: z.literal('8'),
+  documentStorage: documentStorageSchema.optional(),
+});
 
 export const coordinatorRecord = defineVersionedSchema()
   .initial('1', coordinatorV1)
@@ -201,19 +223,25 @@ export const coordinatorRecord = defineVersionedSchema()
   )
   .version('6', coordinatorV6, (record) => ({ ...record, version: '6' as const }))
   .version('7', coordinatorV7, (record) => ({ ...record, version: '7' as const }))
+  .version('8', coordinatorV8, (record) => ({ ...record, version: '8' as const }))
   .version(
-    '8',
-    coordinatorV7.extend({
-      version: z.literal('8'),
-      documentStorage: z
+    '9',
+    coordinatorV8.extend({
+      version: z.literal('9'),
+      documentMigration: z
         .object({
-          projectId: z.string(),
-          taskId: z.string(),
-          params: z.custom<CreateTaskParams>(),
-          state: z.enum(['preparing', 'ready']),
+          id: z.string(),
+          fingerprint: z.string(),
+          source: documentStorageSchema,
+          target: documentStorageSchema,
+          files: z.array(managementDocumentSchema),
+          copied: z.array(z.object({ path: z.string(), revision: z.string() })),
+          phase: z.enum(['prepared', 'copying', 'verified', 'complete', 'cancelled']),
+          error: z.string().optional(),
         })
         .optional(),
+      documentStorageHistory: z.array(documentStorageSchema).optional(),
     }),
-    (record) => ({ ...record, version: '8' as const })
+    (record) => ({ ...record, version: '9' as const })
   )
   .build();

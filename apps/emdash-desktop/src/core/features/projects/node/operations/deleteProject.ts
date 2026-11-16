@@ -41,6 +41,7 @@ import type { MementosRuntimeClient } from '@core/services/runtime-broker/api/cl
 export type ProjectDeletionResult = Result<void, MutationError>;
 
 export type ProjectDeletionDependencies = {
+  beforeDelete?(projectId: string): Promise<void>;
   db: AppDb;
   runtimes: WorkspaceRemovalBroker;
   automations: Pick<AutomationsService, 'removeProjectDeployments' | 'resumeProjectDeployments'>;
@@ -74,6 +75,14 @@ export async function deleteProject(
     .limit(1);
   if (!project) {
     return err({ type: 'project-not-found', message: `Project ${projectId} was not found` });
+  }
+  try {
+    await dependencies.beforeDelete?.(projectId);
+  } catch (error) {
+    return err({
+      type: 'document-storage-in-use',
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 
   // Tombstone first: admission checks (task/automation creation and deletion

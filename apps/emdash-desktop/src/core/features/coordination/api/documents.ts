@@ -65,6 +65,12 @@ export const documentWriteSchema = z.object({
   expectedRevision: z.string().startsWith('disk:').max(300).optional(),
 });
 export type DocumentWrite = z.infer<typeof documentWriteSchema>;
+export const documentMigrationInputSchema = z.object({
+  requestId: z.uuid(),
+  projectId: z.string().min(1),
+  paths: z.array(documentPathSchema).min(1).max(100),
+});
+export type DocumentMigrationInput = z.infer<typeof documentMigrationInputSchema>;
 
 export const documentPushOptionsSchema = z.object({
   targets: z.array(pushTargetSchema),

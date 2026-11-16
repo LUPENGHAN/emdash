@@ -1341,10 +1341,10 @@ export async function bootServices(
         return taskDelegation.service.retry(caller, taskId);
       },
     },
-    documents: new CoordinatorDocuments(async (record) => {
+    documents: new CoordinatorDocuments(async (record, options) => {
       const source = record.documentStorage ?? record;
       const storageProject = await getProjectById(db, source.projectId);
-      if (!storageProject || storageProject.archivedAt)
+      if (!storageProject || (storageProject.archivedAt && !options?.migrationSource))
         throw new Error(
           'The document storage project is unavailable or archived. Its binding is preserved.'
         );
@@ -1924,6 +1924,18 @@ export async function bootServices(
   // Plain project deletion (spec §3): the cascade reuses the task session cleanup and
   // the workspace removal verbs; nothing submits to the operations kernel.
   const projectDeletion: ProjectDeletionDependencies = {
+    beforeDelete: async (projectId) => {
+      const references = await coordinatorService.documentStorageReferences(projectId);
+      const names: string[] = [];
+      for (const reference of references) {
+        const owner = await getProjectById(db, reference.projectId);
+        if (owner) names.push(reference.name === 'Main agent' ? owner.name : reference.name);
+      }
+      if (names.length)
+        throw new Error(
+          `This project stores management documents or a pending migration for: ${[...new Set(names)].join(', ')}. Move those documents or cancel the pending setup before deleting this project. Archiving preserves the files.`
+        );
+    },
     db,
     runtimes,
     automations: automationsService,

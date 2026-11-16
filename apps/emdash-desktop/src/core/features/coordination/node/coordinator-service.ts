@@ -10,6 +10,8 @@ import {
   type ManagementDocument,
   type DocumentCommit,
   type DocumentWrite,
+  documentMigrationInputSchema,
+  type DocumentMigrationInput,
 } from '../api/documents';
 import {
   taskResultSchema,
@@ -23,6 +25,7 @@ import {
   type ResolvedAgentSelection,
   type ProjectAccess,
   type TakeoverPreview,
+  type DocumentStorage,
 } from '../api/types';
 import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordinator-access';
 import type { CoordinatorDocuments } from './coordinator-documents';
@@ -34,7 +37,16 @@ type Dependencies = {
   };
   documents?: Pick<CoordinatorDocuments, 'describe' | 'create' | 'read'> &
     Partial<
-      Pick<CoordinatorDocuments, 'commit' | 'pushTargets' | 'pushTarget' | 'preparePush' | 'write'>
+      Pick<
+        CoordinatorDocuments,
+        | 'commit'
+        | 'pushTargets'
+        | 'pushTarget'
+        | 'preparePush'
+        | 'write'
+        | 'readMigrationSource'
+        | 'copyMigrationDocument'
+      >
     >;
   store: {
     getOrThrow(id: string): Promise<Coordinator | null>;
@@ -97,7 +109,7 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '8',
+        version: '9',
         id,
         kind: 'project',
         name: 'Main agent',
@@ -153,7 +165,7 @@ export class CoordinatorService {
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '8',
+        version: '9',
         id,
         name,
         kind: 'cross-project',
@@ -182,6 +194,28 @@ export class CoordinatorService {
         projectId: owner.projectId,
         taskId: owner.taskId,
       });
+  }
+  async documentStorageReferences(projectId: string) {
+    const records = Object.values(await this.deps.store.getAll())
+      .filter(Boolean)
+      .map((value) => this.parseRecord(value));
+    return records
+      .filter((record) => {
+        const migration = record.documentMigration;
+        const pending =
+          migration &&
+          !['complete', 'cancelled'].includes(migration.phase) &&
+          (migration.source.projectId === projectId || migration.target.projectId === projectId);
+        return (
+          pending ||
+          (record.projectId !== projectId && record.documentStorage?.projectId === projectId)
+        );
+      })
+      .map((record) => ({
+        coordinatorId: record.id,
+        projectId: record.projectId,
+        name: record.name,
+      }));
   }
   async delegationStatus(id: string, taskId: string) {
     const record = await this.get(id);
@@ -344,33 +378,20 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       await this.deps.assertProjectAvailable(record.projectId);
       await this.deps.assertProjectAvailable(projectId);
       const runtime = this.deps.resources();
+      if (
+        record.documentMigration &&
+        !['complete', 'cancelled'].includes(record.documentMigration.phase)
+      )
+        throw new Error(
+          'Finish or cancel the pending document migration before setting up storage.'
+        );
       let storage = record.documentStorage;
       if (storage && storage.projectId !== projectId)
         throw new Error('Use document migration to change the saved storage project.');
       if (!storage) {
         if (record.params?.workspaceConfig.git.kind !== 'none')
           throw new Error('Use document migration to preserve the documents in this workspace.');
-        const taskId = randomUUID();
-        const params = await runtime.prepare(
-          {
-            taskId: record.taskId,
-            conversationId: record.conversationId,
-            projectId: record.projectId,
-            providerId: record.primary.agent ?? (await this.deps.defaultAgent()),
-            title: record.name,
-            cwd: null,
-          },
-          { kind: 'create_task', projectId, name: `${record.name} documents` },
-          { taskId, conversationId: randomUUID(), role: 'coordination' }
-        );
-        if (
-          params.workspaceConfig.git.kind !== 'management' ||
-          params.workspaceConfig.workspace.kind !== 'new-worktree'
-        )
-          throw new Error('Choose a Git repository for management document storage.');
-        params.taskConfig.role = 'coordination';
-        params.taskConfig.initialConversation = undefined;
-        storage = { projectId, taskId, params, state: 'preparing' };
+        storage = await this.prepareDocumentTarget(record, projectId);
         record.documentStorage = storage;
         await this.save(record);
       }
@@ -386,6 +407,208 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         record.projectIds = [...new Set([...record.projectIds, storage.projectId])];
         await this.save(record);
       }
+      return record;
+    });
+  }
+  async cancelDocumentStorageSetup(id: string, taskId: string): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      await this.deps.assertProjectAvailable(record.projectId);
+      const storage = record.documentStorage;
+      if (!storage) return record;
+      if (storage.taskId !== taskId)
+        throw new Error('The document storage setup changed. Refresh before cancelling.');
+      if (storage.state !== 'preparing')
+        throw new Error('Use document migration to preserve the saved documents.');
+      record.documentStorageHistory = [...(record.documentStorageHistory ?? []), storage];
+      record.documentStorage = undefined;
+      record.documentPushTarget = undefined;
+      await this.save(record);
+      return record;
+    });
+  }
+  private async prepareDocumentTarget(
+    record: Coordinator,
+    projectId: string
+  ): Promise<DocumentStorage> {
+    const taskId = randomUUID();
+    const params = await this.deps.resources().prepare(
+      {
+        taskId: record.taskId,
+        conversationId: record.conversationId,
+        projectId: record.projectId,
+        providerId: record.primary.agent ?? (await this.deps.defaultAgent()),
+        title: record.name,
+        cwd: null,
+      },
+      { kind: 'create_task', projectId, name: `${record.name} documents` },
+      { taskId, conversationId: randomUUID(), role: 'coordination' }
+    );
+    if (
+      params.workspaceConfig.git.kind !== 'management' ||
+      params.workspaceConfig.workspace.kind !== 'new-worktree'
+    )
+      throw new Error('Choose a Git repository for management document storage.');
+    params.taskConfig.role = 'coordination';
+    params.taskConfig.initialConversation = undefined;
+    return { projectId, taskId, params, state: 'preparing' };
+  }
+  async prepareDocumentMigration(id: string, input: DocumentMigrationInput): Promise<Coordinator> {
+    const selected = documentMigrationInputSchema.parse(input);
+    if (!(await this.get(id)).params) await this.open(id);
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      await this.deps.assertProjectAvailable(record.projectId);
+      await this.deps.assertProjectAvailable(selected.projectId);
+      const paths = [...new Set(selected.paths)].sort();
+      const fingerprint = createHash('sha256')
+        .update(JSON.stringify([selected.projectId, paths]))
+        .digest('hex');
+      if (record.documentMigration?.id === selected.requestId) {
+        if (record.documentMigration.fingerprint !== fingerprint)
+          throw new Error('This migration request has different parameters.');
+        return record;
+      }
+      if (
+        record.documentMigration &&
+        !['complete', 'cancelled'].includes(record.documentMigration.phase)
+      )
+        throw new Error('Finish or cancel the pending document migration first.');
+      if (!record.params) throw new Error('The main agent workspace is unavailable.');
+      const source = record.documentStorage ?? {
+        projectId: record.projectId,
+        taskId: record.taskId,
+        params: record.params,
+        state: 'ready' as const,
+      };
+      if (source.state !== 'ready')
+        throw new Error('Finish the saved document storage setup first.');
+      const documents = this.documentService();
+      if (!documents.readMigrationSource) throw new Error('Document migration is unavailable.');
+      const files: ManagementDocument[] = [];
+      for (const path of paths)
+        files.push(await documents.readMigrationSource(record, source, path));
+      if (
+        files.reduce((bytes, file) => bytes + Buffer.byteLength(file.content, 'utf8'), 0) >
+        16 * 1024 * 1024
+      )
+        throw new Error('Choose management documents totaling no more than 16 MiB per migration.');
+      const target = await this.prepareDocumentTarget(record, selected.projectId);
+      record.documentMigration = {
+        id: selected.requestId,
+        fingerprint,
+        source,
+        target,
+        files,
+        copied: [],
+        phase: 'prepared',
+      };
+      await this.save(record);
+      return record;
+    });
+  }
+  async runDocumentMigration(id: string, migrationId: string): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const migration = record.documentMigration;
+      if (!migration || migration.id !== migrationId)
+        throw new Error('The document migration changed. Refresh before continuing.');
+      if (migration.phase === 'complete') return record;
+      if (migration.phase === 'cancelled')
+        throw new Error('This document migration was cancelled.');
+      const documents = this.documentService();
+      if (!documents.readMigrationSource || !documents.copyMigrationDocument)
+        throw new Error('Document migration is unavailable.');
+      const readSource = documents.readMigrationSource.bind(documents);
+      const copy = documents.copyMigrationDocument.bind(documents);
+      const verifySource = async () => {
+        for (const file of migration.files) {
+          const actual = await readSource(record, migration.source, file.path);
+          if (
+            actual.workspaceId !== file.workspaceId ||
+            actual.revision !== file.revision ||
+            actual.content !== file.content
+          )
+            throw new Error(
+              `Source document changed: ${file.path}. Cancel this plan and prepare a migration from the saved source.`
+            );
+        }
+      };
+      try {
+        await this.deps.assertProjectAvailable(record.projectId);
+        await this.deps.assertProjectAvailable(migration.target.projectId);
+        await verifySource();
+        const runtime = this.deps.resources();
+        const state = await runtime.findTask(migration.target.taskId, migration.target.projectId);
+        if (state === 'deleted')
+          throw new Error('The migration destination was removed. Original storage is preserved.');
+        if (state === 'missing') await runtime.create(migration.target.params);
+        await runtime.activate(migration.target.taskId, migration.target.projectId);
+        migration.target.state = 'ready';
+        migration.phase = 'copying';
+        migration.error = undefined;
+        await this.save(record);
+        for (const file of migration.files) {
+          const copied = await copy(record, migration.target, file);
+          if (copied.content !== file.content)
+            throw new Error(`Document copy verification failed: ${file.path}`);
+          migration.copied = [
+            ...migration.copied.filter((entry) => entry.path !== file.path),
+            { path: file.path, revision: copied.revision },
+          ];
+          await this.save(record);
+        }
+        await verifySource();
+        for (const file of migration.files) {
+          const revision = migration.copied.find((entry) => entry.path === file.path)?.revision;
+          if (!revision) throw new Error(`Missing copied document version: ${file.path}`);
+          const copied = await documents.read(
+            { ...record, documentStorage: migration.target },
+            file.path,
+            revision
+          );
+          if (copied.content !== file.content)
+            throw new Error(`Document verification failed: ${file.path}`);
+        }
+        migration.phase = 'verified';
+        await this.save(record);
+        record.documentStorageHistory = [
+          ...(record.documentStorageHistory ?? []).filter(
+            (entry) => entry.taskId !== migration.source.taskId
+          ),
+          migration.source,
+        ];
+        record.documentStorage = migration.target;
+        record.documentPushTarget = undefined;
+        record.projectIds = [...new Set([...record.projectIds, migration.target.projectId])];
+        migration.phase = 'complete';
+        await this.save(record);
+        return record;
+      } catch (error) {
+        const persisted = await this.get(id);
+        if (persisted.documentMigration?.id === migrationId) {
+          persisted.documentMigration.error =
+            error instanceof Error ? error.message : String(error);
+          await this.save(persisted);
+        }
+        throw error;
+      }
+    });
+  }
+  async cancelDocumentMigration(id: string, migrationId: string): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const migration = record.documentMigration;
+      if (!migration || migration.id !== migrationId)
+        throw new Error('The document migration changed. Refresh before cancelling.');
+      if (migration.phase === 'complete')
+        throw new Error(
+          'The migration is complete. Prepare another migration to move documents again.'
+        );
+      if (migration.phase === 'cancelled') return record;
+      record.documentStorageHistory = [...(record.documentStorageHistory ?? []), migration.target];
+      migration.phase = 'cancelled';
+      await this.save(record);
       return record;
     });
   }

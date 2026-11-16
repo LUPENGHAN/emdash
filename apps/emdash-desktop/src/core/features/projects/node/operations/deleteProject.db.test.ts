@@ -170,6 +170,25 @@ describe('deleteProject', () => {
     };
   }
 
+  it('refuses document-storage deletion before tombstoning or touching sessions and worktrees', async () => {
+    await seedProject();
+    const { registry, runtimes } = makeRuntimes();
+    const { dependencies, automations, sessionCleanup } = makeDependencies(runtimes);
+    dependencies.beforeDelete = async () => {
+      throw new Error('Move management documents first');
+    };
+    expect(await deleteProject(dependencies, 'project-1')).toEqual({
+      success: false,
+      error: { type: 'document-storage-in-use', message: 'Move management documents first' },
+    });
+    const [project] = await fixture.db.select().from(projects).where(eq(projects.id, 'project-1'));
+    expect(project.deletedAt).toBeNull();
+    expect(await fixture.db.select().from(tasks)).toHaveLength(2);
+    expect(automations.removeProjectDeployments).not.toHaveBeenCalled();
+    expect(sessionCleanup.resolve).not.toHaveBeenCalled();
+    expect(registry.deleteWorktree).not.toHaveBeenCalled();
+  });
+
   it('purges the project cascade and removes provenance worktrees through the verb when reachable', async () => {
     await seedProject();
     const { registry, runtimes } = makeRuntimes();

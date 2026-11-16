@@ -4,6 +4,7 @@ import { delegationStatusSchema } from '@core/features/agent-control/api/delegat
 import {
   documentCommitSchema,
   documentWriteSchema,
+  documentMigrationInputSchema,
   documentPushOptionsSchema,
   documentPushPlanSchema,
   documentPathSchema,
@@ -22,6 +23,22 @@ import {
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  cancelDocumentStorageSetup: procedure({
+    input: z.object({ id: z.string(), taskId: z.string() }),
+    output: z.custom<Coordinator>(),
+  }),
+  prepareDocumentMigration: procedure({
+    input: documentMigrationInputSchema.extend({ id: z.string() }),
+    output: z.custom<Coordinator>(),
+  }),
+  runDocumentMigration: procedure({
+    input: z.object({ id: z.string(), migrationId: z.string() }),
+    output: z.custom<Coordinator>(),
+  }),
+  cancelDocumentMigration: procedure({
+    input: z.object({ id: z.string(), migrationId: z.string() }),
+    output: z.custom<Coordinator>(),
+  }),
   writeDocument: procedure({
     input: documentWriteSchema.extend({ id: z.string() }),
     output: managementDocumentSchema,

@@ -1,9 +1,11 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { localBranchRefSchema } from '@emdash/core/runtimes/git/api';
 import { deferred } from '@emdash/shared/testing';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentCaller } from '@core/features/agent-control/api';
 import type { DelegationResources } from '@core/features/agent-control/api/node/delegation-resources';
-import type { Coordinator, TaskResult } from '../api/types';
+import type { ManagementDocument } from '../api/documents';
+import type { Coordinator, TaskResult, DocumentStorage } from '../api/types';
 import { CoordinatorService } from './coordinator-service';
 import { createSelectionResolver } from './selection-resolver';
 
@@ -469,11 +471,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('8');
+    expect((await test.service.ensureProject('project')).version).toBe('9');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('8');
+    expect(test.records.get(record.id)?.version).toBe('9');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -914,7 +916,7 @@ it('preserves a legacy main checkout until its separate document migration runs'
   vi.mocked(test.resources.prepare).mockClear();
   vi.mocked(test.resources.create).mockClear();
   const reopened = await new CoordinatorService(test.deps).open(first.id);
-  expect(reopened.version).toBe('8');
+  expect(reopened.version).toBe('9');
   expect(reopened.params?.workspaceConfig.git).toEqual(saved.params.workspaceConfig.git);
   expect(reopened.taskId).toBe(first.taskId);
   expect(reopened.conversationId).toBe(first.conversationId);
@@ -946,6 +948,53 @@ it('preserves a directory main workspace and its conversation across opening and
 });
 
 describe('management document authorization', () => {
+  it('cancels an incomplete storage setup without contacting its unavailable host or clearing ready documents', async () => {
+    const test = setup();
+    const main = await test.service.openProject('directory');
+    const saved = test.records.get(main.id);
+    if (!saved?.params) throw new Error('Missing main runtime');
+    saved.params.workspaceConfig = {
+      version: '2',
+      git: { kind: 'none' },
+      workspace: { kind: 'repository-instance', workspaceId: 'directory-root' },
+    };
+    const sourceParams = structuredClone(saved.params);
+    const storage: DocumentStorage = {
+      projectId: 'unavailable-project',
+      taskId: 'pending-documents',
+      state: 'preparing',
+      params: {
+        ...structuredClone(sourceParams),
+        id: 'pending-documents',
+        projectId: 'unavailable-project',
+        taskConfig: { version: '1', name: 'Documents', role: 'coordination' },
+        workspaceConfig: {
+          version: '2',
+          git: { kind: 'management', branchName: 'emdash/manage/pending-documents' },
+          workspace: { kind: 'new-worktree' },
+        },
+      },
+    };
+    saved.documentStorage = storage;
+    test.records.set(saved.id, saved);
+    vi.mocked(test.resources.activate).mockClear();
+    await expect(test.service.cancelDocumentStorageSetup(main.id, 'superseded')).rejects.toThrow(
+      'changed'
+    );
+    const cancelled = await test.service.cancelDocumentStorageSetup(main.id, storage.taskId);
+    expect(cancelled.documentStorage).toBeUndefined();
+    expect(cancelled.documentStorageHistory).toEqual([storage]);
+    expect(cancelled.params).toEqual(sourceParams);
+    expect(test.resources.activate).not.toHaveBeenCalled();
+    expect(test.resources.start).not.toHaveBeenCalled();
+    const repeated = await test.service.cancelDocumentStorageSetup(main.id, storage.taskId);
+    expect(repeated.documentStorageHistory).toHaveLength(1);
+    test.records.set(saved.id, { ...saved, documentStorage: { ...storage, state: 'ready' } });
+    await expect(test.service.cancelDocumentStorageSetup(main.id, storage.taskId)).rejects.toThrow(
+      'migration'
+    );
+  });
+
   it('sets up independent Git storage for a directory main, resuming the same resources after interruption', async () => {
     const test = setup();
     const main = await test.service.openProject('directory');
@@ -1335,4 +1384,230 @@ it('persists only an explicitly inspected document remote and rejects a changed 
   expect((await restored.getByTask(main.taskId))?.documentPushTarget).toBeUndefined();
   expect(resources.start).not.toHaveBeenCalled();
   expect(resources.prepare).not.toHaveBeenCalled();
+});
+
+describe('document migration recovery', () => {
+  async function migrationSetup() {
+    const test = setup();
+    const main = await test.service.openProject('project');
+    const saved = test.records.get(main.id);
+    if (!saved?.params) throw new Error('Missing source runtime');
+    saved.params.workspaceConfig.git = {
+      kind: 'create-branch',
+      branchName: 'legacy-main',
+      fromBranch: { type: 'local', branch: 'main' },
+    };
+    test.records.set(saved.id, saved);
+    await test.service.registerDelegation(caller(main), {
+      id: 'worker-task',
+      projectId: 'project',
+      taskConfig: { version: '1', name: 'Worker' },
+      workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+    });
+    const original = structuredClone(test.records.get(main.id));
+    const sourceFiles = new Map([
+      ['plans/decision.md', 'selected decision'],
+      ['notes/result.md', 'selected result'],
+      ['README.md', 'product docs stay with code'],
+    ]);
+    const copiedFiles = new Map<string, string>();
+    const snapshot = (taskId: string, path: string, content: string): ManagementDocument => ({
+      coordinatorId: main.id,
+      workspaceId: `workspace:${taskId}`,
+      path,
+      content,
+      revision: `disk:${createHash('sha256').update(content).digest('hex')}`,
+    });
+    const documents = {
+      describe: vi.fn(),
+      create: vi.fn(),
+      read: vi.fn(async (record: Coordinator, path: string, revision?: string) => {
+        const taskId = record.documentStorage?.taskId;
+        if (!taskId) throw new Error('Missing target binding');
+        const content = copiedFiles.get(`${taskId}/${path}`);
+        if (content === undefined) throw new Error('Missing copied document');
+        const result = snapshot(taskId, path, content);
+        if (revision && revision !== result.revision) throw new Error('Destination changed');
+        return result;
+      }),
+      readMigrationSource: vi.fn(
+        async (_record: Coordinator, source: DocumentStorage, path: string) => {
+          const content =
+            source.taskId === main.taskId
+              ? sourceFiles.get(path)
+              : copiedFiles.get(`${source.taskId}/${path}`);
+          if (content === undefined) throw new Error('Missing source document');
+          return snapshot(source.taskId, path, content);
+        }
+      ),
+      copyMigrationDocument: vi.fn(
+        async (_record: Coordinator, target: DocumentStorage, file: ManagementDocument) => {
+          const key = `${target.taskId}/${file.path}`;
+          if (copiedFiles.has(key) && copiedFiles.get(key) !== file.content)
+            throw new Error('Destination changed');
+          copiedFiles.set(key, file.content);
+          return snapshot(target.taskId, file.path, file.content);
+        }
+      ),
+    };
+    vi.mocked(test.resources.prepare).mockImplementation(async (_caller, request, ids) => ({
+      id: ids.taskId,
+      projectId: request.projectId!,
+      taskConfig: { version: '1', name: request.name },
+      workspaceConfig: {
+        version: '2',
+        git: { kind: 'management', branchName: `emdash/manage/${ids.taskId}` },
+        workspace: { kind: 'new-worktree' },
+      },
+    }));
+    const service = () => new CoordinatorService({ ...test.deps, documents });
+    const input = {
+      requestId: randomUUID(),
+      projectId: 'target',
+      paths: ['plans/decision.md', 'notes/result.md'],
+    };
+    return { ...test, main, original, sourceFiles, copiedFiles, documents, service, input };
+  }
+
+  it('records a root filename without treating it as an object property', async () => {
+    const test = await migrationSetup();
+    test.sourceFiles.set('__proto__', 'plain document');
+    const prepared = await test
+      .service()
+      .prepareDocumentMigration(test.main.id, { ...test.input, paths: ['__proto__'] });
+    if (!prepared.documentMigration) throw new Error('Missing migration');
+    const completed = await test
+      .service()
+      .runDocumentMigration(test.main.id, prepared.documentMigration.id);
+    expect(completed.documentMigration?.copied).toEqual([
+      { path: '__proto__', revision: expect.stringMatching(/^disk:/) },
+    ]);
+    expect((await test.service().getByTask(test.main.taskId))?.documentMigration?.phase).toBe(
+      'complete'
+    );
+    expect(test.sourceFiles.get('__proto__')).toBe('plain document');
+  });
+
+  it('exposes active and pending storage references but releases the source reference after a verified move', async () => {
+    const test = await migrationSetup();
+    const service = test.service();
+    const prepared = await service.prepareDocumentMigration(test.main.id, test.input);
+    if (!prepared.documentMigration) throw new Error('Missing migration');
+    expect(await service.documentStorageReferences('target')).toHaveLength(1);
+    expect(await service.documentStorageReferences('project')).toHaveLength(1);
+    const completed = await service.runDocumentMigration(
+      test.main.id,
+      prepared.documentMigration.id
+    );
+    expect(await service.documentStorageReferences('target')).toHaveLength(1);
+    expect(await service.documentStorageReferences('project')).toHaveLength(0);
+    const next = await service.prepareDocumentMigration(test.main.id, {
+      ...test.input,
+      requestId: randomUUID(),
+      projectId: 'another-target',
+    });
+    if (!next.documentMigration) throw new Error('Missing migration');
+    expect(await service.documentStorageReferences('another-target')).toHaveLength(1);
+    await service.cancelDocumentMigration(test.main.id, next.documentMigration.id);
+    expect(await service.documentStorageReferences('another-target')).toHaveLength(0);
+    expect((await service.getByTask(test.main.taskId))?.documentStorage?.taskId).toBe(
+      completed.documentStorage?.taskId
+    );
+  });
+
+  it.each(['copy', 'verified', 'publish'] as const)(
+    'resumes after a failure at %s without replacing source identity or allocating another destination',
+    async (fault) => {
+      const test = await migrationSetup();
+      const service = test.service();
+      const prepared = await service.prepareDocumentMigration(test.main.id, test.input);
+      const migration = prepared.documentMigration;
+      if (!migration) throw new Error('Missing migration');
+      expect(test.resources.create).toHaveBeenCalledOnce();
+      const repeated = await service.prepareDocumentMigration(test.main.id, {
+        ...test.input,
+        paths: [...test.input.paths].reverse(),
+      });
+      expect(repeated.documentMigration?.target.taskId).toBe(migration.target.taskId);
+      await expect(
+        service.prepareDocumentMigration(test.main.id, { ...test.input, paths: ['README.md'] })
+      ).rejects.toThrow('different parameters');
+      let injected = false;
+      if (fault === 'copy') {
+        const copy = test.documents.copyMigrationDocument.getMockImplementation();
+        if (!copy) throw new Error('Missing copy operation');
+        test.documents.copyMigrationDocument.mockImplementation(async (...args) => {
+          if (!injected && test.copiedFiles.size === 1) {
+            injected = true;
+            throw new Error('Injected interruption');
+          }
+          return copy(...args);
+        });
+      } else {
+        const save = test.deps.store.setOrThrow;
+        vi.spyOn(test.deps.store, 'setOrThrow').mockImplementation(async (id, record) => {
+          if (
+            !injected &&
+            record.documentMigration?.phase === (fault === 'verified' ? 'verified' : 'complete')
+          ) {
+            injected = true;
+            throw new Error('Injected interruption');
+          }
+          await save(id, record);
+        });
+      }
+      await expect(service.runDocumentMigration(test.main.id, migration.id)).rejects.toThrow(
+        'Injected interruption'
+      );
+      const interrupted = test.records.get(test.main.id);
+      expect(interrupted?.documentStorage).toBeUndefined();
+      expect(interrupted?.params).toEqual(test.original?.params);
+      expect(interrupted?.conversationId).toBe(test.original?.conversationId);
+      expect(interrupted?.tasks).toEqual(test.original?.tasks);
+      expect(interrupted?.documentMigration?.error).toContain('Injected interruption');
+      const resumed = await test.service().runDocumentMigration(test.main.id, migration.id);
+      expect(resumed.documentMigration?.phase).toBe('complete');
+      expect(resumed.documentStorage?.taskId).toBe(migration.target.taskId);
+      expect(resumed.documentStorageHistory?.[0].params).toEqual(test.original?.params);
+      expect(resumed.params).toEqual(test.original?.params);
+      expect(resumed.tasks).toEqual(test.original?.tasks);
+      expect(resumed.taskId).toBe(test.main.taskId);
+      expect(resumed.conversationId).toBe(test.main.conversationId);
+      expect(test.resources.create).toHaveBeenCalledTimes(2);
+      expect(test.resources.prepare).toHaveBeenCalledTimes(2);
+      expect(test.resources.start).not.toHaveBeenCalled();
+      expect(test.sourceFiles.get('README.md')).toBe('product docs stay with code');
+      expect([...test.copiedFiles.keys()].some((path) => path.endsWith('/README.md'))).toBe(false);
+      await test.service().runDocumentMigration(test.main.id, migration.id);
+      expect(test.resources.create).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it('rejects source changes, permits cancelling the plan and freezes fresh versions for another migration', async () => {
+    const test = await migrationSetup();
+    const prepared = await test.service().prepareDocumentMigration(test.main.id, test.input);
+    const migration = prepared.documentMigration;
+    if (!migration) throw new Error('Missing migration');
+    test.sourceFiles.set('plans/decision.md', 'edited after preparation');
+    await expect(test.service().runDocumentMigration(test.main.id, migration.id)).rejects.toThrow(
+      'Source document changed'
+    );
+    expect(test.resources.create).toHaveBeenCalledOnce();
+    await expect(
+      test.service().cancelDocumentMigration(test.main.id, 'superseded')
+    ).rejects.toThrow('changed');
+    const cancelled = await test.service().cancelDocumentMigration(test.main.id, migration.id);
+    expect(cancelled.documentStorage).toBeUndefined();
+    expect(cancelled.documentMigration?.phase).toBe('cancelled');
+    const next = await test
+      .service()
+      .prepareDocumentMigration(test.main.id, { ...test.input, requestId: randomUUID() });
+    if (!next.documentMigration) throw new Error('Missing replacement plan');
+    expect(next.documentMigration.target.taskId).not.toBe(migration.target.taskId);
+    expect(
+      next.documentMigration.files.find((file) => file.path === 'plans/decision.md')?.content
+    ).toBe('edited after preparation');
+    await test.service().runDocumentMigration(test.main.id, next.documentMigration.id);
+    expect(test.sourceFiles.get('plans/decision.md')).toBe('edited after preparation');
+  });
 });

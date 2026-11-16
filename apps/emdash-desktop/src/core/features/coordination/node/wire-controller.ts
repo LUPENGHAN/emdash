@@ -6,6 +6,11 @@ import { coordinationEvents } from './event-host';
 export function createCoordinationWireController(service: CoordinatorService) {
   return createController(coordinationContract, {
     events: coordinationEvents,
+    cancelDocumentStorageSetup: ({ id, taskId }) => service.cancelDocumentStorageSetup(id, taskId),
+    prepareDocumentMigration: ({ id, ...input }) => service.prepareDocumentMigration(id, input),
+    runDocumentMigration: ({ id, migrationId }) => service.runDocumentMigration(id, migrationId),
+    cancelDocumentMigration: ({ id, migrationId }) =>
+      service.cancelDocumentMigration(id, migrationId),
     writeDocument: ({ id, ...input }) => service.writeDocument(id, input),
     createDocumentStorage: ({ id, projectId }) => service.createDocumentStorage(id, projectId),
     delegationStatus: ({ id, taskId }) => service.delegationStatus(id, taskId),

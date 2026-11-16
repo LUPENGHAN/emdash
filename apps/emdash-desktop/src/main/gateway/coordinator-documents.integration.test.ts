@@ -80,7 +80,7 @@ async function setup() {
     git: client(gitContract, connect(gp.left)),
   };
   const record: Coordinator = {
-    version: '8',
+    version: '9',
     id: 'project:project',
     kind: 'project',
     name: 'Main agent',
@@ -112,6 +112,78 @@ async function setup() {
 }
 
 describe('management documents over host Wire runtimes', () => {
+  it('copies selected legacy text into an independent worktree without overwriting either side', async () => {
+    const { record, repo, dir, git, runtime } = await setup();
+    await git('switch', 'main');
+    await git('switch', '-c', 'legacy-main');
+    await mkdir(join(repo, 'plans'));
+    await writeFile(join(repo, 'plans', 'decision.md'), 'selected legacy decision');
+    const originalHead = await git('rev-parse', 'HEAD');
+    if (!record.params) throw new Error('Missing main params');
+    record.params.workspaceConfig.git = {
+      kind: 'create-branch',
+      branchName: 'legacy-main',
+      fromBranch: { type: 'local', branch: 'main' },
+    };
+    const source = {
+      projectId: record.projectId,
+      taskId: record.taskId,
+      params: structuredClone(record.params),
+      state: 'ready' as const,
+    };
+    const targetPath = join(dir, 'migration-target');
+    await git('worktree', 'add', '--detach', targetPath, 'HEAD');
+    await exec('git', ['switch', '--orphan', 'emdash/manage/target'], { cwd: targetPath });
+    await exec('git', ['commit', '--allow-empty', '-m', 'management root'], { cwd: targetPath });
+    const target = {
+      ...source,
+      taskId: 'target',
+      params: {
+        ...structuredClone(source.params),
+        id: 'target',
+        workspaceConfig: {
+          version: '2' as const,
+          git: { kind: 'management' as const, branchName: 'emdash/manage/target' },
+          workspace: { kind: 'new-worktree' as const },
+        },
+      },
+    };
+    const documents = new CoordinatorDocuments(async (bound) => ({
+      workspaceId:
+        bound.documentStorage?.taskId === 'target' ? 'target-workspace' : 'source-workspace',
+      root: hostFileRef(
+        LOCAL_HOST_REF,
+        hostPathFromNative(bound.documentStorage?.taskId === 'target' ? targetPath : repo)
+      ),
+      runtime,
+    }));
+    await expect(documents.read(record, 'plans/decision.md')).rejects.toThrow('migration');
+    const frozen = await documents.readMigrationSource(record, source, 'plans/decision.md');
+    const copied = await documents.copyMigrationDocument(record, target, frozen);
+    expect(copied.content).toBe('selected legacy decision');
+    expect(await documents.copyMigrationDocument(record, target, frozen)).toEqual(copied);
+    expect(await readFile(join(repo, 'plans', 'decision.md'), 'utf8')).toBe(
+      'selected legacy decision'
+    );
+    expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('code history');
+    await expect(readFile(join(targetPath, 'README.md'))).rejects.toThrow();
+    expect(await git('rev-parse', 'HEAD')).toBe(originalHead);
+    expect(record.params.workspaceConfig.git.kind).toBe('create-branch');
+    await writeFile(join(targetPath, 'plans', 'decision.md'), 'destination edit');
+    await expect(documents.copyMigrationDocument(record, target, frozen)).rejects.toThrow(
+      'destination changed'
+    );
+    expect(await readFile(join(targetPath, 'plans', 'decision.md'), 'utf8')).toBe(
+      'destination edit'
+    );
+    const outside = join(dir, 'outside-folder');
+    await mkdir(outside);
+    await symlink(outside, join(targetPath, 'linked'));
+    await expect(
+      documents.copyMigrationDocument(record, target, { ...frozen, path: 'linked/decision.md' })
+    ).rejects.toThrow('symbolic links');
+  });
+
   it('writes new documents and requires a current disk version before updating', async () => {
     const { service, record, repo } = await setup();
     const created = await service.write(record, { path: 'draft.md', content: 'first draft' });

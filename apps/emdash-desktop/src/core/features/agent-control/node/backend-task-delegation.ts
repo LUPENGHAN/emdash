@@ -162,6 +162,13 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
             : { type: 'local', branch: base.branch },
         };
       }
+      if (ids.role === 'coordination' && !request.prompt)
+        return {
+          id: ids.taskId,
+          projectId,
+          taskConfig: { version: '1', name: request.name, role: 'coordination' },
+          workspaceConfig: { version: '2', git, workspace },
+        };
       const agentId = request.providerId ?? caller.providerId;
       const plugin = getPlugin(agentId);
       const type = request.ui === 'chat' ? 'acp' : 'pty';

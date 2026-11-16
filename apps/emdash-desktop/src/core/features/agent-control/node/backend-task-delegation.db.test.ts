@@ -232,6 +232,34 @@ it('prepares a management workspace without a code baseline while refusing code 
   expect(test.createTask).not.toHaveBeenCalled();
 });
 
+it('prepares document-only storage without consulting an unavailable Agent or model configuration', async () => {
+  const test = await setup();
+  const getAgentSettings = vi.fn(async () => {
+    throw new Error('Agent configuration unavailable');
+  });
+  const getAcpOptions = vi.fn(async () => {
+    throw new Error('ACP unavailable');
+  });
+  const service = createBackendTaskDelegation({
+    ...test.dependencies,
+    getAgentSettings,
+    getAcpOptions,
+  });
+  const params = await service.resources.prepare(
+    { ...test.caller, providerId: 'unavailable-agent' },
+    { kind: 'create_task', name: 'Documents' },
+    { taskId: 'documents', conversationId: 'unused', role: 'coordination' }
+  );
+  expect(params.workspaceConfig.git).toEqual({
+    kind: 'management',
+    branchName: 'emdash/manage/documents',
+  });
+  expect(params.taskConfig.initialConversation).toBeUndefined();
+  expect(getAgentSettings).not.toHaveBeenCalled();
+  expect(getAcpOptions).not.toHaveBeenCalled();
+  expect(test.dependencies.startConversation).not.toHaveBeenCalled();
+});
+
 it('opens a directory main on its registered workspace without Git reads or allowing code delegation', async () => {
   const test = await setup({ directory: true });
   const attached = test.dependencies.projects.requireAttached(test.caller.projectId);

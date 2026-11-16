@@ -19,7 +19,7 @@ import {
   type DocumentWorkspace,
   type ManagementDocument,
 } from '../api/documents';
-import type { Coordinator } from '../api/types';
+import type { Coordinator, DocumentStorage } from '../api/types';
 
 const MAX_DOCUMENT_BYTES = 512 * 1024;
 export type DocumentRuntime = {
@@ -28,7 +28,57 @@ export type DocumentRuntime = {
   runtime: Pick<HostRuntimesClient, 'files' | 'git'>;
 };
 export class CoordinatorDocuments {
-  constructor(private readonly resolve: (record: Coordinator) => Promise<DocumentRuntime>) {}
+  constructor(
+    private readonly resolve: (
+      record: Coordinator,
+      options?: { migrationSource?: boolean }
+    ) => Promise<DocumentRuntime>
+  ) {}
+  async readMigrationSource(record: Coordinator, source: DocumentStorage, path: string) {
+    const storage = await this.resolve(
+      { ...record, documentStorage: source },
+      { migrationSource: true }
+    );
+    return this.readDisk(record, path, storage);
+  }
+  async copyMigrationDocument(
+    record: Coordinator,
+    target: DocumentStorage,
+    document: ManagementDocument
+  ) {
+    const bound = { ...record, documentStorage: target };
+    const storage = await this.storage(bound);
+    const parts = documentPathSchema.parse(document.path).split('/');
+    const canonicalRoot = await storage.runtime.files.fs.realPath({ path: storage.root.path });
+    if (!canonicalRoot.success) throw new Error('The migration destination is unavailable.');
+    for (let count = 1; count < parts.length; count++) {
+      const relative = parts.slice(0, count).join('/');
+      const { path } = this.path(storage.root, relative);
+      const exists = await storage.runtime.files.fs.exists({ path });
+      if (!exists.success) throw new Error('The migration folder is unavailable.');
+      if (!exists.data.exists) {
+        const created = await storage.runtime.files.fs.createDirectory({ path });
+        if (!created.success)
+          throw new Error(`Could not create migration folder: ${created.error.type}`);
+      }
+      const real = await storage.runtime.files.fs.realPath({ path });
+      const expected = this.path({ ...storage.root, path: canonicalRoot.data.path }, relative).path;
+      if (!real.success || !absoluteEquals(real.data.path, expected))
+        throw new Error('Migration folders must not contain symbolic links.');
+    }
+    const { path } = this.path(storage.root, document.path);
+    const exists = await storage.runtime.files.fs.exists({ path });
+    if (!exists.success) throw new Error('The migration file is unavailable.');
+    if (exists.data.exists) {
+      const copied = await this.read(bound, document.path);
+      if (copied.content !== document.content)
+        throw new Error(
+          `The migration destination changed: ${document.path}. Original storage is preserved.`
+        );
+      return copied;
+    }
+    return this.write(bound, { path: document.path, content: document.content });
+  }
   private async storage(record: Coordinator) {
     const config = (record.documentStorage?.params ?? record.params)?.workspaceConfig.git;
     if (record.documentStorage && record.documentStorage.state !== 'ready')
@@ -214,7 +264,7 @@ export class CoordinatorDocuments {
       ? documentRevisionSchema.parse(requestedRevision)
       : undefined;
     const storage = await this.storage(record);
-    const { relative, path } = this.path(storage.root, input);
+    const { relative } = this.path(storage.root, input);
     let content: string;
     let revision: string;
     if (requested && !requested.startsWith('disk:')) {
@@ -237,25 +287,43 @@ export class CoordinatorDocuments {
       content = snapshot.data.content;
       revision = requested;
     } else {
-      const real = await this.checkedPath(storage, path);
-      const root = await storage.runtime.files.fs.realPath({ path: storage.root.path });
-      if (!root.success) throw new Error('The document workspace is unavailable.');
-      const expected = this.path({ ...storage.root, path: root.data.path }, input).path;
-      if (!absoluteEquals(expected, real))
-        throw new Error('Read document files directly instead of through symbolic links.');
-      const file = await storage.runtime.files.fs.readText({
-        path,
-        options: { maxBytes: MAX_DOCUMENT_BYTES },
-      });
-      if (!file.success || file.data.truncated)
-        throw new Error('The document is unavailable or exceeds the 512 KiB text limit.');
-      content = file.data.content;
-      revision = `disk:${file.data.etag}`;
-      if (requested && requested !== revision)
-        throw new Error(
-          'The uncommitted document changed. Read its current version or use a saved commit.'
-        );
+      return this.readDisk(record, input, storage, requested);
     }
+    if (Buffer.byteLength(content, 'utf8') > MAX_DOCUMENT_BYTES || content.includes('\0'))
+      throw new Error('Choose a text document no larger than 512 KiB.');
+    return {
+      coordinatorId: record.id,
+      workspaceId: storage.workspaceId,
+      path: input,
+      revision,
+      content,
+    };
+  }
+  private async readDisk(
+    record: Coordinator,
+    input: string,
+    storage: DocumentRuntime,
+    requested?: string
+  ): Promise<ManagementDocument> {
+    const { path } = this.path(storage.root, input);
+    const real = await this.checkedPath(storage, path);
+    const root = await storage.runtime.files.fs.realPath({ path: storage.root.path });
+    if (!root.success) throw new Error('The document workspace is unavailable.');
+    const expected = this.path({ ...storage.root, path: root.data.path }, input).path;
+    if (!absoluteEquals(expected, real))
+      throw new Error('Read document files directly instead of through symbolic links.');
+    const file = await storage.runtime.files.fs.readText({
+      path,
+      options: { maxBytes: MAX_DOCUMENT_BYTES },
+    });
+    if (!file.success || file.data.truncated)
+      throw new Error('The document is unavailable or exceeds the 512 KiB text limit.');
+    const content = file.data.content;
+    const revision = `disk:${file.data.etag}`;
+    if (requested && requested !== revision)
+      throw new Error(
+        'The uncommitted document changed. Read its current version or use a saved commit.'
+      );
     if (Buffer.byteLength(content, 'utf8') > MAX_DOCUMENT_BYTES || content.includes('\0'))
       throw new Error('Choose a text document no larger than 512 KiB.');
     return {
