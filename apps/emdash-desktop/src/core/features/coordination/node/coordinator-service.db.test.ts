@@ -310,3 +310,43 @@ it('restores frozen task document content from SQLite without accessing the sour
   ).resolves.toEqual(snapshot);
   expect(read).toHaveBeenCalledOnce();
 });
+
+it('restores a document push target and its removal from SQLite without starting an agent', async () => {
+  const store = new AppDbKeyValueStore<Record<string, Coordinator>>(fixture.db, 'coordinators');
+  const target = {
+    remote: 'personal',
+    destination: '/personal-fork.git',
+    fingerprint: 'a'.repeat(64),
+  };
+  const make = () =>
+    new CoordinatorService({
+      store,
+      getTask: async () => null,
+      getConversation: async () => null,
+      resources: () => {
+        throw new Error('No runtime should be allocated');
+      },
+      defaultAgent: async () => 'claude',
+      resolveSelection: async () => ({
+        values: { agent: 'claude' },
+        sources: {},
+        effortOptions: {},
+        errors: [],
+      }),
+      assertProjectAvailable: async () => {},
+      setTaskStatus: async () => {},
+      emit: () => {},
+      deliver: async () => {},
+      documents: {
+        read: vi.fn(),
+        create: vi.fn(),
+        describe: vi.fn(),
+        pushTarget: async () => target,
+      },
+    });
+  const main = await make().ensureProject('project');
+  await make().configureDocumentPush(main.id, target.remote, target.fingerprint);
+  expect((await make().getByTask(main.taskId))?.documentPushTarget).toEqual(target);
+  await make().configureDocumentPush(main.id, null);
+  expect((await make().getByTask(main.taskId))?.documentPushTarget).toBeUndefined();
+});

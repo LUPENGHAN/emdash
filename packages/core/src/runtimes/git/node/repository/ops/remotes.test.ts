@@ -39,3 +39,12 @@ describe('computeRemotesState', () => {
     });
   });
 });
+
+it('retains a local fork remote whose directory contains spaces', async () => {
+  const exec = createRemoteExec(
+    'personal\t/tmp/My Fork/personal.git (fetch)\npersonal\t/tmp/My Fork/personal.git (push)\n'
+  );
+  await expect(computeRemotesState(exec)).resolves.toEqual({
+    remotes: [{ name: 'personal', url: '/tmp/My Fork/personal.git' }],
+  });
+});

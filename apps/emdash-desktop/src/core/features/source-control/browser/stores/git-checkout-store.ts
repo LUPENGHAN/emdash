@@ -33,6 +33,7 @@ import { resolveWorkspacePath } from '@core/features/workspaces/api/browser/work
 import { hostFileRefFromNativePath } from '@core/primitives/desktop-runtime/api';
 import type { ProviderAccountRef } from '@core/primitives/provider-accounts/api';
 import { runDesktopLiveJob } from '@core/primitives/wire/browser/run-live-job';
+import { isManagementBranch } from '@core/primitives/workspaces/api/management-branch';
 import { getPullRequestsRuntimeClient } from '@core/services/pull-requests/api/client';
 import { getPrNumber } from '@core/services/pull-requests/api/repository';
 import { sourceControlContract } from '../../api';
@@ -362,6 +363,11 @@ export class GitCheckoutStore {
   }
 
   async push() {
+    if (isManagementBranch(this.branchName ?? ''))
+      return err({
+        type: 'git_error' as const,
+        message: 'Use the main agent Documents page to push its configured management branch.',
+      });
     const client = await getSourceControlClient();
     // Null push remote (no remotes) degrades to a push without an explicit
     // remote — the same behavior as when the repository store is missing.
@@ -381,6 +387,11 @@ export class GitCheckoutStore {
   }
 
   async publishCurrentBranch(credentialAccount?: ProviderAccountRef) {
+    if (isManagementBranch(this.branchName ?? ''))
+      return err({
+        type: 'git_error' as const,
+        message: 'Use the main agent Documents page to push its configured management branch.',
+      });
     const repository = getGitRepositoryStore(this.projectId);
     const pushRemote = repository?.pushRemote;
     if (pushRemote === null || pushRemote === undefined) {

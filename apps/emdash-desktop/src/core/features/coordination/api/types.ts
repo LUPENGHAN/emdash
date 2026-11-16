@@ -1,4 +1,5 @@
 import { defineVersionedSchema } from '@emdash/core/primitives/versioned-schema/api';
+import { pushTargetSchema, type PushTarget } from '@emdash/core/runtimes/git/api';
 import { z } from 'zod';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
 import { managementDocumentSchema, type ManagementDocument } from './documents';
@@ -59,7 +60,7 @@ export type ResultEvent = {
   error?: string;
 };
 export type Coordinator = {
-  version: '6';
+  version: '7';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -74,6 +75,7 @@ export type Coordinator = {
   tasks: Record<string, AssignedTask>;
   events: ResultEvent[];
   creationFingerprint?: string;
+  documentPushTarget?: PushTarget;
 };
 export type CoordinationEvent = { coordinatorId: string; projectId: string; taskId?: string };
 export type TakeoverPreview = {
@@ -162,6 +164,16 @@ const coordinatorV4 = coordinatorV3.extend({
   ),
 });
 
+const coordinatorV6 = coordinatorV1.extend({
+  version: z.literal('6'),
+  tasks: z.record(
+    z.string(),
+    coordinatorV4.shape.tasks.valueType.extend({
+      documents: z.array(managementDocumentSchema).max(16).optional(),
+    })
+  ),
+});
+
 export const coordinatorRecord = defineVersionedSchema()
   .initial('1', coordinatorV1)
   .version('2', coordinatorV1.extend({ version: z.literal('2') }), (record) => ({
@@ -175,17 +187,13 @@ export const coordinatorRecord = defineVersionedSchema()
     coordinatorV1.extend({ version: z.literal('5'), tasks: coordinatorV4.shape.tasks }),
     (record) => ({ ...record, version: '5' as const })
   )
+  .version('6', coordinatorV6, (record) => ({ ...record, version: '6' as const }))
   .version(
-    '6',
-    coordinatorV1.extend({
-      version: z.literal('6'),
-      tasks: z.record(
-        z.string(),
-        coordinatorV4.shape.tasks.valueType.extend({
-          documents: z.array(managementDocumentSchema).max(16).optional(),
-        })
-      ),
+    '7',
+    coordinatorV6.extend({
+      version: z.literal('7'),
+      documentPushTarget: pushTargetSchema.optional(),
     }),
-    (record) => ({ ...record, version: '6' as const })
+    (record) => ({ ...record, version: '7' as const })
   )
   .build();

@@ -12,6 +12,7 @@ import { relativePathWithin } from '@core/primitives/desktop-runtime/api';
 import { getCoordinationClient } from '../api/browser/client';
 import { documentPathSchema } from '../api/documents';
 import type { Coordinator } from '../api/types';
+import { CoordinatorDocumentPush } from './coordinator-document-push';
 
 export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsPanel({
   record,
@@ -164,6 +165,12 @@ export const CoordinatorDocumentsPanel = observer(function CoordinatorDocumentsP
             Committed document · <code>{lastCommit}</code>
           </p>
         )}
+        <CoordinatorDocumentPush
+          disabled={saving}
+          record={record}
+          revision={workspace.data.revision}
+          refresh={() => workspace.refetch()}
+        />
         {error && (
           <p role="alert" className="text-sm text-foreground-destructive">
             {error}

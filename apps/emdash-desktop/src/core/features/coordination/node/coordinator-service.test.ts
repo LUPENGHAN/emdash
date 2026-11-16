@@ -1,3 +1,4 @@
+import { localBranchRefSchema } from '@emdash/core/runtimes/git/api';
 import { deferred } from '@emdash/shared/testing';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentCaller } from '@core/features/agent-control/api';
@@ -433,11 +434,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('6');
+    expect((await test.service.ensureProject('project')).version).toBe('7');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('6');
+    expect(test.records.get(record.id)?.version).toBe('7');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -878,7 +879,7 @@ it('preserves a legacy main checkout until its separate document migration runs'
   vi.mocked(test.resources.prepare).mockClear();
   vi.mocked(test.resources.create).mockClear();
   const reopened = await new CoordinatorService(test.deps).open(first.id);
-  expect(reopened.version).toBe('6');
+  expect(reopened.version).toBe('7');
   expect(reopened.params?.workspaceConfig.git).toEqual(saved.params.workspaceConfig.git);
   expect(reopened.taskId).toBe(first.taskId);
   expect(reopened.conversationId).toBe(first.conversationId);
@@ -1136,4 +1137,44 @@ it('requires an initialized main workspace for commits without recursively alloc
   });
   expect(commit).toHaveBeenCalledWith(opened, input);
   expect(resources.activate).not.toHaveBeenCalled();
+});
+
+it('persists only an explicitly inspected document remote and rejects a changed selection before push preparation', async () => {
+  const { deps, resources } = setup();
+  const target = { remote: 'personal', destination: '/fork.git', fingerprint: 'a'.repeat(64) };
+  const pushTarget = vi.fn(async () => target);
+  const preparePush = vi.fn(async () => ({
+    workspaceId: 'docs',
+    remote: target.remote,
+    expectedRemoteFingerprint: target.fingerprint,
+    sourceRef: localBranchRefSchema.parse('refs/heads/emdash/manage/main'),
+    targetRef: localBranchRefSchema.parse('refs/heads/emdash/manage/main'),
+    oid: 'b'.repeat(40),
+  }));
+  const service = new CoordinatorService({
+    ...deps,
+    documents: { read: vi.fn(), describe: vi.fn(), create: vi.fn(), pushTarget, preparePush },
+  });
+  const main = await service.ensureProject('project');
+  expect(main.documentPushTarget).toBeUndefined();
+  await expect(
+    service.configureDocumentPush(main.id, target.remote, 'c'.repeat(64))
+  ).rejects.toThrow('changed');
+  expect((await service.getByTask(main.taskId))?.documentPushTarget).toBeUndefined();
+  await service.configureDocumentPush(main.id, target.remote, target.fingerprint);
+  expect(preparePush).not.toHaveBeenCalled();
+  const restored = new CoordinatorService(deps);
+  expect((await restored.getByTask(main.taskId))?.documentPushTarget).toEqual(target);
+  expect((await restored.getTaskCoordination(main.taskId))?.documentPushTarget).toEqual(target);
+  expect(await restored.instructionsForTask(main.taskId)).toContain('/fork.git');
+  await expect(
+    service.prepareDocumentPush(main.id, 'b'.repeat(40), 'c'.repeat(64))
+  ).rejects.toThrow('changed');
+  expect(preparePush).not.toHaveBeenCalled();
+  await service.prepareDocumentPush(main.id, 'b'.repeat(40), target.fingerprint);
+  expect(preparePush).toHaveBeenCalledOnce();
+  await service.configureDocumentPush(main.id, null);
+  expect((await restored.getByTask(main.taskId))?.documentPushTarget).toBeUndefined();
+  expect(resources.start).not.toHaveBeenCalled();
+  expect(resources.prepare).not.toHaveBeenCalled();
 });

@@ -1,4 +1,5 @@
 import { hostFileRefSchema } from '@emdash/core/primitives/path/api';
+import { pushTargetSchema, pushBranchJobInputSchema } from '@emdash/core/runtimes/git/api';
 import { z } from 'zod';
 
 export const documentPathSchema = z
@@ -58,3 +59,11 @@ export const documentCommitSchema = z.object({
   expectedRevision: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/),
 });
 export type DocumentCommit = z.infer<typeof documentCommitSchema>;
+
+export const documentPushOptionsSchema = z.object({
+  targets: z.array(pushTargetSchema),
+  unavailable: z.array(z.object({ remote: z.string(), message: z.string() })),
+});
+export const documentPushPlanSchema = pushBranchJobInputSchema
+  .omit({ checkout: true, credentials: true })
+  .extend({ workspaceId: z.string() });

@@ -147,6 +147,19 @@ const sourceControlCheckoutContract = defineContract({
     checkout.blame.input.omit({ checkout: true }).extend(workspaceKeySchema.shape),
     checkout.blame.output
   ),
+  inspectPushTarget: runtimeFallibleProcedure(
+    checkout.inspectPushTarget.input.omit({ checkout: true }).extend(workspaceKeySchema.shape),
+    checkout.inspectPushTarget.output
+  ),
+  pushBranch: liveJob({
+    input: checkout.pushBranch.input.omit({ checkout: true }).extend({
+      ...workspaceKeySchema.shape,
+      credentialAccount: providerAccountRefSchema.optional(),
+    }),
+    progress: checkout.pushBranch.progress,
+    result: checkout.pushBranch.result,
+    error: runtimeResolveErrorUnion(checkout.pushBranch.error),
+  }),
   push: liveJob({
     input: checkout.push.input.omit({ checkout: true }).extend(workspaceKeySchema.shape),
     progress: checkout.push.progress,

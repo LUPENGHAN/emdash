@@ -37,6 +37,17 @@ await git(
   'Initial baseline'
 );
 const baseline = await git('rev-parse', 'HEAD');
+const personalFork = join(profile, 'personal fork.git');
+const upstreamRepository = join(profile, 'upstream.git');
+await git('init', '--bare', upstreamRepository);
+await git('push', upstreamRepository, 'main:refs/heads/main');
+await git('remote', 'add', 'upstream', upstreamRepository);
+await git('init', '--bare', personalFork);
+await git('push', personalFork, 'main:refs/heads/main');
+await git('remote', 'add', 'personal-documents', personalFork);
+const forkGit = async (...args) =>
+  (await promisify(execFile)('git', ['--git-dir', personalFork, ...args])).stdout.trim();
+
 const wrapper = join(profile, 'fake-claude');
 await writeFile(
   wrapper,
@@ -304,6 +315,21 @@ try {
   assert.ok(
     !(await readdir(capture)).includes('main-session.json'),
     'Editing documents started an agent process'
+  );
+  const documentPush = documents.getByTestId('coordinator-document-push');
+  await documentPush.getByText('Configure document remote', { exact: true }).click();
+  await documentPush.getByTestId('document-push-remote').click();
+  await page.getByRole('option', { name: /personal-documents/ }).click();
+  await documentPush.getByRole('button', { name: 'Save document remote', exact: true }).click();
+  await documentPush.getByText(/Document remote: personal-documents/).waitFor();
+  assert.equal(
+    await forkGit('for-each-ref', '--format=%(refname)'),
+    'refs/heads/main',
+    'Saving a remote published management documents'
+  );
+  assert.ok(
+    !(await readdir(capture)).includes('main-session.json'),
+    'Configuring a document remote started a model process'
   );
   await page.getByTestId('coordinator-conversation-tab').click();
   await page
@@ -1106,6 +1132,7 @@ try {
     const record = restored.find((entry) => entry.id === saved.id);
     assert.equal(record.taskId, saved.taskId);
     assert.equal(record.conversationId, saved.conversationId);
+    assert.deepEqual(record.documentPushTarget, saved.documentPushTarget);
     assert.deepEqual(Object.keys(record.tasks).sort(), Object.keys(saved.tasks).sort());
     for (const [id, task] of Object.entries(saved.tasks)) {
       assert.equal(record.tasks[id].state, task.state);
@@ -1159,6 +1186,48 @@ try {
   assert.equal(committedDocument.revision, documentCommit);
   assert.ok(committedDocument.content.includes('After full restart.'));
   await page.screenshot({ path: join(profile, 'management-document-committed.png') });
+  await documentGit(
+    'tag',
+    '-a',
+    'keep-document-tag-local',
+    '-m',
+    'Do not push this management tag'
+  );
+  await documentGit('config', 'push.followTags', 'true');
+  const restoredPush = restoredDocuments.getByTestId('coordinator-document-push');
+  await restoredPush.getByText(/Document remote: personal-documents/).waitFor();
+  await restoredPush.getByRole('button', { name: 'Push committed documents', exact: true }).click();
+  await restoredPush.getByTestId('coordinator-document-pushed').waitFor();
+  const managementRef = await documentGit('symbolic-ref', 'HEAD');
+  assert.equal(await forkGit('rev-parse', managementRef), documentCommit);
+  assert.equal(await forkGit('rev-parse', 'refs/heads/main'), baseline);
+  assert.equal(
+    (
+      await promisify(execFile)('git', [
+        '--git-dir',
+        upstreamRepository,
+        'for-each-ref',
+        '--format=%(refname)',
+      ])
+    ).stdout.trim(),
+    'refs/heads/main'
+  );
+  assert.equal(
+    (
+      await promisify(execFile)('git', [
+        '--git-dir',
+        upstreamRepository,
+        'rev-parse',
+        'refs/heads/main',
+      ])
+    ).stdout.trim(),
+    baseline
+  );
+  assert.deepEqual(
+    (await forkGit('for-each-ref', '--format=%(refname)')).split('\n').sort(),
+    ['refs/heads/main', managementRef].sort()
+  );
+  await page.screenshot({ path: join(profile, 'management-document-pushed.png') });
 
   assert.equal(await git('rev-parse', 'HEAD'), baseline);
 
@@ -1178,6 +1247,9 @@ try {
           'management document reopened and edited through Monaco after the full restart',
           'document committed through the UI as a child of its management history and read by exact commit ID',
           'selected document commit preserved unrelated staged files and the code baseline',
+          'document remote saved before restart without starting a model or publishing refs and restored afterward',
+          'explicit document push published only its pinned management branch to a local personal-fork fixture',
+          'fork code baseline and local annotated tags stayed outside the management push',
           'task worktree contained no copied management documents',
           'real ACP protocol with a simulated OpenCode executable',
           'authenticated main and worker MCP identities',

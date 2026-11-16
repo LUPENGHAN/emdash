@@ -36,6 +36,8 @@ import {
   pullJobInputSchema,
   publishJobInputSchema,
   pushJobInputSchema,
+  pushBranchJobInputSchema,
+  pushTargetSchema,
 } from './schemas';
 
 export const gitCheckoutContract = defineContract({
@@ -149,6 +151,17 @@ export const gitCheckoutContract = defineContract({
     error: gitCommandErrorSchema,
   }),
 
+  inspectPushTarget: fallible({
+    input: checkoutSelectorSchema.extend({ remote: z.string().min(1) }),
+    data: pushTargetSchema,
+    error: gitCommandErrorSchema,
+  }),
+  pushBranch: liveJob({
+    input: pushBranchJobInputSchema,
+    progress: transferProgressSchema,
+    result: z.object({ output: z.string(), oid: z.string(), targetRef: z.string() }),
+    error: pushErrorSchema,
+  }),
   push: liveJob({
     input: pushJobInputSchema,
     progress: transferProgressSchema,

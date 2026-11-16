@@ -6,6 +6,11 @@ import { coordinationEvents } from './event-host';
 export function createCoordinationWireController(service: CoordinatorService) {
   return createController(coordinationContract, {
     events: coordinationEvents,
+    documentPushOptions: ({ id }) => service.documentPushOptions(id),
+    configureDocumentPush: ({ id, remote, expectedFingerprint }) =>
+      service.configureDocumentPush(id, remote, expectedFingerprint),
+    prepareDocumentPush: ({ id, expectedRevision, expectedFingerprint }) =>
+      service.prepareDocumentPush(id, expectedRevision, expectedFingerprint),
     commitDocuments: ({ id, ...input }) => service.commitDocuments(id, input),
     documentWorkspace: ({ id }) => service.documentWorkspace(id),
     createDocument: ({ id, path }) => service.createDocument(id, path),

@@ -81,6 +81,55 @@ export class CoordinatorDocuments {
       revision: storage.revision,
     };
   }
+  async pushTarget(record: Coordinator, remote: string) {
+    const storage = await this.storage(record);
+    const result = await storage.runtime.git.checkout.inspectPushTarget({
+      checkout: storage.root.path,
+      remote,
+    });
+    if (!result.success) throw new Error(result.error.message);
+    return result.data;
+  }
+  async pushTargets(record: Coordinator) {
+    const storage = await this.storage(record);
+    const remotes = (
+      await storage.runtime.git.repository.model
+        .state({ repository: storage.root.path }, 'remotes')
+        .snapshot()
+    ).data.remotes;
+    const targets = [];
+    const unavailable = [];
+    for (const { name } of remotes) {
+      try {
+        targets.push(await this.pushTarget(record, name));
+      } catch (error) {
+        unavailable.push({ remote: name, message: String(error) });
+      }
+    }
+    return { targets, unavailable };
+  }
+  async preparePush(record: Coordinator, expectedRevision: string) {
+    const storage = await this.storage(record);
+    const saved = record.documentPushTarget;
+    if (!saved)
+      throw new Error('Configure a personal fork for management documents before pushing.');
+    if (storage.revision.toLowerCase() !== expectedRevision.toLowerCase())
+      throw new Error('The management branch changed. Refresh documents before pushing.');
+    const target = await this.pushTarget(record, saved.remote);
+    if (target.fingerprint !== saved.fingerprint)
+      throw new Error(
+        'The configured document destination changed. Choose and save the remote again before pushing.'
+      );
+    const ref = localBranchRefSchema.parse(`refs/heads/${storage.branch}`);
+    return {
+      workspaceId: storage.workspaceId,
+      remote: saved.remote,
+      expectedRemoteFingerprint: saved.fingerprint,
+      sourceRef: ref,
+      targetRef: ref,
+      oid: storage.revision,
+    };
+  }
   async commit(record: Coordinator, input: DocumentCommit): Promise<{ hash: string }> {
     const selected = documentCommitSchema.parse(input);
     const storage = await this.storage(record);

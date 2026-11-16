@@ -210,6 +210,18 @@ export class CheckoutResource {
     return result;
   }
 
+  async inspectPushTarget(remote: string) {
+    return this.execute(() => this.commands.inspectPushTarget(remote));
+  }
+  async pushBranch(input: Parameters<GitCheckout['pushBranch']>[0], context: GitOperationContext) {
+    const result = await this.execute(() => this.commands.pushBranch(input, context));
+    if (result.success) {
+      await this.refresh('head');
+      this.repository.invalidate('refs');
+    }
+    return result;
+  }
+
   async push(options: Parameters<GitCheckout['push']>[0], context: GitOperationContext) {
     const result = await this.execute(() => this.commands.push(options, context));
     if (result.success) {

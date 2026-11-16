@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { err, ok, type Result } from '@emdash/shared';
+import { redactSecrets } from '@emdash/shared/logger';
 import { blobSourceFromBytes, type BlobSource } from '@emdash/wire/rpc';
 import { parsePortableRelativePath, type PortableRelativePath } from '#primitives/path/api';
 import {
@@ -26,6 +28,8 @@ import {
   type PullError,
   type PushError,
   type PushOptions,
+  type PushTarget,
+  type PushBranchJobInput,
 } from '#runtimes/git/api';
 import type { CheckoutIdentity } from '#runtimes/git/node/allocation/identity';
 import { blame as readBlame } from '#runtimes/git/node/checkout/ops/blame';
@@ -260,11 +264,94 @@ export class GitCheckout {
 
   // -- Sync --------------------------------------------------------------------
 
+  async inspectPushTarget(remote: string): Promise<Result<PushTarget, GitCommandError>> {
+    try {
+      const { stdout } = await this.exec.exec([
+        'remote',
+        'get-url',
+        '--push',
+        '--all',
+        '--',
+        remote,
+      ]);
+      const urls = stdout.trim().split('\n').filter(Boolean);
+      if (urls.length !== 1)
+        return gitErr.commandFailed('Choose a remote with exactly one push destination.');
+      const url = urls[0]!;
+      let destination = url;
+      try {
+        const parsed = new URL(url);
+        parsed.username = '';
+        parsed.password = '';
+        parsed.search = '';
+        parsed.hash = '';
+        destination = parsed.href;
+      } catch {
+        /* Git also accepts native paths and scp-style remote addresses. */
+      }
+      return ok({
+        remote,
+        destination: redactSecrets(destination),
+        fingerprint: createHash('sha256').update(url).digest('hex'),
+      });
+    } catch (error) {
+      return checkoutFailures.command(error);
+    }
+  }
+
+  async pushBranch(
+    input: Omit<PushBranchJobInput, 'checkout' | 'credentials'>,
+    context: GitOperationContext = {}
+  ): Promise<Result<{ output: string; oid: string; targetRef: string }, PushError>> {
+    try {
+      const target = await this.inspectPushTarget(input.remote);
+      if (!target.success) return target;
+      if (target.data.fingerprint !== input.expectedRemoteFingerprint)
+        return gitErr.staleRefUpdate(
+          'The saved push destination changed. Configure the remote again before pushing.'
+        );
+      const head = await this.getHead();
+      if (
+        head.kind !== 'branch' ||
+        head.ref !== input.sourceRef ||
+        head.oid.toLowerCase() !== input.oid.toLowerCase()
+      )
+        return gitErr.staleRefUpdate(
+          'The source branch or commit changed. Refresh before pushing.'
+        );
+      const { stdout, stderr } = await execGitWithProgress(
+        this.exec,
+        [
+          'push',
+          '--progress',
+          '--no-follow-tags',
+          '--',
+          input.remote,
+          `${input.oid}:${input.targetRef}`,
+        ],
+        context
+      );
+      return ok({
+        output: redactSecrets((stdout || stderr).trim()),
+        oid: input.oid,
+        targetRef: input.targetRef,
+      });
+    } catch (error) {
+      if (context.signal?.aborted) throw error;
+      return pushFailed(error);
+    }
+  }
+
   async push(
     options: PushOptions = {},
     context: GitOperationContext = {}
   ): Promise<Result<{ output: string }, PushError>> {
     try {
+      const head = await this.getHead();
+      if (head.kind === 'branch' && head.ref.startsWith('refs/heads/emdash/manage/'))
+        return gitErr.commandFailed(
+          'Use an explicit management document push target for this branch.'
+        );
       const args = ['push', '--progress'];
       if (options.force) args.push('--force-with-lease');
       if (options.remote) args.push(options.remote);
@@ -283,6 +370,10 @@ export class GitCheckout {
     try {
       const { stdout } = await this.exec.exec(['symbolic-ref', 'HEAD']);
       const branchRef = localBranchRefSchema.parse(stdout.trim());
+      if (branchRef.startsWith('refs/heads/emdash/manage/'))
+        return gitErr.commandFailed(
+          'Use an explicit management document push target for this branch.'
+        );
       const { stdout: pushStdout, stderr } = await execGitWithProgress(
         this.exec,
         ['push', '--progress', '--set-upstream', remote, `${branchRef}:${branchRef}`],

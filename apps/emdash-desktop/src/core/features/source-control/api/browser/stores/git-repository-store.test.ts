@@ -359,6 +359,12 @@ function createSourceControlWire() {
       getCommit: vi.fn(),
       getCommitFiles: vi.fn(),
       blame: vi.fn(),
+      inspectPushTarget: vi.fn(),
+      pushBranch: {
+        run: vi.fn(async () => {
+          throw new Error('Unexpected explicit branch push in generic Git store fixture');
+        }),
+      },
       push: { run: vi.fn() },
       publish: { run: vi.fn() },
       pull: { run: vi.fn() },

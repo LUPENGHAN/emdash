@@ -2,6 +2,8 @@ import { defineContract, eventStream, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
 import {
   documentCommitSchema,
+  documentPushOptionsSchema,
+  documentPushPlanSchema,
   documentPathSchema,
   documentRevisionSchema,
   documentWorkspaceSchema,
@@ -18,6 +20,29 @@ import {
 
 export const coordinationDomain = 'coordination' as const;
 export const coordinationContract = defineContract({
+  documentPushOptions: procedure({
+    input: z.object({ id: z.string() }),
+    output: documentPushOptionsSchema,
+  }),
+  configureDocumentPush: procedure({
+    input: z.object({
+      id: z.string(),
+      remote: z.string().min(1).nullable(),
+      expectedFingerprint: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional(),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  prepareDocumentPush: procedure({
+    input: z.object({
+      id: z.string(),
+      expectedRevision: documentCommitSchema.shape.expectedRevision,
+      expectedFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    }),
+    output: documentPushPlanSchema,
+  }),
   commitDocuments: procedure({
     input: documentCommitSchema.extend({ id: z.string() }),
     output: z.object({ hash: z.string() }),

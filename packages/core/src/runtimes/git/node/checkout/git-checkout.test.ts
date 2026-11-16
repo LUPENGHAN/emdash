@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import type { PortableRelativePath } from '#primitives/path/api';
-import type { CheckoutStatusState } from '#runtimes/git/api';
+import { localBranchRefSchema, type CheckoutStatusState } from '#runtimes/git/api';
 import type { CheckoutIdentity } from '#runtimes/git/node/allocation/identity';
 import { gitPath } from '#runtimes/git/node/testing/paths';
 import { createBoundExec } from '#services/exec/api';
@@ -1172,4 +1172,181 @@ describe('selected file commits', () => {
       await cleanup();
     }
   });
+});
+
+describe('explicit branch push targets', () => {
+  it('pushes only the pinned branch and commit without automatically following tags', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    const git = async (...args: string[]) =>
+      (await execFileAsync('git', args, { cwd: repo })).stdout.trim();
+    const fork = path.join(repo, 'fork.git');
+    try {
+      await git('init', '--bare', fork);
+      await git('remote', 'add', 'personal', fork);
+      await git('config', 'push.followTags', 'true');
+      await git('tag', '-a', 'keep-local-tag', '-m', 'Do not push this tag');
+      const oid = await git('rev-parse', 'HEAD');
+      const target = await checkout.inspectPushTarget('personal');
+      if (!target.success) throw new Error('Target inspection failed');
+      const ref = localBranchRefSchema.parse('refs/heads/emdash/manage/test');
+      const input = {
+        remote: 'personal',
+        expectedRemoteFingerprint: target.data.fingerprint,
+        sourceRef: localBranchRefSchema.parse('refs/heads/main'),
+        targetRef: ref,
+        oid,
+      };
+      await expect(checkout.pushBranch(input)).resolves.toMatchObject({
+        success: true,
+        data: { oid, targetRef: ref },
+      });
+      expect(
+        (
+          await execFileAsync('git', ['--git-dir', fork, 'for-each-ref', '--format=%(refname)'])
+        ).stdout.trim()
+      ).toBe(ref);
+      expect(
+        (await execFileAsync('git', ['--git-dir', fork, 'rev-parse', ref])).stdout.trim()
+      ).toBe(oid);
+      await expect(checkout.pushBranch(input)).resolves.toMatchObject({ success: true });
+    } finally {
+      await cleanup();
+    }
+  });
+  it('rejects retargeted remotes, multiple push destinations and stale local commits before publishing', async () => {
+    const { repo, checkout, cleanup } = await makeCheckout();
+    const git = async (...args: string[]) =>
+      (await execFileAsync('git', args, { cwd: repo })).stdout.trim();
+    const first = path.join(repo, 'first.git');
+    const second = path.join(repo, 'second.git');
+    try {
+      await git('init', '--bare', first);
+      await git('init', '--bare', second);
+      await git('remote', 'add', 'personal', first);
+      const target = await checkout.inspectPushTarget('personal');
+      if (!target.success) throw new Error('Target inspection failed');
+      const input = {
+        remote: 'personal',
+        expectedRemoteFingerprint: target.data.fingerprint,
+        sourceRef: localBranchRefSchema.parse('refs/heads/main'),
+        targetRef: localBranchRefSchema.parse('refs/heads/emdash/manage/test'),
+        oid: await git('rev-parse', 'HEAD'),
+      };
+      await git('remote', 'set-url', 'personal', second);
+      await expect(checkout.pushBranch(input)).resolves.toMatchObject({
+        success: false,
+        error: { code: 'stale_ref_update' },
+      });
+      const changed = await checkout.inspectPushTarget('personal');
+      if (!changed.success) throw new Error('Target inspection failed');
+      await expect(
+        checkout.pushBranch({
+          ...input,
+          expectedRemoteFingerprint: changed.data.fingerprint,
+          oid: 'a'.repeat(40),
+        })
+      ).resolves.toMatchObject({ success: false, error: { code: 'stale_ref_update' } });
+      await git('config', '--add', 'remote.personal.pushurl', first);
+      await git('config', '--add', 'remote.personal.pushurl', second);
+      await expect(checkout.inspectPushTarget('personal')).resolves.toMatchObject({
+        success: false,
+      });
+      await expect(checkout.pushBranch(input)).resolves.toMatchObject({ success: false });
+      for (const remote of [first, second])
+        expect(
+          (await execFileAsync('git', ['--git-dir', remote, 'for-each-ref'])).stdout.trim()
+        ).toBe('');
+    } finally {
+      await cleanup();
+    }
+  });
+  it('redacts credentials and query parameters from displayed push targets', async () => {
+    const { checkout, repo, cleanup } = await makeCheckout();
+    try {
+      await execFileAsync(
+        'git',
+        [
+          'remote',
+          'add',
+          'private',
+          'https://user:example-password@example.invalid/repo.git?token=example-token',
+        ],
+        { cwd: repo }
+      );
+      const target = await checkout.inspectPushTarget('private');
+      expect(target).toMatchObject({
+        success: true,
+        data: {
+          destination: 'https://example.invalid/repo.git',
+          fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+      });
+      expect(JSON.stringify(target)).not.toContain('example-password');
+      expect(JSON.stringify(target)).not.toContain('example-token');
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+it('rejects divergent remote history without overwriting its management ref', async () => {
+  const { repo, checkout, cleanup } = await makeCheckout();
+  const git = async (...args: string[]) =>
+    (await execFileAsync('git', args, { cwd: repo })).stdout.trim();
+  const fork = path.join(repo, 'fork.git');
+  try {
+    await git('init', '--bare', fork);
+    await git('remote', 'add', 'personal', fork);
+    const oid = await git('rev-parse', 'HEAD');
+    const target = await checkout.inspectPushTarget('personal');
+    if (!target.success) throw new Error('Target inspection failed');
+    const ref = localBranchRefSchema.parse('refs/heads/emdash/manage/test');
+    await git('switch', '--orphan', 'divergent');
+    await writeFile(path.join(repo, 'divergent.md'), 'independent history');
+    await git('add', 'divergent.md');
+    await git('commit', '-m', 'Remote independent history');
+    const remoteOid = await git('rev-parse', 'HEAD');
+    await git('push', 'personal', `HEAD:${ref}`);
+    await git('switch', 'main');
+    await expect(
+      checkout.pushBranch({
+        remote: 'personal',
+        expectedRemoteFingerprint: target.data.fingerprint,
+        sourceRef: localBranchRefSchema.parse('refs/heads/main'),
+        targetRef: ref,
+        oid,
+      })
+    ).resolves.toMatchObject({ success: false, error: { type: 'rejected' } });
+    expect((await execFileAsync('git', ['--git-dir', fork, 'rev-parse', ref])).stdout.trim()).toBe(
+      remoteOid
+    );
+    expect(await git('rev-parse', 'HEAD')).toBe(oid);
+  } finally {
+    await cleanup();
+  }
+});
+
+it('refuses generic push and publish for management branches before touching any remote', async () => {
+  const { repo, checkout, cleanup } = await makeCheckout();
+  const git = async (...args: string[]) =>
+    (await execFileAsync('git', args, { cwd: repo })).stdout.trim();
+  const upstream = path.join(repo, 'upstream.git');
+  try {
+    await git('init', '--bare', upstream);
+    await git('remote', 'add', 'origin', upstream);
+    await git('switch', '-c', 'emdash/manage/test');
+    await expect(checkout.push({ remote: 'origin' })).resolves.toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('explicit management') },
+    });
+    await expect(checkout.publish('origin')).resolves.toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('explicit management') },
+    });
+    expect(
+      (await execFileAsync('git', ['--git-dir', upstream, 'for-each-ref'])).stdout.trim()
+    ).toBe('');
+  } finally {
+    await cleanup();
+  }
 });

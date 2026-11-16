@@ -19,6 +19,7 @@ import {
   type PullJobInput,
   type PublishJobInput,
   type PushJobInput,
+  type PushBranchJobInput,
 } from '#runtimes/git/api';
 import type { GitAllocationGraph } from '#runtimes/git/node/allocation/allocation-graph';
 import { expectedGitCommandError } from '#runtimes/git/node/api/errors';
@@ -124,6 +125,19 @@ export class GitCheckoutRuntime {
 
   blame(input: CheckoutSelector & { path: PortableRelativePath; ref?: string }) {
     return this.run(input, (checkout) => checkout.blame(input.path, input.ref));
+  }
+
+  inspectPushTarget(input: CheckoutSelector & { remote: string }) {
+    return this.run(input, (checkout) => checkout.inspectPushTarget(input.remote));
+  }
+  pushBranch(input: PushBranchJobInput, context: LiveJobContext<GitTransferProgress>) {
+    return this.run(input, (checkout) =>
+      checkout.pushBranch(input, {
+        signal: context.signal,
+        onProgress: context.progress,
+        env: credentialOperationEnv(input.credentials),
+      })
+    );
   }
 
   push(input: PushJobInput, context: LiveJobContext<GitTransferProgress>) {

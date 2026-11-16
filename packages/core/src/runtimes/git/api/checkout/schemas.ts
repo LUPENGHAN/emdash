@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { portableRelativePathSchema } from '#primitives/path/api';
-import { gitBranchRefSchema } from '#runtimes/git/api/repository/states/refs';
+import { gitBranchRefSchema, localBranchRefSchema } from '#runtimes/git/api/repository/states/refs';
 import { gitOperationCredentialsSchema } from '#runtimes/git/api/schemas';
 import { checkoutSelectorSchema } from '#runtimes/git/api/selectors';
 
@@ -207,3 +207,19 @@ export const pullJobInputSchema = checkoutSelectorSchema.extend({
   credentials: gitOperationCredentialsSchema.optional(),
 });
 export type PullJobInput = z.infer<typeof pullJobInputSchema>;
+
+export const pushTargetSchema = z.object({
+  remote: z.string().min(1),
+  destination: z.string(),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type PushTarget = z.infer<typeof pushTargetSchema>;
+export const pushBranchJobInputSchema = checkoutSelectorSchema.extend({
+  remote: z.string().min(1),
+  expectedRemoteFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  sourceRef: localBranchRefSchema,
+  targetRef: localBranchRefSchema,
+  oid: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/),
+  credentials: gitOperationCredentialsSchema.optional(),
+});
+export type PushBranchJobInput = z.infer<typeof pushBranchJobInputSchema>;

@@ -126,6 +126,19 @@ export function createSourceControlWireController(
         withCheckoutRuntime(options, input, (git, mapped) =>
           git.checkout.blame(mapped, callOptions(meta))
         ),
+      inspectPushTarget: (input, meta) =>
+        withCheckoutRuntime(options, input, (git, mapped) =>
+          git.checkout.inspectPushTarget(mapped, callOptions(meta))
+        ),
+      pushBranch: job<typeof sourceControlContract.checkout.pushBranch>((input, context) =>
+        runCheckoutJob(
+          options,
+          gitContract.checkout.pushBranch,
+          input,
+          context,
+          (git) => git.checkout.pushBranch
+        )
+      ),
       push: job<typeof sourceControlContract.checkout.push>((input, context) =>
         runCheckoutJob(
           options,

@@ -20,10 +20,13 @@ import { gitContract } from '@emdash/core/runtimes/git/api';
 import { createGitController, GitRuntime } from '@emdash/core/runtimes/git/node';
 import type { IWatchService } from '@emdash/core/services/fs-watch/api';
 import { ok } from '@emdash/shared';
+import { createLiveJobReplicaCache } from '@emdash/wire/live';
 import { client, connect, memoryTransportPair, serve } from '@emdash/wire/rpc';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Coordinator } from '@core/features/coordination/api/types';
 import { CoordinatorDocuments } from '@core/features/coordination/node/coordinator-documents';
+import { sourceControlContract } from '@core/features/source-control/api/contract';
+import { createSourceControlWireController } from '@core/features/source-control/node/wire-controller';
 import { hostPathFromNative } from '@core/primitives/desktop-runtime/api';
 
 const exec = promisify(execFile);
@@ -77,7 +80,7 @@ async function setup() {
     git: client(gitContract, connect(gp.left)),
   };
   const record: Coordinator = {
-    version: '6',
+    version: '7',
     id: 'project:project',
     kind: 'project',
     name: 'Main agent',
@@ -105,7 +108,7 @@ async function setup() {
     root: hostFileRef(LOCAL_HOST_REF, hostPathFromNative(repo)),
     runtime,
   }));
-  return { service, record, dir, repo, git, code, first };
+  return { service, record, dir, repo, git, code, first, runtime };
 }
 
 describe('management documents over host Wire runtimes', () => {
@@ -241,4 +244,72 @@ it('refuses unsafe document selections before making a commit', async () => {
   ).rejects.toThrow();
   expect(await git('rev-parse', 'HEAD')).toBe(before.revision);
   expect(await git('diff', '--cached', '--name-only')).toBe('');
+});
+
+it('publishes a configured management branch through the desktop job and releases its credential lease', async () => {
+  const { service, record, dir, repo, git, code, runtime } = await setup();
+  const fork = join(dir, 'personal fork.git');
+  await git('init', '--bare', fork);
+  await git('remote', 'add', 'personal', fork);
+  const workspace = await service.describe(record);
+  await expect(service.preparePush(record, workspace.revision)).rejects.toThrow(
+    'Configure a personal fork'
+  );
+  record.documentPushTarget = await service.pushTarget(record, 'personal');
+  expect((await service.pushTargets(record)).targets).toEqual([record.documentPushTarget]);
+  const plan = await service.preparePush(record, workspace.revision);
+  const release = vi.fn();
+  const mintOperationCredentials = vi.fn(async () => ({
+    credentials: { port: 9, nonce: 'isolated-operation', host: 'example.invalid' },
+    release,
+  }));
+  const identity = {
+    workspaceId: workspace.workspaceId,
+    projectId: record.projectId,
+    host: LOCAL_HOST_REF,
+    path: repo,
+  };
+  const controller = createSourceControlWireController({
+    runtimes: { client: async () => ok(runtime as never) },
+    workspaceIdentity: { resolve: async () => identity, resolveProject: async () => identity },
+    projects: {
+      requireAttached: () => {
+        throw new Error('Checkout push must use its workspace identity');
+      },
+    },
+    mintOperationCredentials,
+  });
+  const pair = memoryTransportPair();
+  const stop = serve(pair.right, controller);
+  const desktop = client(sourceControlContract, connect(pair.left));
+  const jobs = createLiveJobReplicaCache(
+    sourceControlContract.checkout.pushBranch,
+    desktop.checkout.pushBranch
+  );
+  const lease = await jobs.start(plan);
+  try {
+    const running = await lease.ready();
+    await expect(running.result).resolves.toMatchObject({
+      oid: workspace.revision,
+      targetRef: `refs/heads/${workspace.branch}`,
+    });
+    expect(mintOperationCredentials).toHaveBeenCalledWith({
+      projectId: record.projectId,
+      host: LOCAL_HOST_REF,
+    });
+    expect(release).toHaveBeenCalledOnce();
+    expect(
+      (await exec('git', ['--git-dir', fork, 'for-each-ref', '--format=%(refname)'])).stdout.trim()
+    ).toBe(`refs/heads/${workspace.branch}`);
+    expect(await git('rev-parse', 'main')).toBe(code);
+  } finally {
+    await lease.release();
+    await jobs.dispose();
+    stop();
+    await controller.dispose?.();
+  }
+  await git('remote', 'set-url', 'personal', join(dir, 'retargeted.git'));
+  await expect(service.preparePush(record, workspace.revision)).rejects.toThrow(
+    'destination changed'
+  );
 });

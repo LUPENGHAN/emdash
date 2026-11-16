@@ -27,7 +27,7 @@ import type { CoordinatorDocuments } from './coordinator-documents';
 
 type Dependencies = {
   documents?: Pick<CoordinatorDocuments, 'describe' | 'create' | 'read'> &
-    Partial<Pick<CoordinatorDocuments, 'commit'>>;
+    Partial<Pick<CoordinatorDocuments, 'commit' | 'pushTargets' | 'pushTarget' | 'preparePush'>>;
   store: {
     getOrThrow(id: string): Promise<Coordinator | null>;
     setOrThrow(id: string, value: Coordinator): Promise<void>;
@@ -88,7 +88,7 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '6',
+        version: '7',
         id,
         kind: 'project',
         name: 'Main agent',
@@ -144,7 +144,7 @@ export class CoordinatorService {
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '6',
+        version: '7',
         id,
         name,
         kind: 'cross-project',
@@ -167,7 +167,11 @@ export class CoordinatorService {
   }
   async instructionsForTask(taskId: string): Promise<string | undefined> {
     const records = await this.list();
-    if (records.some((record) => record.taskId === taskId)) return instruction;
+    const main = records.find((record) => record.taskId === taskId);
+    if (main)
+      return `${instruction}
+Management document push target: ${JSON.stringify(main.documentPushTarget ?? null)}.
+Keep management documents local until a personal fork is explicitly configured. A saved target does not trigger a push. When a push is requested, check get_task_status for this main task to obtain its current documentPushTarget; never substitute a default code remote or push code baseline refs.`;
     const assignment = records.find((record) => record.tasks[taskId])?.tasks[taskId];
     if (assignment)
       return `You are executing delegated Emdash task ${taskId}.
@@ -269,6 +273,45 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   }
   async createDocument(id: string, path: string) {
     return this.documentService().create(await this.documentRecord(id), path);
+  }
+  async documentPushOptions(id: string) {
+    const documents = this.documentService();
+    if (!documents.pushTargets)
+      throw new Error('Management document push configuration is unavailable.');
+    return documents.pushTargets(await this.documentRecord(id));
+  }
+  async configureDocumentPush(id: string, remote: string | null, expectedFingerprint?: string) {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      await this.deps.assertProjectAvailable(record.projectId);
+      if (remote === null) record.documentPushTarget = undefined;
+      else {
+        const documents = this.documentService();
+        if (!documents.pushTarget)
+          throw new Error('Management document push configuration is unavailable.');
+        const target = await documents.pushTarget(record, remote);
+        if (target.fingerprint !== expectedFingerprint)
+          throw new Error(
+            'The document destination changed. Refresh the remote list before saving.'
+          );
+        record.documentPushTarget = target;
+      }
+      await this.save(record);
+      return record;
+    });
+  }
+  async prepareDocumentPush(id: string, expectedRevision: string, expectedFingerprint: string) {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      await this.deps.assertProjectAvailable(record.projectId);
+      const documents = this.documentService();
+      if (!documents.preparePush) throw new Error('Management document push is unavailable.');
+      if (record.documentPushTarget?.fingerprint !== expectedFingerprint)
+        throw new Error(
+          'The document push target changed. Review the saved remote before pushing.'
+        );
+      return documents.preparePush(record, expectedRevision);
+    });
   }
   async commitDocuments(id: string, input: DocumentCommit) {
     return this.locks.runExclusive(id, async () => {
@@ -395,6 +438,8 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       mainTaskId: record.taskId,
       mainConversationId: record.conversationId,
       assignment: record.tasks[taskId] ?? null,
+      ...(record.taskId === taskId &&
+        record.documentPushTarget && { documentPushTarget: record.documentPushTarget }),
     };
   }
   private async accessRecords(caller: AgentCaller, targetTaskId?: string): Promise<Coordinator[]> {

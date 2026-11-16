@@ -82,12 +82,16 @@ export type {
   PullJobInput,
   PublishJobInput,
   PushJobInput,
+  PushBranchJobInput,
+  PushTarget,
   PushOptions,
 } from '#runtimes/git/api/checkout/schemas';
 export {
   denormalizeDiffTarget,
   diffModeSchema,
   gitFilePathSchema,
+  pushTargetSchema,
+  pushBranchJobInputSchema,
   gitFileSourceSchema,
   gitObjectRefSchema,
   normalizeDiffTarget,

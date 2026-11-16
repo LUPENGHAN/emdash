@@ -98,6 +98,23 @@ describe('GitCheckoutStore', () => {
     vi.clearAllMocks();
   });
 
+  it('directs management branches to the configured documents push instead of generic network jobs', async () => {
+    headState.set(head('emdash/manage/test'));
+    const store = new GitCheckoutStore('project-1', 'workspace-1', '/repo');
+    store.start();
+    await waitFor(() => store.branchName === 'emdash/manage/test');
+    await expect(store.push()).resolves.toMatchObject({
+      success: false,
+      error: { type: 'git_error' },
+    });
+    await expect(store.publishCurrentBranch()).resolves.toMatchObject({
+      success: false,
+      error: { type: 'git_error' },
+    });
+    expect(mocks.pushRun).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
   it('binds status and head through remote and refreshes changed files on status updates', async () => {
     const store = new GitCheckoutStore('project-1', 'workspace-1', '/repo');
     store.start();
@@ -548,6 +565,9 @@ function createSourceControlWire(statusQuery?: Query<CheckoutStatusState>) {
         async revertAll() {
           return ok<void>();
         },
+        async commitFiles() {
+          return ok({ hash: 'abc123' });
+        },
         async commit() {
           return ok({ hash: 'abc123' });
         },
@@ -575,6 +595,12 @@ function createSourceControlWire(statusQuery?: Query<CheckoutStatusState>) {
       getCommit: vi.fn(),
       getCommitFiles: vi.fn(),
       blame: vi.fn(),
+      inspectPushTarget: vi.fn(),
+      pushBranch: {
+        run: vi.fn(async () => {
+          throw new Error('Unexpected explicit branch push in generic Git store fixture');
+        }),
+      },
       push: { run: mocks.pushRun },
       publish: { run: mocks.pushRun },
       pull: { run: vi.fn() },
