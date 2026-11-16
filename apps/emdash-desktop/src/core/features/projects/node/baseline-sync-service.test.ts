@@ -405,3 +405,15 @@ it('preserves command whitespace and newlines as opaque shell input', async () =
     'must not be empty'
   );
 });
+
+it('notifies observers after an interrupted attempt stops being active', async () => {
+  const t = setup();
+  const service = t.service();
+  const observed: Promise<string>[] = [];
+  t.deps.changed = (id) => {
+    observed.push(service.get(id).then((state) => state.status));
+  };
+  vi.mocked(t.deps.synchronize).mockRejectedValue(new Error('Host disconnected'));
+  await expect(service.synchronize('sdk', 'manual')).rejects.toThrow('Host disconnected');
+  expect((await Promise.all(observed)).at(-1)).toBe('interrupted');
+});

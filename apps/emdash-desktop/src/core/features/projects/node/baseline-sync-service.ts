@@ -157,7 +157,10 @@ export class ProjectBaselineSyncService {
     try {
       return await work;
     } finally {
-      if (this.active.get(projectId) === work) this.active.delete(projectId);
+      if (this.active.get(projectId) === work) {
+        this.active.delete(projectId);
+        this.deps.changed?.(projectId);
+      }
     }
   }
   private cleanVerification(value: BaselineVerification) {
