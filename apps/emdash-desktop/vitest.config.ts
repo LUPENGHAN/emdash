@@ -139,6 +139,8 @@ export default defineConfig({
               },
               test: {
                 name: 'browser',
+                // Keep viewport and floating-layout interaction suites from competing for execution.
+                fileParallelism: false,
                 browser: {
                   enabled: true,
                   provider: playwright(),
