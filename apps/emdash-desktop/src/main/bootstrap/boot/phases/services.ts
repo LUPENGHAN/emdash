@@ -337,6 +337,7 @@ export type ServicesBundle = {
     conversationId: string;
     projectId: string;
     workspacePath: string;
+    synchronizeSkills?: boolean;
   }) => Promise<ReturnType<typeof acpMcpServers>>;
   readonly remoteAccess: RemoteAccessService;
   readonly remoteClient: RemoteClientService;
@@ -991,11 +992,14 @@ export async function bootServices(
     conversationId: string;
     projectId: string;
     workspacePath: string;
+    synchronizeSkills?: boolean;
   }) => {
-    await agentLibrary.prepareWorkspace({
-      projectId: input.projectId,
-      path: input.workspacePath,
-    });
+    if (input.synchronizeSkills !== false) {
+      await agentLibrary.prepareWorkspace({
+        projectId: input.projectId,
+        path: input.workspacePath,
+      });
+    }
     return acpMcpServers(await launchMcpServers(input.conversationId, input.projectId));
   };
   // When this Emdash began naming Cursor terminal sessions; older terminals resume the old way.

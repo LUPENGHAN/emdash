@@ -75,6 +75,7 @@ export type CreateConversationsWireControllerOptions = Readonly<{
     conversationId: string;
     projectId: string;
     workspacePath: string;
+    synchronizeSkills?: boolean;
   }) => Promise<NonNullable<ConversationsAcpStartInput['extraMcpServers']>>;
   logger: Logger;
   projects: Pick<ProjectAttachmentManager, 'requireAttached'>;
@@ -111,6 +112,18 @@ export function createConversationsWireController(
         options.db,
         undefined,
         options.sessionLaunchContexts
+      ));
+  const prepareLaunch = options.prepareAgentLaunch;
+  const resolveAttachmentTarget =
+    options.resolveTarget ??
+    ((conversationId) =>
+      resolveConversationRuntimeTarget(
+        conversationId,
+        options.workspaceIdentity,
+        options.db,
+        options.getProviderEnv,
+        options.sessionLaunchContexts,
+        prepareLaunch && ((input) => prepareLaunch({ ...input, synchronizeSkills: false }))
       ));
   const hooks = options.hooks ?? createDefaultRuntimeHooks(options);
   const configurationChanges = createKeyedLanes();
@@ -364,7 +377,7 @@ export function createConversationsWireController(
           }
         ),
       attach: async ({ conversationId }, meta) => {
-        const runtimeTarget = await target(conversationId);
+        const runtimeTarget = await resolveAttachmentTarget(conversationId);
         const input = runtimeTarget.acpInput;
         if (!input) throw missingAcpInputError(runtimeTarget);
         return withConversationRuntime(options, Promise.resolve(runtimeTarget), (client) =>

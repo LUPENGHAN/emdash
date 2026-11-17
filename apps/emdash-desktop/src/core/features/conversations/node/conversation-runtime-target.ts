@@ -12,6 +12,8 @@ export type PrepareAgentLaunch = (input: {
   conversationId: string;
   projectId: string;
   workspacePath: string;
+  /** Attaching live state retains MCP configuration but does not launch an Agent. */
+  synchronizeSkills?: boolean;
 }) => Promise<NonNullable<ConversationsAcpStartInput['extraMcpServers']>>;
 
 export type ConversationRuntimeTarget = Readonly<{

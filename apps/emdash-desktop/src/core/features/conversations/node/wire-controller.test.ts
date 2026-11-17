@@ -64,16 +64,23 @@ const target = {
 type TestRuntimeTarget = typeof target;
 
 describe('createConversationsWireController', () => {
-  it('observes ACP states without preparing skills or model routes, then prepares an explicit attachment', async () => {
-    const prepareAgentLaunch = vi.fn(async () => []);
+  it('observes ACP states without preparation, retains attachment MCP and synchronizes skills at session start', async () => {
+    const servers = [{ name: 'fixture', url: 'http://127.0.0.1:1' }];
+    const prepareAgentLaunch = vi.fn<
+      NonNullable<CreateConversationsWireControllerOptions['prepareAgentLaunch']>
+    >(async () => servers);
     const getProviderEnv = vi.fn(async () => ({ FIXTURE_MODEL: 'selected' }));
     const resolve = vi
       .spyOn(runtimeTargets, 'resolveConversationRuntimeTarget')
       .mockImplementation(
         async (conversationId, _identity, _db, providerEnv, _contexts, prepare) => {
           await providerEnv?.('claude');
-          await prepare?.({ conversationId, projectId: target.projectId, workspacePath: '/repo' });
-          return target;
+          const extraMcpServers = await prepare?.({
+            conversationId,
+            projectId: target.projectId,
+            workspacePath: '/repo',
+          });
+          return { ...target, acpInput: { ...target.acpInput, extraMcpServers } };
         }
       );
     const source: LiveSource = {
@@ -81,8 +88,10 @@ describe('createConversationsWireController', () => {
       subscribe: () => () => {},
     };
     const state = vi.fn(() => ({ asLiveSource: () => source }));
+    const attach = vi.fn(async () => ok({ sessionId: null }));
+    const startSession = vi.fn(async () => ok({ sessionId: 'started' }));
     const controller = setupController({
-      client: { acp: { session: { state }, attach: async () => ok({ sessionId: null }) } },
+      client: { acp: { session: { state }, attach, startSession } },
       useDefaultTargetResolution: true,
       preparation: { prepareAgentLaunch, getProviderEnv },
     });
@@ -99,6 +108,23 @@ describe('createConversationsWireController', () => {
       ).toEqual(ok({ sessionId: null }));
       expect(prepareAgentLaunch).toHaveBeenCalledOnce();
       expect(getProviderEnv).toHaveBeenCalledOnce();
+      expect(prepareAgentLaunch).toHaveBeenLastCalledWith(
+        expect.objectContaining({ synchronizeSkills: false })
+      );
+      expect(attach).toHaveBeenCalledWith(
+        expect.objectContaining({ extraMcpServers: servers }),
+        expect.anything()
+      );
+      await controller.call('acp.startSession', {
+        conversationId: target.conversationId,
+        mode: 'fresh',
+      });
+      expect(prepareAgentLaunch).toHaveBeenCalledTimes(2);
+      expect(prepareAgentLaunch.mock.calls[1]?.[0]).not.toHaveProperty('synchronizeSkills');
+      expect(startSession).toHaveBeenCalledWith(
+        expect.objectContaining({ extraMcpServers: servers }),
+        expect.anything()
+      );
     } finally {
       for (const lease of leases) await lease?.release();
       await controller.dispose?.();
