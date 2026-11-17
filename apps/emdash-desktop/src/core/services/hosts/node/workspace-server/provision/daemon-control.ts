@@ -43,7 +43,8 @@ export class RemoteWorkspaceServerDaemon {
       },
       {
         signal,
-        timeoutMs: 30_000,
+        // Startup includes the daemon's cold-worker readiness window.
+        timeoutMs: action === 'start' ? 60_000 : 30_000,
         maxStdoutBytes: 64 * 1_024,
         maxStderrBytes: 64 * 1_024,
       }

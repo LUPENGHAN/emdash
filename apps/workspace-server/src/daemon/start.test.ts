@@ -89,6 +89,62 @@ describe('startDaemon', () => {
       },
     });
   });
+
+  it('keeps one cold daemon startup alive beyond five seconds until its workers are ready', async () => {
+    const socketPath = await tempSocketPath();
+    const spawn = vi.fn<SpawnDaemon>(() => ({ pid: 1234, unref: vi.fn() }));
+    let elapsed = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => elapsed);
+    try {
+      const result = await startDaemon({
+        socketPath,
+        entrypoint: '/tmp/entry.mjs',
+        spawn,
+        sleep: async (ms) => {
+          elapsed += ms;
+        },
+        probe: async () =>
+          elapsed < 6_000
+            ? { success: false, error: { type: 'not-running', message: 'Workers are starting' } }
+            : { success: true, data: health },
+      });
+      expect(result).toMatchObject({ success: true, data: { status: 'started', pid: 1234 } });
+      expect(elapsed).toBe(6_000);
+      expect(spawn).toHaveBeenCalledOnce();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('still stops waiting at an explicitly shorter readiness deadline', async () => {
+    const socketPath = await tempSocketPath();
+    let elapsed = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => elapsed);
+    const spawn = vi.fn<SpawnDaemon>(() => ({ pid: 1234, unref: vi.fn() }));
+    try {
+      const result = await startDaemon({
+        socketPath,
+        entrypoint: '/tmp/entry.mjs',
+        timeoutMs: 100,
+        spawn,
+        sleep: async (ms) => {
+          elapsed += ms;
+        },
+        probe: async () => ({
+          success: false,
+          error: { type: 'not-running', message: 'Still starting' },
+        }),
+      });
+      expect(result).toEqual({
+        success: false,
+        error: { type: 'timeout', message: 'Still starting' },
+      });
+      expect(elapsed).toBeLessThanOrEqual(150);
+      expect(spawn).toHaveBeenCalledOnce();
+    } finally {
+      now.mockRestore();
+    }
+  });
 });
 
 async function tempSocketPath(): Promise<string> {

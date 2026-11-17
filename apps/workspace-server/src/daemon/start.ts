@@ -46,7 +46,8 @@ export async function startDaemon(
   options: StartDaemonOptions = {}
 ): Promise<Result<StartDaemonResult, StartDaemonError>> {
   const paths = daemonPaths(options.socketPath);
-  const timeoutMs = options.timeoutMs ?? 5_000;
+  // A cold Host starts several runtime workers before opening its socket.
+  const timeoutMs = options.timeoutMs ?? 30_000;
   const retryMs = options.retryMs ?? 50;
 
   try {
