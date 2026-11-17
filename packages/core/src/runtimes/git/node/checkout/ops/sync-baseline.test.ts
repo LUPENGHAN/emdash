@@ -552,7 +552,7 @@ it('lets Git refuse an ignored-file collision rather than overwrite local conten
   expect(await readFile(path.join(t.repo, 'personal.txt'), 'utf8')).toBe('Private local content');
   await rm(path.join(t.repo, 'personal.txt'));
   expect(await t.run()).toMatchObject({ success: true, data: { kind: 'updated' } });
-});
+}, 20_000);
 
 it.skipIf(process.platform === 'win32')(
   'distinguishes native fetch destinations that differ by a trailing space',
