@@ -270,12 +270,17 @@ export async function configurePrFixture(input: {
   projectId: string;
   apiBaseUrl: string;
   baseRemote?: string;
+  apiToken?: string;
+  systemGitCredentials?: boolean;
 }) {
   const connected = await (
     await getIntegrationsClient()
   ).connect({
     integrationId: 'gitlab',
-    credentials: { apiToken: 'fixture-only-token', instanceUrl: input.apiBaseUrl },
+    credentials: {
+      apiToken: input.apiToken ?? 'fixture-only-token',
+      instanceUrl: input.apiBaseUrl,
+    },
     displayName: 'Isolated forge fixture',
   });
   if (!connected.success) throw new Error(connected.error);
@@ -289,6 +294,7 @@ export async function configurePrFixture(input: {
           baseRemote: input.baseRemote ?? 'upstream',
           pushRemote: 'personal',
           defaultBranch: { remote: 'upstream', branch: 'main' },
+          ...(input.systemGitCredentials && { agentGitCredentials: 'system' as const }),
         },
       },
       integrationAccounts: {
@@ -297,6 +303,29 @@ export async function configurePrFixture(input: {
     },
   });
   if (!saved.success) throw new Error(JSON.stringify(saved.error));
+  return connected.accountId;
+}
+
+/** Distinct native Git and project-pinned API identities, with a different app default. */
+export async function configurePrAccountsFixture(input: { projectId: string; apiBaseUrl: string }) {
+  const integrations = await getIntegrationsClient();
+  const source = await integrations.connect({
+    integrationId: 'gitlab',
+    credentials: { apiToken: 'fixture-source-token', instanceUrl: input.apiBaseUrl },
+    displayName: 'Default account fixture',
+  });
+  if (!source.success) throw new Error(source.error);
+  const targetAccountId = await configurePrFixture({
+    ...input,
+    apiToken: 'fixture-target-token',
+    systemGitCredentials: true,
+  });
+  const selected = await integrations.setDefaultAccount({
+    integrationId: 'gitlab',
+    accountId: source.accountId,
+  });
+  if (!selected.success) throw new Error(selected.error);
+  return { defaultAccountId: source.accountId, targetAccountId };
 }
 
 export function readPrFixtureAssociation(input: { projectId: string; taskId: string }) {

@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 /** Loopback-only forge and smart HTTP Git fixture. No production service or account is used. */
-export async function startGitForgeFixture(directory, sourceRepository) {
+export async function startGitForgeFixture(
+  directory,
+  sourceRepository,
+  { separateAccounts = false } = {}
+) {
   const git = promisify(execFile);
   for (const owner of ['org', 'personal']) {
     const path = join(directory, owner, 'sdk.git');
@@ -54,8 +58,26 @@ export async function startGitForgeFixture(directory, sourceRepository) {
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url, origin);
-      requests.push({ method: request.method, path: url.pathname });
+      const sourceAuthorization =
+        'Basic ' + Buffer.from('fixture-pusher:fixture-source-token').toString('base64');
+      const token =
+        request.headers['private-token'] ?? request.headers.authorization?.replace(/^Bearer /, '');
+      const identity =
+        request.headers.authorization === sourceAuthorization
+          ? 'source-git'
+          : token === 'fixture-target-token'
+            ? 'target-api'
+            : token === 'fixture-source-token'
+              ? 'default-api'
+              : 'unrecognized';
+      requests.push({ method: request.method, path: url.pathname, identity });
       if (/^\/(org|personal)\/sdk\.git\//.test(url.pathname)) {
+        if (separateAccounts && identity !== 'source-git') {
+          request.resume();
+          response.writeHead(401, { 'WWW-Authenticate': 'Basic realm="isolated-fixture"' });
+          response.end('Fixture Git credential required');
+          return;
+        }
         const child = spawn('git', ['http-backend'], {
           windowsHide: true,
           env: {
@@ -112,9 +134,9 @@ export async function startGitForgeFixture(directory, sourceRepository) {
       const body = text ? JSON.parse(text) : {};
       if (url.pathname === '/api/v4/user')
         return json({
-          id: 7,
-          username: 'fixture',
-          name: 'Fixture account',
+          id: identity === 'target-api' ? 8 : 7,
+          username: identity === 'target-api' ? 'target-reviewer' : 'fixture',
+          name: identity === 'target-api' ? 'Target reviewer' : 'Fixture account',
           web_url: `${repositoryUrl('org')}/fixture`,
         });
       const project = /^\/api\/v4\/projects\/([^/]+)$/.exec(url.pathname);
@@ -140,6 +162,8 @@ export async function startGitForgeFixture(directory, sourceRepository) {
             .map(mergeRequest)
         );
       if (url.pathname === '/api/v4/projects/2/merge_requests' && request.method === 'POST') {
+        if (separateAccounts && identity !== 'target-api')
+          return json({ message: 'The target requires the pinned API account' }, 403);
         const branch = body.source_branch;
         if (prs.some((pr) => pr.branch === branch && pr.base === body.target_branch))
           return json({ message: 'A merge request already exists' }, 409);
