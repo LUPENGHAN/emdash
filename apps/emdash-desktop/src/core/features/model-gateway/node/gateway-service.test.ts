@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { secret, type Secret } from '@emdash/shared';
 import { afterEach, describe, expect, it } from 'vitest';
+import { withAgentEffort } from '@core/features/model-providers/api/node/agent-effort';
 import {
   ensureCodexModelCatalog,
   codexModelCatalogPath,
@@ -57,6 +58,7 @@ describe.runIf(built)('model gateway process integration', () => {
       model: string;
       input: unknown;
       authorization: string | undefined;
+      effort?: string;
     }> = [];
     const backend = async (name: string) => {
       const server = createServer((req, res) => {
@@ -66,12 +68,14 @@ describe.runIf(built)('model gateway process integration', () => {
           const payload = JSON.parse(Buffer.concat(parts).toString()) as {
             model: string;
             input: unknown;
+            reasoning?: { effort?: string };
           };
           seen.push({
             upstream: name,
             model: payload.model,
             input: payload.input,
             authorization: req.headers.authorization,
+            effort: payload.reasoning?.effort,
           });
           res.writeHead(200, { 'content-type': 'text/event-stream' });
           const response = {
@@ -229,9 +233,15 @@ describe.runIf(built)('model gateway process integration', () => {
         'test'
       );
       if (!launch) throw new Error('No Codex launch');
+      const selection = withAgentEffort('codex', { env: launch.env, effort: 'high' });
       const home = join(dir, 'codex-cli');
       await mkdir(home);
-      const env = { ...process.env, ...launch.env, CODEX_HOME: home, OTEL_SDK_DISABLED: 'true' };
+      const env = {
+        ...process.env,
+        ...selection?.env,
+        CODEX_HOME: home,
+        OTEL_SDK_DISABLED: 'true',
+      };
       const runCodex = (args: string[]) => {
         const result = promisify(execFile)(codex, args, { cwd: dir, env, timeout: 40000 });
         result.child.stdin?.end();
@@ -242,8 +252,10 @@ describe.runIf(built)('model gateway process integration', () => {
         '--skip-git-repo-check',
         '--json',
         ...launch.args,
+        ...(selection?.extraArgs ?? '').split(' ').filter(Boolean),
         'remember product-cli-marker',
       ]);
+      expect(seen.at(-1)?.effort).toBe('high');
       const started = first.stdout
         .split('\n')
         .filter(Boolean)
@@ -260,11 +272,13 @@ describe.runIf(built)('model gateway process integration', () => {
         '--skip-git-repo-check',
         '--json',
         ...launch.args,
+        ...(selection?.extraArgs ?? '').split(' ').filter(Boolean),
         'resume',
         started!.thread_id!,
         'repeat the marker',
       ]);
       expect(resumed.stdout).toContain(started!.thread_id);
+      expect(seen.at(-1)?.effort).toBe('high');
       expect(
         seen.some(
           (v) => v.upstream === 'B' && JSON.stringify(v.input).includes('product-cli-marker')
@@ -273,24 +287,25 @@ describe.runIf(built)('model gateway process integration', () => {
       const acpTarget = await service.prepareLaunch(providerA.id, 'test', 'acp-probe');
       const acpLaunch = buildSourceLaunch('codex', acpTarget.provider, acpTarget.apiKey, 'test');
       if (!acpLaunch) throw new Error('No ACP launch');
+      const acpSelection = withAgentEffort('codex', { env: acpLaunch.env, effort: 'high' });
       const acpHome = join(dir, 'codex-acp');
       await mkdir(acpHome);
       if (!acpLaunch.codexCatalog) throw new Error('No ACP model catalog');
       await ensureCodexModelCatalog(acpLaunch.codexCatalog, acpHome);
       const catalogFile = codexModelCatalogPath(acpLaunch.codexCatalog.providerKey, acpHome);
       const adapter = resolve('out/main/adapters/codex-acp.cjs');
-      if (
-        await access(adapter).then(
-          () => true,
-          () => false
-        )
-      ) {
+      const adapterBuilt = await access(adapter).then(
+        () => true,
+        () => false
+      );
+      if (process.env.EMDASH_CODEX_TEST_BINARY) expect(adapterBuilt).toBe(true);
+      if (adapterBuilt) {
         const acp = startAcpTestClient(adapter, dir, {
           ...process.env,
-          ...acpLaunch.env,
+          ...acpSelection?.env,
           EMDASH_CODEX_MODEL_CATALOG: catalogFile,
           CODEX_CONFIG: JSON.stringify({
-            ...JSON.parse(acpLaunch.env.CODEX_CONFIG),
+            ...JSON.parse(acpSelection?.env?.CODEX_CONFIG ?? '{}'),
             model_catalog_json: catalogFile,
           }),
           CODEX_HOME: acpHome,
@@ -314,6 +329,7 @@ describe.runIf(built)('model gateway process integration', () => {
               prompt: [{ type: 'text', text: 'remember product-acp-marker' }],
             })
           ).toMatchObject({ stopReason: 'end_turn' });
+          expect(seen.at(-1)?.effort).toBe('high');
           await service.switchRoute({
             conversationId: 'acp-probe',
             sourceId: providerB.id,
@@ -325,6 +341,7 @@ describe.runIf(built)('model gateway process integration', () => {
               prompt: [{ type: 'text', text: 'repeat the marker' }],
             })
           ).toMatchObject({ stopReason: 'end_turn' });
+          expect(seen.at(-1)?.effort).toBe('high');
           expect(
             seen.some(
               (v) => v.upstream === 'B' && JSON.stringify(v.input).includes('product-acp-marker')

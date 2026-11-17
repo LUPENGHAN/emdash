@@ -9,9 +9,9 @@ import {
   type ModelSourceOverride,
   type OfficialAccount,
 } from '../api';
+import { withAgentEffort } from '../api/node/agent-effort';
 import type { CodexModelCatalog, CodexModelInfo } from '../api/node/codex-launch';
 import { buildSourceLaunch, type ExtensionProviderAgent } from '../api/node/source-launch';
-import { withAgentEffort } from './agent-effort';
 import { ACCOUNT_HOME_ENV } from './official-accounts';
 
 export type EffectiveAgentConfigDeps = {

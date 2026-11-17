@@ -1,7 +1,7 @@
 import { getPlugin } from '@core/features/agents/api/node/plugin-registry';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
-import type { ModelProvider } from '../api';
-import { userCodexEfforts } from '../api/node/source-launch';
+import type { ModelProvider } from '..';
+import { userCodexEfforts } from './source-launch';
 
 /** Applies session effort to both native CLI and ACP adapter launch configuration. */
 export function withAgentEffort(

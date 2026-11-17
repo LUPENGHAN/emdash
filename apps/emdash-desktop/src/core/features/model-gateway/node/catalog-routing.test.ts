@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { secret } from '@emdash/shared';
 import { expect, it } from 'vitest';
 import type { ModelProvider } from '@core/features/model-providers/api';
+import { withAgentEffort } from '@core/features/model-providers/api/node/agent-effort';
 import { buildSourceLaunch } from '@core/features/model-providers/api/node/source-launch';
 import type { GatewayUsage } from '../api/contract';
 import { catalogSourceId, type GatewayModelsSettings } from '../api/model-catalog';
@@ -29,7 +30,7 @@ function store<T>() {
 
 it('routes native protocols and explicit model choices through the Go process, preserves revisions and records actual usage', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'emdash-catalog-'));
-  const seen: Array<{ path: string; model: string; key: string | undefined }> = [];
+  const seen: Array<{ path: string; model: string; key: string | undefined; effort?: string }> = [];
   const upstream = createServer((req, res) => {
     void (async () => {
       const parts: Buffer[] = [];
@@ -39,8 +40,18 @@ it('routes native protocols and explicit model choices through the Go process, p
         res.end();
         return;
       }
-      const body = JSON.parse(raw) as { model: string; stream?: boolean };
-      seen.push({ path: req.url!, model: body.model, key: req.headers.authorization });
+      const body = JSON.parse(raw) as {
+        model: string;
+        stream?: boolean;
+        reasoning_effort?: string;
+        output_config?: { effort?: string };
+      };
+      seen.push({
+        path: req.url!,
+        model: body.model,
+        key: req.headers.authorization,
+        effort: body.reasoning_effort ?? body.output_config?.effort,
+      });
       if (body.stream && req.url?.includes('/chat/completions')) {
         res.setHeader('content-type', 'text/event-stream');
         res.end(
@@ -320,6 +331,7 @@ it('routes native protocols and explicit model choices through the Go process, p
         selected.compatibility
       );
       if (!launch) throw new Error('Claude launch was unavailable');
+      const selection = withAgentEffort('claude', { env: launch.env, effort: 'high' });
       expect(launch.args.join(' ')).not.toContain(selected.apiKey);
       const home = join(dir, 'claude-cli-home');
       await mkdir(home);
@@ -335,6 +347,7 @@ it('routes native protocols and explicit model choices through the Go process, p
           '--tools',
           'Read',
           ...launch.args,
+          ...(selection?.extraArgs ?? '').split(' ').filter(Boolean),
           'Reply with the supplied marker.',
         ],
         {
@@ -344,7 +357,7 @@ it('routes native protocols and explicit model choices through the Go process, p
             PATH: process.env.PATH,
             HOME: home,
             CLAUDE_CONFIG_DIR: home,
-            ...launch.env,
+            ...selection?.env,
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
           },
         }
@@ -352,6 +365,7 @@ it('routes native protocols and explicit model choices through the Go process, p
       result.child.stdin?.end();
       expect((await result).stdout).toContain('gateway-cli-ok');
       expect(seen.at(-1)?.model).toBe('physical-chat');
+      expect(seen.at(-1)?.effort).toBe('high');
       const acpHome = join(dir, 'claude-acp-home');
       await mkdir(acpHome);
       const acp = startAcpTestClient(
@@ -363,7 +377,7 @@ it('routes native protocols and explicit model choices through the Go process, p
           CLAUDE_CONFIG_DIR: acpHome,
           CLAUDE_CODE_EXECUTABLE: claudeCli,
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-          ...launch.env,
+          ...selection?.env,
         }
       );
       try {
@@ -380,7 +394,7 @@ it('routes native protocols and explicit model choices through the Go process, p
               options: {
                 tools: ['Read'],
                 settingSources: [],
-                settings: { ...JSON.parse(launch.env.EMDASH_CLAUDE_SETTINGS), env: launch.env },
+                settings: { ...JSON.parse(launch.env.EMDASH_CLAUDE_SETTINGS), env: selection?.env },
               },
             },
           },
@@ -401,6 +415,7 @@ it('routes native protocols and explicit model choices through the Go process, p
             prompt: [{ type: 'text', text: 'Reply with the supplied marker.' }],
           })
         ).toMatchObject({ stopReason: 'end_turn' });
+        expect(seen.at(-1)?.effort).toBe('high');
       } finally {
         await acp.close();
       }

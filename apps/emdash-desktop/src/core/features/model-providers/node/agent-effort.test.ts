@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { conversationConfig } from '@core/primitives/conversations/api/conversation-config';
 import { providerCustomConfigEntrySchema } from '@core/services/settings/node/provider-config-schema';
 import { sourceOverrideOf, type ModelProvider } from '../api';
-import { withAgentEffort } from './agent-effort';
+import { withAgentEffort } from '../api/node/agent-effort';
 import {
   createEffectiveAgentConfig,
   type EffectiveAgentConfigDeps,
