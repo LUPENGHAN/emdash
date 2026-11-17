@@ -41,6 +41,9 @@ committed and shared.
   resolver and operation credential leases; it introduces no additional model/provider settings.
   Desktop bootstrap composes the policy, Host Scripts verification executor, typed Wire model,
   settings section, delegation callback and coalesced attach/recovery/observed-merge triggers.
+  Host Git reads the upstream OID and fetches its objects without a destination ref or FETCH_HEAD
+  write; accepted observation checkpoints remain durable, while no temporary candidate ref needs
+  recovery after process death. Unattributed refs from other instances or versions are preserved.
   Delegation freezes the approved full commit OID; configured verification runs in a separate
   pinned checkout and persists its workspace/run receipts without replaying unknown commands.
   Explicit cleanup persists artifact intent/outcome on the original attempt and calls the Host
