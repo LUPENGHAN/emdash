@@ -15,7 +15,8 @@ const PROBE_TIMEOUT_MS = 500;
 const PROBE_FAILURES_TO_CLOSE = 2;
 const URL_PATTERN =
   /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[[0-9a-f:]+\])(?::\d{2,5})?(?:\/\S*)?/gi;
-const LISTEN_PATTERN = /\blisten(?:ing)?\s+(?:on|to)\s+(?:(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]))?:(\d{1,5})(?=\s|$|[,;)])/gi;
+const LISTEN_PATTERN =
+  /\blisten(?:ing)?\s+(?:on|to)\s+(?:(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]))?:(\d{1,5})(?=\s|$|[,;)])/gi;
 const MAX_BUFFER = 4096;
 
 export type PreviewServerProtocol = 'http:' | 'https:';
@@ -120,12 +121,14 @@ export function wireTerminalUrlDetector({
       const key = detectedKey(server);
       if (detected.has(key) || pending.has(key)) continue;
       pending.add(key);
-      void httpProbe(host, port).then((isHttp) => {
-        pending.delete(key);
-        if (isHttp) register(server);
-      }).catch(() => {
-        pending.delete(key);
-      });
+      void httpProbe(host, port)
+        .then((isHttp) => {
+          pending.delete(key);
+          if (isHttp) register(server);
+        })
+        .catch(() => {
+          pending.delete(key);
+        });
     }
   });
 
@@ -167,10 +170,13 @@ function detectedKey(server: DetectedPreviewUrl): string {
 
 function isHttpServer(host: string, port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const request = http.request({ host, port, method: 'HEAD', path: '/', timeout: PROBE_TIMEOUT_MS }, (response) => {
-      response.resume();
-      resolve(true);
-    });
+    const request = http.request(
+      { host, port, method: 'HEAD', path: '/', timeout: PROBE_TIMEOUT_MS },
+      (response) => {
+        response.resume();
+        resolve(true);
+      }
+    );
     request.on('error', () => resolve(false));
     request.on('timeout', () => request.destroy());
     request.end();

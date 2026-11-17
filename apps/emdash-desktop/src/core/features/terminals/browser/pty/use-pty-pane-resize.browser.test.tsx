@@ -186,7 +186,9 @@ describe('PtyPane remount', () => {
     container.style.height = '400px';
     document.body.appendChild(container);
     pty.mount(container, { cols: 80, rows: 24 });
-    await new Promise<void>((resolve) => pty!.terminal.write(`${'中文'.repeat(10)}${'A'.repeat(40)}`, resolve));
+    await new Promise<void>((resolve) =>
+      pty!.terminal.write(`${'中文'.repeat(10)}${'A'.repeat(40)}`, resolve)
+    );
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const row = container.querySelector<HTMLElement>('.xterm-rows > div');
     expect(row).not.toBeNull();

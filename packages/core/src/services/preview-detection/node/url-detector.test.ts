@@ -90,7 +90,9 @@ describe('wireTerminalUrlDetector', () => {
       pty,
       probeLocalPorts: false,
       httpProbe,
-      onDetected: (server) => { detected.push(server); },
+      onDetected: (server) => {
+        detected.push(server);
+      },
     });
 
     pty.emitData('listening on 127.0.0.1:92');
@@ -121,7 +123,10 @@ describe('wireTerminalUrlDetector', () => {
       pty.emitData(`listening on 127.0.0.1:${webPort}\nlisten to :${otherPort}\n`);
       await vi.waitFor(() => expect(detected).toHaveBeenCalledTimes(1));
       expect(detected).toHaveBeenCalledWith({
-        protocol: 'http:', host: '127.0.0.1', port: webPort, urlPath: '/',
+        protocol: 'http:',
+        host: '127.0.0.1',
+        port: webPort,
+        urlPath: '/',
       });
     } finally {
       stop();
@@ -136,7 +141,10 @@ describe('wireTerminalUrlDetector', () => {
     const onDetected = vi.fn();
     wireTerminalUrlDetector({
       pty,
-      httpProbe: () => new Promise((resolve) => { finish = resolve; }),
+      httpProbe: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
       onDetected,
     });
     pty.emitData('listen to :3010\n');
