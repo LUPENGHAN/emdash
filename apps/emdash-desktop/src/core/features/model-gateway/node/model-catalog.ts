@@ -98,6 +98,7 @@ export function runtimeCatalog(
       modelMap: { [model.alias]: Object.values(mapping)[0] },
       contextWindows: model.contextWindow ? { [model.alias]: model.contextWindow } : {},
       route: {
+        ...(snapshot.scope === 'task' && { requestedModel: model.name }),
         providerId: model.providerId,
         revision: model.revision,
         protocolModels: { [model.alias]: mapping },

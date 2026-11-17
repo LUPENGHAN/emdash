@@ -132,7 +132,7 @@ export function GatewayProvidersPanel() {
               <span className="min-w-0 flex-1 truncate">{route.title}</span>
               <span className="text-foreground-muted">Local router →</span>
               <span>{route.providerName}</span>
-              <code>{route.model}</code>
+              <code>{route.requestedModel ?? route.model}</code>
               {route.upstreamModel ? (
                 <span className="text-foreground-muted">
                   → {route.upstreamModel} · {route.inboundProtocol} → {route.upstreamProtocol} ·
@@ -275,7 +275,7 @@ export function GatewayProvidersPanel() {
                       item.accountId}
                   </td>
                   <td className="p-1">
-                    <span>{item.model}</span>
+                    <span>{item.requestedModel ?? item.model}</span>
                     {item.upstreamModel ? (
                       <span className="block text-foreground-muted">
                         {item.upstreamModel} · {item.inboundProtocol} → {item.upstreamProtocol} ·

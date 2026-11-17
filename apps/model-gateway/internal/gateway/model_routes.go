@@ -19,6 +19,7 @@ type RoutePolicy struct {
 }
 
 type ModelRoute struct {
+	RequestedModel string                       `json:"requestedModel,omitempty"`
 	ProviderID     string                       `json:"providerId"`
 	Revision       int                          `json:"revision"`
 	ProtocolModels map[string]map[string]string `json:"protocolModels"`

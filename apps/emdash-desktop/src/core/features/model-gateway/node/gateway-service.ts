@@ -979,6 +979,7 @@ export class ModelGatewayService {
             : (this.accounts.find((a) => gatewaySourcePrefix + a.id === sourceId)?.name ??
               sourceId),
           model: route.model,
+          ...(route.taskBinding && { requestedModel: route.taskBinding.model }),
           ...(binding &&
             target && {
               upstreamModel: binding.protocolModels[target]?.upstreamModel,

@@ -238,7 +238,11 @@ func usageRecord(ctx context.Context, auth *a.Auth, req e.Request, started time.
 		accountID = route.ProviderID
 		var mapping map[string]string
 		_ = json.Unmarshal([]byte(auth.Attributes["emdash_models"]), &mapping)
-		ctx = context.WithValue(ctx, usageAttributionKey{}, map[string]any{"upstreamModel": mapping[req.Model], "inboundProtocol": auth.Attributes["emdash_inbound_protocol"], "upstreamProtocol": auth.Attributes["emdash_upstream_protocol"], "routeRevision": route.Revision})
+		attribution := map[string]any{"upstreamModel": mapping[req.Model], "inboundProtocol": auth.Attributes["emdash_inbound_protocol"], "upstreamProtocol": auth.Attributes["emdash_upstream_protocol"], "routeRevision": route.Revision}
+		if route.RequestedModel != "" {
+			attribution["requestedModel"] = route.RequestedModel
+		}
+		ctx = context.WithValue(ctx, usageAttributionKey{}, attribution)
 	}
 	u.PublishRecord(ctx, u.Record{Provider: ResponsesProvider, Source: source, Model: req.Model, AuthID: accountID, SessionID: sessionID,
 		RequestedAt: started, Latency: time.Since(started), Failed: failed, Detail: detail})

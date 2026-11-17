@@ -13,6 +13,7 @@ export type GatewayAccount = {
   disabled: boolean;
 };
 export type GatewayUsage = {
+  requestedModel?: string;
   upstreamModel?: string;
   inboundProtocol?: string;
   upstreamProtocol?: string;
@@ -65,6 +66,7 @@ export const modelGatewayContract = defineContract({
         sourceId: z.string(),
         providerName: z.string(),
         model: z.string(),
+        requestedModel: z.string().optional(),
         upstreamModel: z.string().optional(),
         inboundProtocol: z.string().optional(),
         upstreamProtocol: z.string().optional(),

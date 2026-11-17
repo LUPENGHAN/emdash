@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { secret } from '@emdash/shared';
+import { waitFor } from '@emdash/shared/testing';
 import { expect, it } from 'vitest';
 import type { ModelProvider } from '@core/features/model-providers/api';
 import { ModelGatewayService, type GatewayRoute } from './gateway-service';
@@ -99,6 +100,13 @@ it('keeps supplier/model bindings private across catalog changes and routes real
     };
     await request(first);
     await request(second);
+    await waitFor(async () => (await gateway.usage(100)).some((row) => row.sessionId === 'b'));
+    expect((await gateway.usage(100)).find((row) => row.sessionId === 'b')).toMatchObject({
+      accountId: 'two',
+      model: 'task-model',
+      requestedModel: 'custom-b',
+      upstreamModel: 'custom-b',
+    });
     expect(seen).toEqual([
       { model: 'custom-a', key: 'Bearer fake-one', effort: 'low' },
       { model: 'custom-b', key: 'Bearer fake-two', effort: 'low' },
@@ -119,6 +127,11 @@ it('keeps supplier/model bindings private across catalog changes and routes real
     expect((await routes.getOrThrow('b'))?.taskBinding?.supplierId).toBe('two');
     await gateway.forgetConversation('a');
     expect(await routes.getOrThrow('a')).toBeNull();
+    expect((await gateway.usage(100)).find((row) => row.sessionId === 'a')).toMatchObject({
+      accountId: 'one',
+      requestedModel: 'custom-a',
+      upstreamModel: 'custom-a',
+    });
     expect((await routes.getOrThrow('b'))?.taskBinding?.supplierId).toBe('two');
   } finally {
     await gateway.dispose();

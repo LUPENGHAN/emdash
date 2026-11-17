@@ -4,6 +4,7 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export type Document = { [key: string]: Json };
 export type ApiProvider = {
   route?: {
+    requestedModel?: string;
     providerId: string;
     revision: number;
     protocolModels: Record<
