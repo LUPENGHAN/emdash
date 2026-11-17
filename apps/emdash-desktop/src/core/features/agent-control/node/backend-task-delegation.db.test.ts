@@ -11,6 +11,7 @@ import type { TaskService } from '@core/features/tasks/api/node/task-service';
 import type { CreateTaskParams, Task } from '@core/primitives/tasks/api';
 import { projects, tasks } from '@core/services/app-db/node/schema';
 import { createBackendTaskDelegation } from './backend-task-delegation';
+import type { PreparedTaskDelegation } from './task-delegation-service';
 
 let fixture: Awaited<ReturnType<typeof openFixture>>;
 let scope: ReturnType<typeof createScope>;
@@ -204,6 +205,102 @@ it('uses the project baseline and frozen defaults without any renderer or caller
     ).task_id
   ).toBe(result.task_id);
   expect(test.createTask).toHaveBeenCalledOnce();
+});
+
+it('persists effective selection values and their sources across changed defaults and service restart', async () => {
+  const t = await setup();
+  let defaultEffort = 'medium';
+  const getDefaults = vi.fn(async () => ({
+    providerId: 'claude',
+    connection: 'gateway' as const,
+    model: 'shared',
+    effort: defaultEffort,
+  }));
+  const getSettings = vi.fn(t.dependencies.getAgentSettings);
+  const deps = {
+    ...t.dependencies,
+    getAgentSettings: getSettings,
+    getDelegationDefaults: getDefaults,
+  };
+  const service = createBackendTaskDelegation(deps);
+  const request = {
+    kind: 'create_task' as const,
+    requestId: 'selection-proof',
+    name: 'Selected task',
+    prompt: 'Private task instructions',
+    effort: 'low',
+  };
+  const first = JSON.parse((await service.dispatch(t.caller, request)).text);
+  expect(first.selection_snapshot).toMatchObject({
+    version: '1',
+    values: {
+      agent: 'claude',
+      transport: 'pty',
+      modelSource: 'gateway:models',
+      model: 'shared',
+      supplierId: null,
+      effort: 'low',
+    },
+    sources: {
+      agent: 'main-default',
+      transport: 'adapter-default',
+      modelSource: 'main-default',
+      model: 'main-default',
+      supplierId: 'adapter-default',
+      effort: 'request',
+    },
+    fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+  });
+  expect(JSON.stringify(first.selection_snapshot)).not.toContain('Private task instructions');
+  defaultEffort = 'high';
+  getSettings.mockClear();
+  getDefaults.mockClear();
+  const restored = createBackendTaskDelegation(deps);
+  expect((await restored.status(first.task_id))?.selectionSnapshot).toEqual(
+    first.selection_snapshot
+  );
+  expect(JSON.parse((await restored.dispatch(t.caller, request)).text).selection_snapshot).toEqual(
+    first.selection_snapshot
+  );
+  expect(getSettings).not.toHaveBeenCalled();
+  expect(getDefaults).not.toHaveBeenCalled();
+});
+
+it('records ACP native preferences and explicit adapter defaults without attributing them to the main agent', async () => {
+  const t = await setup();
+  const service = createBackendTaskDelegation({
+    ...t.dependencies,
+    getAgentSettings: async () => ({}),
+    getAcpOptions: async () => ({ model: 'native-code', effort: 'high' }),
+  });
+  const params: PreparedTaskDelegation = await service.resources.prepare(
+    t.caller,
+    {
+      kind: 'create_task',
+      name: 'ACP preferences',
+      prompt: 'Check',
+      ui: 'chat',
+      effort: null,
+    },
+    { taskId: 'acp-task', conversationId: 'acp-conversation' }
+  );
+  expect(params.selectionSnapshot).toMatchObject({
+    values: {
+      agent: 'claude',
+      transport: 'acp',
+      modelSource: null,
+      model: 'native-code',
+      effort: null,
+    },
+    sources: {
+      agent: 'caller',
+      transport: 'request',
+      modelSource: 'adapter-default',
+      model: 'agent-default',
+      effort: 'request',
+    },
+  });
+  expect(params.taskConfig.initialConversation?.options?.effort).toBeUndefined();
 });
 
 it('preserves resources after activation failure and reuses a fresh project attachment', async () => {

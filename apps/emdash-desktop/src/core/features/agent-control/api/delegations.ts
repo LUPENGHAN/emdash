@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { projectBaselineSelectionSchema } from '@core/features/projects/api/baseline-sync';
+import { delegationSelectionSnapshotSchema } from './selection-snapshot';
 
 export const delegationStatusSchema = z.object({
   taskId: z.string(),
@@ -10,5 +11,6 @@ export const delegationStatusSchema = z.object({
   waitReason: z.string().optional(),
   canRetry: z.boolean(),
   baselineSelection: projectBaselineSelectionSchema.optional(),
+  selectionSnapshot: delegationSelectionSnapshotSchema.optional(),
 });
 export type TaskDelegationStatus = z.infer<typeof delegationStatusSchema>;

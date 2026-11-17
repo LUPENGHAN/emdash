@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
+import { freezeDelegationSelection } from './selection-snapshot';
 import {
   TaskDelegationService,
   type DelegationRecord,
@@ -75,6 +76,41 @@ function setup() {
 }
 
 describe('durable task delegation', () => {
+  it('rejects changed execution values or provenance after a frozen selection was saved', async () => {
+    const t = setup();
+    const prepare = vi.mocked(t.deps.prepare).getMockImplementation()!;
+    vi.mocked(t.deps.prepare).mockImplementation(async (...args) => {
+      const params = await prepare(...args);
+      const initial = params.taskConfig.initialConversation!;
+      return {
+        ...params,
+        selectionSnapshot: freezeDelegationSelection(initial, request, undefined, {
+          effort: 'high',
+        }),
+      };
+    });
+    const result = JSON.parse((await t.service.dispatch(caller, request)).text);
+    const [key, saved] = [...t.records.entries()][0];
+    expect((await t.service.status(result.task_id))?.selectionSnapshot).toEqual(
+      result.selection_snapshot
+    );
+    const changed = structuredClone(saved);
+    changed.params.taskConfig.initialConversation!.effort = 'low';
+    t.records.set(key, changed);
+    await expect(t.service.status(result.task_id)).rejects.toThrow('Cannot read delegation record');
+    const sourceChanged = structuredClone(saved);
+    sourceChanged.params.selectionSnapshot!.sources.effort = 'request';
+    t.records.set(key, sourceChanged);
+    await expect(t.service.dispatch(caller, request)).rejects.toThrow(
+      'Cannot read delegation record'
+    );
+    expect(t.deps.create).toHaveBeenCalledOnce();
+    expect(t.deps.start).toHaveBeenCalledOnce();
+    const future = structuredClone(saved);
+    Reflect.set(future.params.selectionSnapshot!, 'version', '2');
+    t.records.set(key, future);
+    await expect(t.service.status(result.task_id)).rejects.toThrow('Cannot read delegation record');
+  });
   it('retries a failed startup by task ID under its current owner without re-preparing inputs', async () => {
     const test = setup();
     const changed = vi.fn();

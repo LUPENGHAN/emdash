@@ -10,17 +10,24 @@ import type { CreateTaskParams } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
 import type { TaskDelegationStatus } from '../api/delegations';
 import type { DelegationResources } from '../api/node/delegation-resources';
+import {
+  delegationSelectionSnapshotSchema,
+  type DelegationSelectionSnapshot,
+} from '../api/selection-snapshot';
+import { selectionMatchesConversation } from './selection-snapshot';
 
 export type CreateDelegatedTask = Extract<AgentControlAction, { kind: 'create_task' }>;
 export type PreparedTaskDelegation = CreateTaskParams & {
   /** The local source revision in params remains the executable input across retries. */
   baselineSelection?: ProjectBaselineSelection;
+  selectionSnapshot?: DelegationSelectionSnapshot;
 };
 const preparedTaskDelegationSchema = z
   .custom<CreateTaskParams>()
   .and(
     z.object({
       baselineSelection: projectBaselineSelectionSchema.optional(),
+      selectionSnapshot: delegationSelectionSnapshotSchema.optional(),
     })
   )
   .refine(
@@ -36,6 +43,12 @@ const preparedTaskDelegationSchema = z
       );
     },
     { message: 'The delegation source does not match its approved baseline snapshot.' }
+  )
+  .refine(
+    (params) =>
+      !params.selectionSnapshot ||
+      selectionMatchesConversation(params.selectionSnapshot, params.taskConfig.initialConversation),
+    { message: 'The delegation launch selection does not match its frozen receipt.' }
   );
 const delegationV1 = z.object({
   version: z.literal('1'),
@@ -162,6 +175,9 @@ export class TaskDelegationService {
       error: saved.record.error,
       waitReason: saved.record.waitReason,
       canRetry: !!saved.record.error && saved.record.phase !== 'started',
+      ...(saved.record.params.selectionSnapshot && {
+        selectionSnapshot: saved.record.params.selectionSnapshot,
+      }),
       ...(saved.record.params.baselineSelection && {
         baselineSelection: saved.record.params.baselineSelection,
       }),
@@ -262,6 +278,7 @@ export class TaskDelegationService {
           : {}),
         waiting_for: record.waitReason,
         configuration: record.params.taskConfig.initialConversation,
+        selection_snapshot: record.params.selectionSnapshot,
       }),
     });
     try {

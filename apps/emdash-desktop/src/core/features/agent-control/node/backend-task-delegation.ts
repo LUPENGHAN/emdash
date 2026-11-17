@@ -21,6 +21,7 @@ import { AppDbKeyValueStore } from '@core/services/app-db/node/key-value-store';
 import { tasks } from '@core/services/app-db/node/schema';
 import type { AgentCaller, AgentControlAction } from '../api';
 import { delegationModelSelection } from '../api/model-selection';
+import { freezeDelegationSelection } from './selection-snapshot';
 import {
   TaskDelegationService,
   type DelegationRecord,
@@ -69,6 +70,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
     recoveryContext: deps.recoveryContext,
     onStateChange: deps.onStateChange,
     prepare: async (caller, request, ids): Promise<PreparedTaskDelegation> => {
+      const supplied = request;
       const defaults =
         ids.role === 'coordination' ? undefined : await deps.getDelegationDefaults?.(caller);
       request = {
@@ -189,7 +191,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
       );
       if (typeof effort === 'string')
         sessionOptions[agentId === 'codex' ? 'reasoning_effort' : 'effort'] = effort;
-      return {
+      const params: PreparedTaskDelegation = {
         id: ids.taskId,
         projectId,
         ...(baselineSelection && { baselineSelection }),
@@ -228,6 +230,14 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
           workspace,
         },
       };
+      if (params.taskConfig.initialConversation)
+        params.selectionSnapshot = freezeDelegationSelection(
+          params.taskConfig.initialConversation,
+          supplied,
+          defaults,
+          saved
+        );
+      return params;
     },
     findTask: async (id, projectId) => {
       const [row] = await deps.db
