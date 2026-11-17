@@ -1,3 +1,4 @@
+import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { AcpChatStore } from './acp-chat-store';
 
 /**
@@ -23,7 +24,13 @@ export class AcpChatRegistry {
     }
     const existing = taskMap.get(conversationId);
     if (existing) return existing;
-    const store = new AcpChatStore(conversationId, projectId, taskId);
+    const store = new AcpChatStore(
+      conversationId,
+      projectId,
+      taskId,
+      undefined,
+      () => getTaskStore(projectId, taskId)?.data.type === 'coordination'
+    );
     taskMap.set(conversationId, store);
     return store;
   }

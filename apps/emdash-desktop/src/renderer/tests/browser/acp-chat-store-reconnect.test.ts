@@ -47,6 +47,7 @@ it.each([
   'new-active-turn',
   'stale-reattach',
   'disposed',
+  'deferred-main',
 ] as const)('reloads completed history after reconnect: %s', async (mode) => {
   installChatUiRuntime(chatUi);
   const context = chatUi.createChatContext();
@@ -89,6 +90,7 @@ it.each([
   let history = availableHistory();
   let acceptedPromptId = '';
   const attach = vi.fn(async () => ok({ sessionId: 'session-1' }));
+  const startSession = vi.fn(async () => ok({ sessionId: 'session-1' }));
   const loadHistory = vi.fn(async () => ok(history));
   const sendPrompt = vi.fn(async ({ promptId }: { promptId: string }) => {
     acceptedPromptId = promptId;
@@ -100,7 +102,7 @@ it.each([
       {
         acp: {
           attach,
-          startSession: async () => ok({ sessionId: 'session-1' }),
+          startSession,
           session,
           loadHistory,
           sendPrompt,
@@ -116,14 +118,20 @@ it.each([
   hub.open('desktop-first', pair.right);
   transport.install(pair.left);
   const hostState = observable.box<ProjectHostAccessState>({ kind: 'ready', hostGeneration: 1 });
-  const store = new AcpChatStore('conversation-1', 'project-1', 'task-1', {
-    get state() {
-      return hostState.get();
-    },
-    get liveAction() {
-      return hostState.get().kind === 'ready' ? { kind: 'enabled' } : { kind: 'disabled' };
-    },
-  } as never);
+  const store = new AcpChatStore(
+    'conversation-1',
+    'project-1',
+    'task-1',
+    {
+      get state() {
+        return hostState.get();
+      },
+      get liveAction() {
+        return hostState.get().kind === 'ready' ? { kind: 'enabled' } : { kind: 'disabled' };
+      },
+    } as never,
+    () => mode === 'deferred-main'
+  );
   const parent = document.createElement('div');
   parent.style.cssText = 'width:800px;height:600px;position:relative';
   document.body.append(parent);
@@ -134,6 +142,7 @@ it.each([
     store.bootstrap();
     await vi.waitFor(() => expect(store.historyLoading).toBe(false));
     expect(store.loadError).toBeNull();
+    expect(startSession).toHaveBeenCalledTimes(mode === 'deferred-main' ? 0 : 1);
     const live = store.session!;
     const revalidate = vi.spyOn(live, 'revalidate');
     const seed = vi.spyOn(store.chatState.transcript.history, 'replace');

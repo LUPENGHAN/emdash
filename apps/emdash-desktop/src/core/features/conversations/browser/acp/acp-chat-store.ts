@@ -40,7 +40,6 @@ import {
 import { conversationSubject } from '@core/features/conversations/contributions/subject';
 import type { ProjectHostAccess } from '@core/features/projects/api/browser/stores/project-context';
 import { getProjectSshConnectionId } from '@core/features/projects/api/browser/stores/project-selectors';
-import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { getHostClient } from '@core/primitives/desktop-host/browser/host-client';
 import { log } from '@core/primitives/logging/browser/logger';
 import {
@@ -141,7 +140,8 @@ export class AcpChatStore {
     readonly conversationId: string,
     readonly projectId: string,
     readonly taskId: string,
-    readonly hostAccess?: ProjectHostAccess
+    readonly hostAccess?: ProjectHostAccess,
+    private readonly isCoordinationTask: () => boolean = () => false
   ) {
     const conversation = conversationRegistry.get(taskId)?.conversations.get(conversationId)?.data;
     this.historyKnown = conversation !== undefined && !conversation.sessionId;
@@ -697,12 +697,9 @@ export class AcpChatStore {
       .get(this.taskId)
       ?.conversations.get(this.conversationId)?.data;
     const providerId = conversation?.providerId;
-    const deferFirstStart =
-      !mode &&
-      !conversation?.sessionId &&
-      getTaskStore(this.projectId, this.taskId)?.data.type === 'coordination';
     let clientSession: AcpLiveSession | null = null;
     try {
+      const deferFirstStart = !mode && !conversation?.sessionId && this.isCoordinationTask();
       const attachedSession = await AcpLiveSession.create(this.conversationId);
       clientSession = attachedSession;
       if (this._disposed || this._historyEpoch !== epoch) {

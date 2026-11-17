@@ -1,4 +1,5 @@
 import { getProjectHostAccess } from '@core/features/projects/api/browser/stores/project-selectors';
+import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { AcpChatStore } from './acp-chat-store';
 
 const GRACE_MS = 5_000;
@@ -38,7 +39,8 @@ export class AcpChatResourceManager {
       conversationId,
       this.projectId,
       this.taskId,
-      getProjectHostAccess(this.projectId)
+      getProjectHostAccess(this.projectId),
+      () => getTaskStore(this.projectId, this.taskId)?.data.type === 'coordination'
     );
     entry = { store, refCount: 1, graceTimer: null };
     this._entries.set(conversationId, entry);
