@@ -39,6 +39,8 @@ function createAppDb(): {
       name TEXT NOT NULL,
       base_ref TEXT,
       repository_workspace_id TEXT,
+      folder_id TEXT,
+      archived_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       deleted_at TEXT
