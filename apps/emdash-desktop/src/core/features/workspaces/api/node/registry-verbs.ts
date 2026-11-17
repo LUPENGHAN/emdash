@@ -3,6 +3,7 @@ import type { HostRef } from '@emdash/core/primitives/host/api';
 import type { CreateWorkspaceError } from '@emdash/core/runtimes/workspace-registry/api';
 import type { RuntimeBroker } from '@emdash/core/services/runtime-broker/api';
 import { err, ok, type Result } from '@emdash/shared';
+import { WireError } from '@emdash/wire/rpc';
 import type { WorktreeGitPlan } from '@core/primitives/workspaces/api';
 
 export type WorkspaceCreationFailure = { stage: string; message: string };
@@ -100,24 +101,38 @@ export async function createWorktreeThroughRegistry(
 
   // Waits for the whole pipeline: the contract gives this verb no call deadline, since
   // `git worktree add` on a large repository has no fixed bound.
-  const created =
-    spec.purpose === 'management'
-      ? await registry.createManagementWorktree({
-          workspaceId: spec.workspaceId,
-          repositoryId,
-          branch: spec.branch,
-          path: spec.path,
-        })
-      : await registry.createWorktree({
-          workspaceId: spec.workspaceId,
-          repositoryId,
-          branch: spec.branch,
-          ...(spec.baseRef !== undefined && { baseRef: spec.baseRef }),
-          path: spec.path,
-          preservePatterns: spec.preservePatterns,
-          ...(spec.publish !== undefined && { publish: spec.publish }),
-          ...(spec.gitSetup !== undefined && { gitSetup: spec.gitSetup }),
-        });
+  let created: Awaited<ReturnType<typeof registry.createWorktree>>;
+  try {
+    created =
+      spec.purpose === 'management'
+        ? await registry.createManagementWorktree({
+            workspaceId: spec.workspaceId,
+            repositoryId,
+            branch: spec.branch,
+            path: spec.path,
+          })
+        : await registry.createWorktree({
+            workspaceId: spec.workspaceId,
+            repositoryId,
+            branch: spec.branch,
+            ...(spec.baseRef !== undefined && { baseRef: spec.baseRef }),
+            path: spec.path,
+            preservePatterns: spec.preservePatterns,
+            ...(spec.publish !== undefined && { publish: spec.publish }),
+            ...(spec.gitSetup !== undefined && { gitSetup: spec.gitSetup }),
+          });
+  } catch (error) {
+    if (error instanceof WireError && error.code === 'UNKNOWN_PROCEDURE') {
+      return err({
+        stage: 'capability',
+        message:
+          spec.purpose === 'management'
+            ? 'This Host cannot create independent management workspaces. Update the workspace server or Emdash app before retrying.'
+            : 'This Host cannot create task workspaces. Update the workspace server or Emdash app before retrying.',
+      });
+    }
+    throw error;
+  }
   if (!created.success) {
     const error = created.error;
     switch (error.type) {

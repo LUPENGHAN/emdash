@@ -4,7 +4,7 @@ import {
   type WorkspaceRecord,
 } from '@emdash/core/runtimes/workspace-registry/api';
 import { ok } from '@emdash/shared';
-import { defineContract } from '@emdash/wire/rpc';
+import { createController, defineContract } from '@emdash/wire/rpc';
 import { createTestWire } from '@emdash/wire/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -165,6 +165,48 @@ it('uses the management-only host verb without falling back to ordinary worktree
       await createWorktreeThroughRegistry(runtimes, { ...spec, purpose: 'management' })
     ).toMatchObject({ success: false, error: { stage: 'prepare' } });
     expect(create).toHaveBeenCalledOnce();
+  } finally {
+    await wire.dispose();
+  }
+});
+
+it('reports an older Host capability over Wire without falling back to a code worktree', async () => {
+  const codeCreation = vi.fn(async (input: { workspaceId: string; path: string }) =>
+    ok(hostRecord({ id: input.workspaceId, path: input.path }))
+  );
+  const oldController = createController(registryVerbsContract, {
+    createWorkspace: async (input) =>
+      ok(
+        hostRecord({
+          id: input.workspaceId,
+          path: input.path,
+          kind: 'repository',
+        })
+      ),
+    createWorktree: codeCreation,
+  });
+  const currentContract = defineContract({
+    ...registryVerbsContract,
+    createManagementWorktree: workspaceRegistryContract.createManagementWorktree,
+  });
+  const wire = createTestWire(currentContract, oldController);
+  const runtimes = { client: async () => ok({ workspaceRegistry: wire.client }) } as never;
+  try {
+    const result = await new WorkspaceCreations().run(spec.workspaceId, () =>
+      createWorktreeThroughRegistry(runtimes, {
+        ...spec,
+        purpose: 'management',
+        baseRef: undefined,
+      })
+    );
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        stage: 'capability',
+        message: expect.stringContaining('Update the workspace server'),
+      },
+    });
+    expect(codeCreation).not.toHaveBeenCalled();
   } finally {
     await wire.dispose();
   }
