@@ -94,9 +94,24 @@ describe.runIf(built)('model gateway process integration', () => {
             ],
             usage: { input_tokens: 7, output_tokens: 3, total_tokens: 10 },
           };
-          res.end(
-            `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response })}\n\n`
-          );
+          const emit = (type: string, value: Record<string, unknown>) =>
+            res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`);
+          emit('response.created', {
+            response: { ...response, status: 'in_progress', output: [] },
+          });
+          emit('response.output_item.added', {
+            output_index: 0,
+            item: { ...response.output[0], status: 'in_progress', content: [] },
+          });
+          emit('response.output_text.delta', {
+            item_id: 'msg',
+            output_index: 0,
+            content_index: 0,
+            delta: name,
+          });
+          emit('response.output_item.done', { output_index: 0, item: response.output[0] });
+          emit('response.completed', { response });
+          res.end();
         })().catch(() => res.destroy());
       });
       await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
@@ -352,6 +367,87 @@ describe.runIf(built)('model gateway process integration', () => {
         }
       }
     }
+    const opencode = process.env.EMDASH_OPENCODE_TEST_BINARY;
+    if (opencode) {
+      await promisify(execFile)(opencode, ['--version']);
+      const opencodeTarget = await service.prepareLaunch(providerA.id, 'test', 'opencode-probe');
+      const launch = buildSourceLaunch(
+        'opencode',
+        opencodeTarget.provider,
+        opencodeTarget.apiKey,
+        'test'
+      );
+      if (!launch) throw new Error('No OpenCode gateway launch');
+      const home = join(dir, 'opencode-native');
+      await mkdir(home);
+      const config = JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT);
+      config.enabled_providers = ['emdash-gateway'];
+      const env = {
+        PATH: process.env.PATH,
+        TMPDIR: process.env.TMPDIR,
+        HOME: home,
+        XDG_CONFIG_HOME: join(home, 'config'),
+        XDG_DATA_HOME: join(home, 'data'),
+        XDG_STATE_HOME: join(home, 'state'),
+        XDG_CACHE_HOME: join(home, 'cache'),
+        ...launch.env,
+        OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+        OPENCODE_CONFIG_DIR: join(home, 'config', 'opencode'),
+        OPENCODE_DISABLE_AUTOUPDATE: 'true',
+        OPENCODE_DISABLE_MODELS_FETCH: 'true',
+        DO_NOT_TRACK: '1',
+        CI: 'true',
+      };
+      const native = await promisify(execFile)(
+        opencode,
+        [
+          '--standalone',
+          'run',
+          '--format',
+          'json',
+          '--model',
+          config.model,
+          'remember native-opencode-cli-marker',
+        ],
+        { cwd: home, env, timeout: 40_000 }
+      );
+      expect(native.stdout).toMatch(/"text"\s*:\s*"A"/);
+      expect(
+        seen.some(
+          (request) =>
+            request.upstream === 'A' &&
+            request.model === 'upstream' &&
+            JSON.stringify(request.input).includes('native-opencode-cli-marker')
+        )
+      ).toBe(true);
+      const acp = startAcpTestClient(opencode, home, env, ['acp']);
+      try {
+        await acp.call('initialize', {
+          protocolVersion: 1,
+          clientCapabilities: {},
+          clientInfo: { name: 'emdash-native-opencode-test', version: '1' },
+        });
+        const session = (await acp.call('session/new', { cwd: home, mcpServers: [] })) as {
+          sessionId: string;
+        };
+        expect(
+          await acp.call('session/prompt', {
+            sessionId: session.sessionId,
+            prompt: [{ type: 'text', text: 'remember native-opencode-acp-marker' }],
+          })
+        ).toMatchObject({ stopReason: 'end_turn' });
+        expect(
+          seen.some(
+            (request) =>
+              request.upstream === 'A' &&
+              request.model === 'upstream' &&
+              JSON.stringify(request.input).includes('native-opencode-acp-marker')
+          )
+        ).toBe(true);
+      } finally {
+        await acp.close();
+      }
+    }
     expect(
       (
         await fetch(first.provider.baseUrl + '/responses', {
@@ -372,6 +468,7 @@ describe.runIf(built)('model gateway process integration', () => {
       ).status
     ).toBe(404);
     localConversation = true;
+    await expect.poll(async () => (await service.usage(100)).length).toBe(seen.length);
     const recorded = await service.usage(100);
     await routes.clear();
     expect(await service.usage(100)).toEqual(recorded);

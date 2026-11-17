@@ -2,8 +2,17 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
 /** Real adapter protocol driver for the gateway integration tests. */
-export function startAcpTestClient(adapter: string, cwd: string, env: NodeJS.ProcessEnv) {
-  const child = spawn(process.execPath, [adapter], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+export function startAcpTestClient(
+  adapter: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  nativeArgs?: string[]
+) {
+  const child = spawn(nativeArgs ? adapter : process.execPath, nativeArgs ?? [adapter], {
+    cwd,
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
   let diagnostics = '';
   child.stderr.on('data', (chunk: Buffer) => {
     diagnostics = (diagnostics + chunk.toString()).slice(-3000);
@@ -12,12 +21,22 @@ export function startAcpTestClient(adapter: string, cwd: string, env: NodeJS.Pro
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
   const lines = createInterface({ input: child.stdout });
   lines.on('line', (line) => {
-    const value = JSON.parse(line) as {
+    let value: {
       id?: number;
       method?: string;
       result?: unknown;
       error?: { message: string; data?: unknown };
     };
+    try {
+      value = JSON.parse(line);
+    } catch {
+      for (const request of pending.values()) {
+        request.reject(new Error('ACP process returned non-JSON output'));
+      }
+      pending.clear();
+      child.kill();
+      return;
+    }
     if (value.method && value.id !== undefined) {
       child.stdin.write(
         JSON.stringify({
