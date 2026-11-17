@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
+import type * as FileSystem from 'node:fs/promises';
 import {
+  cp,
   lstat,
   mkdir,
   mkdtemp,
@@ -12,7 +14,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   frontmatterField,
   importSkills,
@@ -21,6 +23,11 @@ import {
   syncWorkspaceSkills,
   takeOverSkills,
 } from './skill-library';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof FileSystem>();
+  return { ...actual, cp: vi.fn(actual.cp) };
+});
 
 async function skill(dir: string, name: string, description = `${name} does things`) {
   await mkdir(path.join(dir, name), { recursive: true });
@@ -114,6 +121,37 @@ describe('skill library', () => {
     expect(exclude).not.toContain('/.claude/skills/grill-me');
     expect(exclude.match(/\/\.omp\/mcp\.json/g)).toHaveLength(1);
     expect(exclude).toContain('/.omp/.mcp.json.*.tmp');
+  });
+
+  it('excludes generated Cursor files before copying them while preserving repository-owned skills', async () => {
+    await skill(path.join(workspace, '.cursor', 'skills'), 'archify', 'Repository skill');
+    const actual = await vi.importActual<typeof FileSystem>('node:fs/promises');
+    vi.mocked(cp).mockClear();
+    vi.mocked(cp).mockImplementationOnce(async (source, destination, options) => {
+      expect(
+        execFileSync('git', ['check-ignore', '.cursor/skills/grill-me/SKILL.md'], {
+          cwd: workspace,
+        })
+          .toString()
+          .trim()
+      ).toBe('.cursor/skills/grill-me/SKILL.md');
+      expect(
+        execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+          cwd: workspace,
+        }).toString()
+      ).toContain('.cursor/skills/archify/SKILL.md');
+      await actual.cp(source, destination, options);
+    });
+    try {
+      await syncWorkspaceSkills({
+        workspacePath: workspace,
+        libraryDir: library,
+        names: ['grill-me', 'archify'],
+      });
+      expect(cp).toHaveBeenCalledOnce();
+    } finally {
+      vi.mocked(cp).mockReset().mockImplementation(actual.cp);
+    }
   });
 
   it('copies wanted skills into .cursor/skills for Cursor, refreshing only changed ones', async () => {

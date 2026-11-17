@@ -111,15 +111,17 @@ export async function syncWorkspaceSkills(input: {
       excluded.push(`/${relativeDir}/${name}`);
     }
   }
-  const copies = await syncCursorSkillCopies(input);
+  const writeExcludes = (cursorPaths: readonly string[]) =>
+    writeExcludeBlock(input.workspacePath, [
+      ...excluded,
+      ...cursorPaths,
+      `/${OMP_MCP_CONFIG_RELATIVE_PATH}`,
+      `/${path.posix.dirname(OMP_MCP_CONFIG_RELATIVE_PATH)}/.mcp.json.*.tmp`,
+    ]);
+  const copies = await syncCursorSkillCopies(input, writeExcludes);
   for (const name of copies.copied) linked.add(name);
   for (const name of copies.shadowed) shadowed.add(name);
-  await writeExcludeBlock(input.workspacePath, [
-    ...excluded,
-    ...copies.excluded,
-    `/${OMP_MCP_CONFIG_RELATIVE_PATH}`,
-    `/${path.posix.dirname(OMP_MCP_CONFIG_RELATIVE_PATH)}/.mcp.json.*.tmp`,
-  ]);
+  await writeExcludes(copies.excluded);
   return { linked: [...linked], shadowed: [...shadowed] };
 }
 
@@ -128,17 +130,22 @@ export async function syncWorkspaceSkills(input: {
  * links there), each stamped with its source's hash so unchanged skills are not
  * recopied. Folders without the marker are the repository's own and are never touched.
  */
-async function syncCursorSkillCopies(input: {
-  workspacePath: string;
-  libraryDir: string;
-  names: readonly string[];
-}): Promise<{ copied: string[]; shadowed: string[]; excluded: string[] }> {
+async function syncCursorSkillCopies(
+  input: {
+    workspacePath: string;
+    libraryDir: string;
+    names: readonly string[];
+  },
+  beforeCopy: (excluded: readonly string[]) => Promise<void>
+): Promise<{ copied: string[]; shadowed: string[]; excluded: string[] }> {
   const libraryRoot = path.resolve(input.libraryDir);
   const wanted = new Set(input.names);
   const dir = path.join(input.workspacePath, CURSOR_SKILLS_DIR);
   const copied: string[] = [];
   const shadowed: string[] = [];
   const excluded: string[] = [];
+  const pending: { name: string; copy: string; marker: string; hash: string; replace: boolean }[] =
+    [];
 
   // Drop only Emdash's own copies (they carry the marker) of skills the workspace
   // should no longer have; anything else in there is the repository's.
@@ -154,7 +161,8 @@ async function syncCursorSkillCopies(input: {
     const copy = path.join(dir, name);
     const marker = path.join(copy, COPY_MARKER);
     const hash = await folderHash(path.join(libraryRoot, name));
-    if (!(await exists(marker))) {
+    const replace = await exists(marker);
+    if (!replace) {
       if (await exists(copy)) {
         // The repository ships its own skill under this name; it wins.
         shadowed.push(name);
@@ -165,14 +173,19 @@ async function syncCursorSkillCopies(input: {
       copied.push(name);
       excluded.push(`/${CURSOR_SKILLS_DIR}/${name}`);
       continue;
-    } else {
-      await rm(copy, { recursive: true, force: true });
     }
+    pending.push({ name, copy, marker, hash, replace });
+    copied.push(name);
+    excluded.push(`/${CURSOR_SKILLS_DIR}/${name}`);
+  }
+  // Register only managed paths before publishing files, so Git observers never
+  // enumerate a large library copy as untracked code during synchronization.
+  await beforeCopy(excluded);
+  for (const { name, copy, marker, hash, replace } of pending) {
+    if (replace) await rm(copy, { recursive: true, force: true });
     // Dereference so links inside a library skill become real files, which Cursor reads.
     await cp(path.join(libraryRoot, name), copy, { recursive: true, dereference: true });
     await writeFile(marker, hash);
-    copied.push(name);
-    excluded.push(`/${CURSOR_SKILLS_DIR}/${name}`);
   }
   return { copied, shadowed, excluded };
 }
