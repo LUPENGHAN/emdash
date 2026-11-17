@@ -6,6 +6,7 @@ import { parseChannelPointer, protocolMajor } from '@emdash/core/workspace-serve
 import { createScope } from '@emdash/shared/concurrency';
 import { deferred } from '@emdash/shared/testing';
 import { createLiveJobReplicaCache } from '@emdash/wire/live';
+import { verifyRemoteCoordination } from '@tooling/acceptance/remote-coordination';
 import type { ConnectConfig } from 'ssh2';
 import { describe, expect, it } from 'vitest';
 import { createHosts } from '@core/services/hosts/node/hosts';
@@ -22,9 +23,13 @@ describe.skipIf(!remoteTestEnabled)('workspace-server cold install over Docker S
     const connectionId = 'docker-workspace-server-smoke';
     const scope = createScope({ label: 'workspace-server-docker-test' });
     const manager = new SshConnectionManager();
+    const port = Number(process.env['EMDASH_TEST_REMOTE_WSS_PORT'] ?? '2223');
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error('EMDASH_TEST_REMOTE_WSS_PORT must be a valid TCP port');
+    }
     const connectConfig: ConnectConfig = {
       host: '127.0.0.1',
-      port: 2223,
+      port,
       username: 'devuser',
       password: 'devpass',
       readyTimeout: 10_000,
@@ -80,6 +85,16 @@ describe.skipIf(!remoteTestEnabled)('workspace-server cold install over Docker S
       await connect();
       const bootstrapProxy = manager.getProxy(connectionId);
       if (!bootstrapProxy) throw new Error('Docker SSH proxy did not connect');
+      if (process.env['EMDASH_TEST_REMOTE_WSS_PORT']) {
+        const token = process.env['EMDASH_TEST_REMOTE_WSS_FIXTURE_TOKEN'];
+        if (!token) throw new Error('A custom SSH port requires an isolated fixture token');
+        const marker = await bootstrapProxy.exec({
+          command: 'cat',
+          args: ['/home/devuser/.emdash-coordination-acceptance'],
+        });
+        expect(marker.exitCode).toBe(0);
+        expect(marker.stdout.trim() === token).toBe(true);
+      }
       await resetManagedRoot(bootstrapProxy, layout);
       hosts.lease(connectionId, scope);
       await service.runtime.client();
@@ -161,6 +176,14 @@ describe.skipIf(!remoteTestEnabled)('workspace-server cold install over Docker S
         disconnected.resolve()
       );
       const daemonId = connection.currentHandshake()?.server.daemonId;
+      const coordination = process.env['EMDASH_TEST_REMOTE_COORDINATION_EVIDENCE']
+        ? await verifyRemoteCoordination({
+            runtime: resolved.data,
+            proxy: bootstrapProxy,
+            connectionId,
+            version: expectedVersion,
+          })
+        : undefined;
       manager.getProxy(connectionId)?.client.destroy();
       await disconnected.promise;
       stopWatchingDisconnect();
@@ -173,6 +196,8 @@ describe.skipIf(!remoteTestEnabled)('workspace-server cold install over Docker S
         },
       });
       expect(invalidations).toEqual([]);
+      await coordination?.afterReconnect();
+      await coordination?.cleanup();
     } finally {
       const proxy = await manager
         .createConnection(connectionId, async () => ({
