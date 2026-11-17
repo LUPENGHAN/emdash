@@ -100,6 +100,18 @@ export function createConversationsWireController(
         options.sessionLaunchContexts,
         options.prepareAgentLaunch
       ));
+  // Live state subscriptions only need the owning Host. Preparing a launch here
+  // repeats skill synchronization and model routing for every observed state.
+  const resolveObservationTarget =
+    options.resolveTarget ??
+    ((conversationId) =>
+      resolveConversationRuntimeTarget(
+        conversationId,
+        options.workspaceIdentity,
+        options.db,
+        undefined,
+        options.sessionLaunchContexts
+      ));
   const hooks = options.hooks ?? createDefaultRuntimeHooks(options);
   const configurationChanges = createKeyedLanes();
   const conversationOperations = createConversationOperations({
@@ -129,8 +141,10 @@ export function createConversationsWireController(
     )
   );
   const acpSession = forwardLiveModel(conversationsContract.acp.session, (key, name) =>
-    resolveConversationRuntimeSource(options, target(key.conversationId), (client) =>
-      client.acp.session.state(key, name).asLiveSource()
+    resolveConversationRuntimeSource(
+      options,
+      resolveObservationTarget(key.conversationId),
+      (client) => client.acp.session.state(key, name).asLiveSource()
     )
   );
   const tuiSessions = forwardLiveModel(conversationsContract.tui.sessions, (key, name) =>

@@ -12,8 +12,12 @@ import { encodeTopic, isDownloadFileOpenResult, WireError, type WireFile } from 
 import { describe, expect, it, vi } from 'vitest';
 import { conversationsContract } from '../api';
 import type { ConversationsRuntimeResolveError as RuntimeResolveError } from '../api/runtime-adapter';
+import * as runtimeTargets from './conversation-runtime-target';
 import { getProviderSettingsService } from './provider-settings-service';
-import { createConversationsWireController } from './wire-controller';
+import {
+  createConversationsWireController,
+  type CreateConversationsWireControllerOptions,
+} from './wire-controller';
 
 vi.mock('./provider-settings-service', async () => {
   const { cell, expose } = await import('@emdash/wire/state');
@@ -60,6 +64,48 @@ const target = {
 type TestRuntimeTarget = typeof target;
 
 describe('createConversationsWireController', () => {
+  it('observes ACP states without preparing skills or model routes, then prepares an explicit attachment', async () => {
+    const prepareAgentLaunch = vi.fn(async () => []);
+    const getProviderEnv = vi.fn(async () => ({ FIXTURE_MODEL: 'selected' }));
+    const resolve = vi
+      .spyOn(runtimeTargets, 'resolveConversationRuntimeTarget')
+      .mockImplementation(
+        async (conversationId, _identity, _db, providerEnv, _contexts, prepare) => {
+          await providerEnv?.('claude');
+          await prepare?.({ conversationId, projectId: target.projectId, workspacePath: '/repo' });
+          return target;
+        }
+      );
+    const source: LiveSource = {
+      snapshot: async () => ({ generation: 1, sequence: 0, timestamp: 0, data: {} }),
+      subscribe: () => () => {},
+    };
+    const state = vi.fn(() => ({ asLiveSource: () => source }));
+    const controller = setupController({
+      client: { acp: { session: { state }, attach: async () => ok({ sessionId: null }) } },
+      useDefaultTargetResolution: true,
+      preparation: { prepareAgentLaunch, getProviderEnv },
+    });
+    const leases = Object.values(conversationsContract.acp.session.states).map((definition) =>
+      controller.acquireLive(encodeTopic(definition.id, { conversationId: target.conversationId }))
+    );
+    try {
+      for (const lease of leases) await lease?.ready();
+      expect(state).toHaveBeenCalledTimes(leases.length);
+      expect(prepareAgentLaunch).not.toHaveBeenCalled();
+      expect(getProviderEnv).not.toHaveBeenCalled();
+      expect(
+        await controller.call('acp.attach', { conversationId: target.conversationId })
+      ).toEqual(ok({ sessionId: null }));
+      expect(prepareAgentLaunch).toHaveBeenCalledOnce();
+      expect(getProviderEnv).toHaveBeenCalledOnce();
+    } finally {
+      for (const lease of leases) await lease?.release();
+      await controller.dispose?.();
+      resolve.mockRestore();
+    }
+  });
+
   it.each([false, true])(
     'shares native preferences only after provider acceptance (%s)',
     async (success) => {
@@ -778,6 +824,11 @@ function setupController(options: {
   runtimeError?: RuntimeResolveError;
   attachmentError?: { type: 'project-missing'; projectId: string };
   resolvedHosts?: HostRef[];
+  useDefaultTargetResolution?: boolean;
+  preparation?: Pick<
+    CreateConversationsWireControllerOptions,
+    'getProviderEnv' | 'prepareAgentLaunch'
+  >;
   hooks?: Partial<{
     recordTuiInput: (target: TestRuntimeTarget) => Promise<void>;
   }>;
@@ -787,6 +838,7 @@ function setupController(options: {
     ...options.hooks,
   };
   return createConversationsWireController({
+    ...options.preparation,
     terminalFileSources: { prepare: vi.fn() },
     getHiddenContext: options.getHiddenContext,
     db: {} as never,
@@ -826,11 +878,13 @@ function setupController(options: {
     taskSessions: { getTask: vi.fn() },
     withCompensation: async ({ action }) => action(),
     hostIsReachable: () => true,
-    resolveTarget: async () => ({
-      ...target,
-      host: options.host ?? target.host,
-      conversationType: options.conversationType ?? target.conversationType,
-    }),
+    resolveTarget: options.useDefaultTargetResolution
+      ? undefined
+      : async () => ({
+          ...target,
+          host: options.host ?? target.host,
+          conversationType: options.conversationType ?? target.conversationType,
+        }),
     hooks,
   });
 }
