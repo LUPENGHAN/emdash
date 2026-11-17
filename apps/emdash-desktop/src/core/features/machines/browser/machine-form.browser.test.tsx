@@ -36,7 +36,8 @@ let container: HTMLDivElement;
 let root: Root;
 let queryClient: QueryClient;
 
-beforeEach(() => {
+beforeEach(async () => {
+  await page.viewport(1024, 800);
   vi.clearAllMocks();
   store.connections = [];
   store.getSshConfigHosts.mockResolvedValue([resolvedHost]);

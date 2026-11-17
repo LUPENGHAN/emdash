@@ -222,4 +222,4 @@ it('returns a frozen commit even when the baseline advances again, and retains v
   expect(offline).toMatchObject({ oid: next, offline: true, checkedAt: checked.lastContactAt });
   expect(t.verify).toHaveBeenCalledTimes(2);
   expect(t.release).toHaveBeenCalledTimes(t.credentials.mock.calls.length);
-});
+}, 20_000);

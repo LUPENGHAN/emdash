@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as ProjectSelectors from '@core/features/projects/api/browser/stores/project-selectors';
+import type { GitStatusSection as GitStatusSectionComponent } from './git-status-section';
 
 const harness = vi.hoisted(() => ({
   wtSwitch: vi.fn(async () => ok(undefined)),
@@ -86,6 +87,7 @@ vi.mock('@core/manifests/browser/project-availability-ui', () => ({
 describe('GitStatusSection branch switch', () => {
   let dom: JSDOM;
   let root: Root;
+  let GitStatusSection: typeof GitStatusSectionComponent;
 
   beforeEach(async () => {
     harness.wtSwitch.mockClear();
@@ -132,6 +134,7 @@ describe('GitStatusSection branch switch', () => {
     }
     vi.resetModules();
     root = createRoot(dom.window.document.getElementById('root') as HTMLDivElement);
+    ({ GitStatusSection } = await import('./git-status-section'));
   });
 
   afterEach(() => {
@@ -141,7 +144,6 @@ describe('GitStatusSection branch switch', () => {
   });
 
   it('calls switchBranch on the task workspace only', async () => {
-    const { GitStatusSection } = await import('./git-status-section');
     await act(async () => {
       root.render(<GitStatusSection />);
     });
