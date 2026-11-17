@@ -12,6 +12,8 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    // Workspace tests also start native Git and language-server subprocesses.
+    maxWorkers: 4,
     setupFiles: [resolve(__dirname, '../../tooling/vitest/setup-isolated-home.mjs')],
     include: ['**/*.test.ts', '**/*.test.tsx'],
   },

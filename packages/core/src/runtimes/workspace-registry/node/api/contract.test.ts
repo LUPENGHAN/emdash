@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createScope } from '@emdash/shared/concurrency';
-import { ManualClock } from '@emdash/shared/testing';
+import { deferred, ManualClock } from '@emdash/shared/testing';
 import type { LiveUpdate } from '@emdash/wire/rpc';
 import { pin, remote, snapshot } from '@emdash/wire/state';
 import { createTestWire, type TestWire } from '@emdash/wire/testing';
@@ -938,8 +938,23 @@ describe('workspace registry contract', () => {
       patch: { preservePatterns: ['.env.personal'] },
     });
 
+    const pushEntered = deferred<void>();
+    const releasePush = deferred<void>();
+    const createExec = execApi.createBoundExec;
+    vi.spyOn(execApi, 'createBoundExec').mockImplementation((options) => {
+      const exec = createExec(options);
+      const run = exec.exec.bind(exec);
+      vi.spyOn(exec, 'exec').mockImplementation(async (args, execOptions) => {
+        if (args[0] === 'push' && args[2] === 'fork' && args[3] === 'feature/new') {
+          pushEntered.resolve();
+          await releasePush.promise;
+        }
+        return run(args, execOptions);
+      });
+      return exec;
+    });
     const worktreePath = path.join(root, 'feature-wt');
-    const created = await wire.client.createWorktree({
+    const creation = wire.client.createWorktree({
       workspaceId: 'ws-new',
       repositoryId: 'ws-repo',
       branch: 'feature/new',
@@ -948,53 +963,60 @@ describe('workspace registry contract', () => {
       preservePatterns: ['.env.input'],
       publish: { remote: 'fork' },
     });
-    // The verb returns at agent-spawnable: worktree checked out, background pending.
-    expect(created).toMatchObject({
-      success: true,
-      data: {
-        id: 'ws-new',
-        kind: 'worktree',
-        parentId: 'ws-repo',
-        origin: 'registered',
-        observedStatus: 'present',
-        creation: { branch: 'feature/new', baseRef: 'origin/main', requestedPath: worktreePath },
-        lastCreateOutcome: { status: 'succeeded' },
-        git: { branch: 'feature/new' },
-      },
-    });
-    if (!created.success) throw new Error('expected success');
-    expect(created.data.gitAdminName).not.toBeNull();
-    // No push happened on the critical path.
-    expect(git(repoPath, 'ls-remote', '--heads', 'fork', 'feature/new')).toBe('');
+    try {
+      const created = await creation;
+      await pushEntered.promise;
+      // The RPC resolves while publication is held, independently of subprocess timing.
+      expect(created).toMatchObject({
+        success: true,
+        data: {
+          id: 'ws-new',
+          kind: 'worktree',
+          parentId: 'ws-repo',
+          origin: 'registered',
+          observedStatus: 'present',
+          creation: { branch: 'feature/new', baseRef: 'origin/main', requestedPath: worktreePath },
+          lastCreateOutcome: { status: 'succeeded' },
+          git: { branch: 'feature/new' },
+        },
+      });
+      if (!created.success) throw new Error('expected success');
+      expect(created.data.gitAdminName).not.toBeNull();
+      // No push happened on the critical path.
+      expect(git(repoPath, 'ls-remote', '--heads', 'fork', 'feature/new')).toBe('');
 
-    // The background steps settle: artifacts cloned, branch pushed, statuses durable.
-    await eventually(async () => {
+      releasePush.resolve();
+      // The background steps settle: artifacts cloned, branch pushed, statuses durable.
+      await eventually(async () => {
+        const records = await listRecords();
+        expect(lifecycleStep(records['ws-new'], 'copy-artifacts')).toMatchObject({
+          status: 'succeeded',
+        });
+        expect(lifecycleStep(records['ws-new'], 'push-branch')).toMatchObject({
+          status: 'succeeded',
+        });
+      });
+      await fs.access(path.join(created.data.path, '.env.personal'));
+      await expect(fs.access(path.join(created.data.path, '.env.team'))).rejects.toThrow();
+      await expect(fs.access(path.join(created.data.path, '.env.input'))).rejects.toThrow();
+      // The unnamed ignored artifact (node_modules) is deliberately not copied.
+      await expect(fs.access(path.join(created.data.path, 'node_modules'))).rejects.toThrow();
+      // The copy step records the matched entry count for the Activity description.
       const records = await listRecords();
       expect(lifecycleStep(records['ws-new'], 'copy-artifacts')).toMatchObject({
-        status: 'succeeded',
+        params: { fileCount: 1 },
       });
-      expect(lifecycleStep(records['ws-new'], 'push-branch')).toMatchObject({
-        status: 'succeeded',
-      });
-    });
-    await fs.access(path.join(created.data.path, '.env.personal'));
-    await expect(fs.access(path.join(created.data.path, '.env.team'))).rejects.toThrow();
-    await expect(fs.access(path.join(created.data.path, '.env.input'))).rejects.toThrow();
-    // The unnamed ignored artifact (node_modules) is deliberately not copied.
-    await expect(fs.access(path.join(created.data.path, 'node_modules'))).rejects.toThrow();
-    // The copy step records the matched entry count for the Activity description.
-    const records = await listRecords();
-    expect(lifecycleStep(records['ws-new'], 'copy-artifacts')).toMatchObject({
-      params: { fileCount: 1 },
-    });
-    expect(git(repoPath, 'ls-remote', '--heads', 'fork', 'feature/new')).toContain(
-      'refs/heads/feature/new'
-    );
-    expect(git(repoPath, 'ls-remote', '--heads', 'origin', 'feature/new')).toBe('');
-    expect(git(repoPath, 'config', 'branch.feature/new.remote')).toBe('fork');
-    expect(git(repoPath, 'config', 'branch.feature/new.merge')).toBe('refs/heads/feature/new');
-    // git status in the new worktree stays clean — artifacts are all ignored.
-    expect(git(created.data.path, 'status', '--porcelain')).toBe('');
+      expect(git(repoPath, 'ls-remote', '--heads', 'fork', 'feature/new')).toContain(
+        'refs/heads/feature/new'
+      );
+      expect(git(repoPath, 'ls-remote', '--heads', 'origin', 'feature/new')).toBe('');
+      expect(git(repoPath, 'config', 'branch.feature/new.remote')).toBe('fork');
+      expect(git(repoPath, 'config', 'branch.feature/new.merge')).toBe('refs/heads/feature/new');
+      // git status in the new worktree stays clean — artifacts are all ignored.
+      expect(git(created.data.path, 'status', '--porcelain')).toBe('');
+    } finally {
+      releasePush.resolve();
+    }
   });
 
   it('concurrent worktree creations against one repository both succeed unserialized', async () => {

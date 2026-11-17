@@ -35,6 +35,8 @@ const nodeSetupFiles = [
 export default defineConfig({
   resolve: { alias },
   test: {
+    // Leave capacity for the native processes started by Host integration tests.
+    maxWorkers: 4,
     projects: [
       {
         // All existing tests that run in a Node.js environment.
