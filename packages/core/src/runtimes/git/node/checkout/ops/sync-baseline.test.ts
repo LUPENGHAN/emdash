@@ -1,5 +1,6 @@
-import { execFile } from 'node:child_process';
+import { execFile, fork } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -16,6 +17,37 @@ import { GitRuntime } from '#runtimes/git/node/git-runtime';
 import { hostPath } from '#runtimes/git/node/testing/paths';
 import { createBoundExec, type BoundExec } from '#services/exec/api';
 import { syncBaseline } from './sync-baseline';
+
+function crashWorker(repository: string, stage: 'after-fetch' | 'after-merge' | 'complete') {
+  const child = fork(
+    new URL('../../testing/baseline-sync-crash-worker.ts', import.meta.url),
+    [repository, stage],
+    {
+      execArgv: ['--import', 'tsx', '--conditions=development'],
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    }
+  );
+  let stderr = '';
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString()).slice(-4000);
+  });
+  const exited = once(child, 'exit');
+  cleanups.push(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+  });
+  const ready = new Promise<unknown>((resolve, reject) => {
+    child.on('message', (message) => {
+      if (message && typeof message === 'object' && 'phase' in message && message.phase === stage)
+        resolve(message);
+    });
+    child.once('error', reject);
+    child.once('exit', () =>
+      reject(new Error(`The crash fixture exited before ${stage}: ${stderr}`))
+    );
+  });
+  return { child, ready, exited };
+}
 
 const execute = promisify(execFile);
 const cleanups: (() => Promise<void>)[] = [];
@@ -149,6 +181,102 @@ it('fast-forwards a clean checked-out baseline from the fetch URL, preserving in
     success: true,
     data: { kind: 'current', afterOid: target },
   });
+});
+
+it.each(['after-fetch', 'after-merge'] as const)(
+  'survives a real SIGKILL %s without candidate refs or FETCH_HEAD writes and resumes in a fresh Host',
+  async (stage) => {
+    const t = await setup();
+    const target = await t.advance();
+    const fetchHead = path.join(t.repo, '.git', 'FETCH_HEAD');
+    await writeFile(fetchHead, 'Preserve the caller fetch observation\n');
+    const first = crashWorker(t.repo, stage);
+    await first.ready;
+    expect(
+      await t.git(t.repo, 'for-each-ref', '--format=%(refname)', 'refs/emdash/baseline-candidates')
+    ).toBe('');
+    expect(await t.git(t.repo, 'cat-file', '-t', target)).toBe('commit');
+    expect(first.child.kill('SIGKILL')).toBe(true);
+    expect(await first.exited).toEqual([null, 'SIGKILL']);
+    expect(await t.git(t.repo, 'rev-parse', 'develop')).toBe(
+      stage === 'after-merge' ? target : t.before
+    );
+    const restored = crashWorker(t.repo, 'complete');
+    expect(await restored.ready).toMatchObject({
+      phase: 'complete',
+      result: {
+        success: true,
+        data: { kind: stage === 'after-merge' ? 'current' : 'updated', afterOid: target },
+      },
+    });
+    expect(await restored.exited).toEqual([0, null]);
+    expect(await readFile(fetchHead, 'utf8')).toBe('Preserve the caller fetch observation\n');
+    expect(await t.git(t.repo, 'rev-parse', 'HEAD')).toBe(target);
+  },
+  20_000
+);
+
+it('fetches only the advertised object and preserves unrelated client refs and FETCH_HEAD', async () => {
+  const t = await setup();
+  const target = await t.advance();
+  const fetchHead = path.join(t.repo, '.git', 'FETCH_HEAD');
+  await writeFile(fetchHead, 'Another client observation\n');
+  const other = 'refs/emdash/baseline-candidates/another-active-client';
+  await t.git(t.repo, 'update-ref', other, t.before);
+  const recorded = vi.spyOn(t.bound, 'exec');
+  expect(await t.run()).toMatchObject({ success: true, data: { afterOid: target } });
+  const networkFetch = recorded.mock.calls.find(
+    ([args]) => args[0] === 'fetch' && args.includes('upstream')
+  )?.[0];
+  expect(networkFetch?.at(-1)).toBe(target);
+  expect(networkFetch?.some((arg) => arg.includes('baseline-candidates'))).toBe(false);
+  expect(await t.git(t.repo, 'rev-parse', other)).toBe(t.before);
+  expect(await readFile(fetchHead, 'utf8')).toBe('Another client observation\n');
+  // Remove only this test's independent-client fixture before the shared invariant check.
+  await t.git(t.repo, 'update-ref', '-d', other, t.before);
+});
+
+it.each(['missing', 'wrong-ref', 'duplicate', 'malformed', 'extra-field'] as const)(
+  'refuses %s upstream advertisement before fetching or approving history',
+  async (kind) => {
+    const t = await setup();
+    const execute = t.bound.exec.bind(t.bound);
+    const record = vi.spyOn(t.bound, 'exec').mockImplementation(async (args, options) => {
+      if (args[0] !== 'ls-remote') return execute(args, options);
+      const valid = `${t.before}\t${t.input.upstreamRef}\n`;
+      return {
+        stderr: '',
+        stdout:
+          kind === 'missing'
+            ? ''
+            : kind === 'wrong-ref'
+              ? `${t.before}\trefs/heads/other\n`
+              : kind === 'duplicate'
+                ? valid + valid
+                : kind === 'extra-field'
+                  ? `${valid.trimEnd()}\tunexpected\n`
+                  : `not-an-object\t${t.input.upstreamRef}\n`,
+      };
+    });
+    expect(await t.run()).toMatchObject({
+      success: true,
+      data: { kind: 'blocked', reason: 'history-unavailable' },
+    });
+    expect(record.mock.calls.some(([args]) => args[0] === 'fetch')).toBe(false);
+    expect(await t.git(t.repo, 'rev-parse', 'HEAD')).toBe(t.before);
+  }
+);
+
+it('passes the operation credential context to both advertisement and object fetch', async () => {
+  const t = await setup();
+  await t.advance();
+  const calls = vi.spyOn(t.bound, 'exec');
+  const env = { EMDASH_TEST_BASELINE_AUTH_CONTEXT: 'fixture' };
+  expect((await syncBaseline(t.bound, identity(t.repo), t.input, { env })).success).toBe(true);
+  expect(calls.mock.calls.find(([args]) => args[0] === 'ls-remote')?.[1]?.env).toEqual(env);
+  expect(
+    calls.mock.calls.find(([args]) => args[0] === 'fetch' && args.includes('upstream'))?.[1]?.env
+  ).toEqual(env);
 });
 
 it('updates an unchecked baseline without switching the active checkout or forcing a branch', async () => {

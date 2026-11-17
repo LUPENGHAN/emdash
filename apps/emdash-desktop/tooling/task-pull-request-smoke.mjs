@@ -264,6 +264,10 @@ try {
   );
   assert.equal(approvedBaseline.proof.oid, baseline);
   assert.equal(approvedBaseline.proof.verification, 'succeeded');
+  assert.equal(
+    await git('for-each-ref', '--format=%(refname)', 'refs/emdash/baseline-candidates'),
+    ''
+  );
   await baselineSection
     .getByRole('status')
     .screenshot({ path: join(profile, 'baseline-verification-approved.png') });
@@ -643,6 +647,10 @@ try {
   await advancedSection
     .getByRole('status')
     .screenshot({ path: join(profile, 'baseline-offline-delegation.png') });
+  assert.equal(
+    await git('for-each-ref', '--format=%(refname)', 'refs/emdash/baseline-candidates'),
+    ''
+  );
   await writeFile(
     join(profile, 'result.json'),
     JSON.stringify(
@@ -656,6 +664,7 @@ try {
           'cleanup refused ignored verification output and preserved both the file and baseline approval',
           'the settings cleanup retry removed only the unchanged checkout and retained its branch and verification evidence',
           'complete restart retained cleanup completion and approved delegation without recreating the cleaned checkout',
+          'baseline fetches created no private candidate refs across success, verification failure, upstream rewrite, restart and offline recovery',
           'real smart HTTP Git publication to a loopback personal fork with pinned task OID',
           'main platform response loss persisted and worker creation reused the same PR',
           'complete restart restored the request and UI continued without another platform create',

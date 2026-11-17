@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { err, ok, type Result } from '@emdash/shared';
 import { gitErr, type CheckoutHeadState } from '#runtimes/git/api';
@@ -68,7 +68,6 @@ export async function syncBaseline(
     (await run(['for-each-ref', '--format=%(refname)', '--', ref])).stdout
       .split('\n')
       .includes(ref);
-  const candidate = `refs/emdash/baseline-candidates/${randomUUID()}`;
   let diagnostic: BaselineSyncObservation | undefined;
   try {
     const url = await remoteUrl();
@@ -112,8 +111,21 @@ export async function syncBaseline(
     observation.previousUpstreamOid = await readOid(checkpoint);
     if (!observation.previousUpstreamOid && (await refExists(checkpoint)))
       return await blocked('history-unavailable');
-    // Fetch only a private observation ref: configured fetch refspecs, tags, and task refs
-    // cannot become destinations. A rejected history stays behind the accepted checkpoint.
+    // Resolve exactly the configured upstream, then fetch its immutable object without
+    // a destination ref. A killed Host cannot leave a temporary ref for another instance
+    // to misclassify as abandoned. Configured refspecs and FETCH_HEAD remain untouched.
+    const advertised = await exec.exec(
+      ['ls-remote', '--refs', '--', input.remote, input.upstreamRef],
+      { signal: context.signal, env: context.env }
+    );
+    const matches = advertised.stdout
+      .split(/\r?\n/)
+      .map((line) => line.split('\t'))
+      .filter((fields) => fields[1] === input.upstreamRef);
+    const target = matches.length === 1 && matches[0].length === 2 ? matches[0][0] : undefined;
+    if (!target || !/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(target))
+      return await blocked('history-unavailable');
+    if ((await remoteUrl()) !== url) return await blocked('remote-changed');
     await execGitWithProgress(
       exec,
       [
@@ -126,12 +138,11 @@ export async function syncBaseline(
         '--refmap=',
         '--',
         input.remote,
-        `${input.upstreamRef}:${candidate}`,
+        target,
       ],
       context
     );
-    const target = await readOid(candidate);
-    if (!target) return await blocked('history-unavailable');
+    if ((await readOid(target)) !== target) return await blocked('history-unavailable');
     observation.upstreamOid = target;
     const prior = observation.previousUpstreamOid;
     if (prior && !(await ancestor(prior, target))) return await blocked('upstream-rewritten');
@@ -218,9 +229,6 @@ export async function syncBaseline(
       ...failure.error,
       observation: { ...diagnostic, afterOid: await readOid(input.baselineRef) },
     });
-  } finally {
-    // Cleanup owns only this request's private ref and never follows a symbolic ref.
-    await exec.exec(['update-ref', '--no-deref', '-d', candidate]).catch(() => {});
   }
 }
 
