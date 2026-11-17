@@ -278,6 +278,18 @@ async function waitForDocumentSave(path, expected) {
     void check();
   });
 }
+async function traceNavigation() {
+  await page.addScriptTag({
+    type: 'module',
+    content: `import {getNavigation} from '/@fs${join(appRoot, 'src/core/primitives/navigation/browser/navigation-selectors.ts')}';
+      window.acceptanceNavigation = [];
+      getNavigation().onDidNavigate.subscribe(event => window.acceptanceNavigation.push({
+        at: Date.now(), source: event.source, fromTask: event.from?.params?.taskId,
+        toTask: event.to.params?.taskId, projectId: event.to.params?.projectId,
+        viewId: event.to.viewId, stack: new Error('Navigation observation').stack
+      }));`,
+  });
+}
 try {
   app = await _electron.launch({
     executablePath: electronPath,
@@ -317,6 +329,7 @@ try {
       Object.assign(window, { prepareCoordinator, coordinatorSnapshot, createReplacementMain, prepareAdditionalProject, allCoordinatorSnapshots, createTerminalMain });`,
   });
   await page.waitForFunction(() => typeof window.prepareCoordinator === 'function');
+  await traceNavigation();
   const coordinator = await page.evaluate((input) => window.prepareCoordinator(input), {
     wrapper,
     mainWrapper,
@@ -564,16 +577,54 @@ try {
   });
   const revision = await page.evaluate((id) => window.coordinatorSnapshot(id), coordinator.taskId);
   assert.equal(revision.tasks[created.task_id].state, 'changes_requested');
+  const staleDecision = await client.callTool({
+    name: 'review_task_result',
+    arguments: {
+      task_id: created.task_id,
+      result_version: 1,
+      accepted: true,
+      note: 'Attempt to overwrite the saved revision request',
+    },
+  });
+  assert.equal(staleDecision.isError, true);
+  const imported = await promisify(execFile)(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      "import assert from 'node:assert/strict'; import {completed} from './acceptance.js'; assert.equal(completed, true);",
+    ],
+    { cwd: created.path }
+  );
+  const revisedReceipt = JSON.parse(
+    await call(workerClient, 'submit_task_result', {
+      ...submission,
+      request_id: 'requested-revision',
+      result: {
+        ...submission.result,
+        checks: [
+          ...submission.result.checks,
+          {
+            command: 'Import acceptance.js and assert completed',
+            passed: true,
+            output: imported.stdout || 'Export assertion passed',
+          },
+        ],
+      },
+    })
+  );
+  await waitForPrompt(revisedReceipt.eventId);
+  await call(client, 'acknowledge_task_results', { event_ids: [revisedReceipt.eventId] });
   await call(client, 'review_task_result', {
     task_id: created.task_id,
-    result_version: 1,
+    result_version: revisedReceipt.version,
     accepted: true,
     note: 'Inspected simulated evidence',
   });
   const final = await page.evaluate((id) => window.coordinatorSnapshot(id), coordinator.taskId);
   assert.equal(final.tasks[created.task_id].state, 'done');
   assert.equal(final.events[0].state, 'acknowledged');
-  assert.equal(final.events.length, 1);
+  assert.equal(final.events.length, 2);
   const relatedRepository = join(profile, 'related-repository');
   await mkdir(relatedRepository);
   const relatedGit = async (...args) =>
@@ -771,14 +822,14 @@ try {
   await call(replacementClient, 'acknowledge_task_results', { event_ids: [secondReceipt.eventId] });
   await call(replacementClient, 'review_task_result', {
     task_id: created.task_id,
-    result_version: 2,
+    result_version: secondReceipt.version,
     accepted: true,
-    note: 'Replacement main inspected revision 2',
+    note: 'Replacement main inspected the latest revision',
   });
   const switched = await page.evaluate((id) => window.coordinatorSnapshot(id), coordinator.taskId);
   assert.equal(switched.taskId, coordinator.taskId);
   assert.equal(switched.tasks[created.task_id].state, 'done');
-  assert.equal(switched.events.length, 3);
+  assert.equal(switched.events.length, 4);
   assert.ok(switched.events.every((event) => event.state === 'acknowledged'));
   await page.getByTestId('coordinator-tasks-tab').click();
   await page.screenshot({ path: join(profile, 'coordinator-result.png') });
@@ -1203,6 +1254,7 @@ try {
     content: `import { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator, coordinatorDelegationStatus, prepareLegacyCoordinatorFixture } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument, prepareCoordinator, coordinatorDelegationStatus, prepareLegacyCoordinatorFixture });`,
   });
   await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
+  await traceNavigation();
   const restored = await page.evaluate(() => window.allCoordinatorSnapshots());
   assert.deepEqual(
     restored.map((record) => record.id).sort(),
@@ -1329,7 +1381,8 @@ try {
   await startupCard.scrollIntoViewIfNeeded();
   await page.screenshot({ path: join(profile, 'failed-startup-after-takeover-restart.png') });
   await startupCard.getByTestId('retry-task-startup').click();
-  await startupCard.waitFor({ state: 'hidden' });
+  await startupCard.getByTestId('retry-task-startup').waitFor({ state: 'hidden' });
+  await startupCard.getByTestId('task-execution-configuration').waitFor();
   const recoveredSession = await waitForCapture(failedStatus.delegation.conversationId);
   await waitForPrompt('Continue the saved task after recovery.', recoveredSession.sessionId);
   const recoveredStatus = await page.evaluate(
@@ -1338,6 +1391,7 @@ try {
   );
   assert.equal(recoveredStatus.phase, 'started');
   assert.equal(recoveredStatus.canRetry, false);
+  assert.deepEqual(recoveredStatus.selectionSnapshot, failedStatus.delegation.selectionSnapshot);
   assert.equal(recoveredStatus.conversationId, failedStatus.delegation.conversationId);
   assert.equal(recoveredStatus.path, failedStatus.delegation.path);
   assert.equal(
@@ -1394,8 +1448,9 @@ try {
     }
     await page.getByTestId('coordinator-conversation-tab').click();
     const prompt = directory ? 'Coordinate this directory.' : 'Coordinate an empty repository.';
-    await page.locator('[contenteditable="true"]').first().fill(prompt);
-    await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
+    const specialComposer = page.locator(`[data-acp-conversation-id="${special.conversationId}"]`);
+    await specialComposer.locator('[contenteditable="true"]').fill(prompt);
+    await specialComposer.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
     const specialCapture = await waitForCapture(special.conversationId);
     await waitForPrompt(prompt, specialCapture.sessionId);
     const specialClient = new Client({ name: 'special-project-acceptance', version: '1' });
@@ -1565,6 +1620,7 @@ try {
     content: `import { allCoordinatorSnapshots, readCoordinatorDocument } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument });`,
   });
   await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
+  await traceNavigation();
   const restoredDirectory = (await page.evaluate(() => window.allCoordinatorSnapshots())).find(
     (record) => record.taskId === beforeStorageRestart.taskId
   );
@@ -1641,6 +1697,7 @@ try {
     content: `import { allCoordinatorSnapshots, readCoordinatorDocument } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}'; Object.assign(window, { allCoordinatorSnapshots, readCoordinatorDocument });`,
   });
   await page.waitForFunction(() => typeof window.allCoordinatorSnapshots === 'function');
+  await traceNavigation();
   const resumedLegacy = (await page.evaluate(() => window.allCoordinatorSnapshots())).find(
     (record) => record.id === legacy.id
   );
@@ -1697,11 +1754,11 @@ try {
   assert.equal(await git('rev-parse', 'HEAD'), baseline);
   await page.screenshot({ path: join(profile, 'legacy-document-migration-complete.png') });
   await page.getByTestId('coordinator-conversation-tab').click();
-  await page
+  const legacyComposer = page.locator(`[data-acp-conversation-id="${legacy.conversationId}"]`);
+  await legacyComposer
     .locator('[contenteditable="true"]')
-    .first()
     .fill('Continue the original legacy conversation after document migration.');
-  await page.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
+  await legacyComposer.getByRole('button', { name: /^(Send message|发送消息)$/ }).click();
   const legacyCapture = await waitForCapture(legacy.conversationId);
   await waitForPrompt(
     'Continue the original legacy conversation after document migration.',
@@ -1862,7 +1919,16 @@ try {
 } catch (error) {
   await writeFile(
     join(profile, 'failure-error.json'),
-    JSON.stringify({ name: error.name, message: error.message, stack: error.stack }, null, 2)
+    JSON.stringify(
+      {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        navigation: await page?.evaluate(() => window.acceptanceNavigation ?? []).catch(() => []),
+      },
+      null,
+      2
+    )
   );
   await page?.screenshot({ path: join(profile, 'failure.png') }).catch(() => {});
   await writeFile(join(profile, 'failure.html'), (await page?.content().catch(() => '')) ?? '');

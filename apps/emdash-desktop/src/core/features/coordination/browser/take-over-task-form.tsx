@@ -67,9 +67,21 @@ export function TakeOverTaskForm({ record }: { record: Coordinator }) {
                       setTaskId('');
                       toast.success('Task ownership updated');
                     })
-                    .catch((error) =>
-                      toast.error('Could not take over task', { description: String(error) })
-                    )
+                    .catch(async (error) => {
+                      toast.error('Could not take over task', { description: String(error) });
+                      try {
+                        setPreview(
+                          await (
+                            await getCoordinationClient()
+                          ).inspectTask({
+                            id: record.id,
+                            taskId: preview.taskId,
+                          })
+                        );
+                      } catch {
+                        setPreview(undefined);
+                      }
+                    })
                     .finally(() => setBusy(false));
                 }}
               >

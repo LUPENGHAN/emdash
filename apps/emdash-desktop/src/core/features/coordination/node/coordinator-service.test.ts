@@ -221,6 +221,40 @@ describe('main agent coordination', () => {
     ).rejects.toThrow('result changed');
   });
 
+  it('accepts only one decision for a result version and preserves it across retries and recovery', async () => {
+    const test = setup();
+    const record = await assigned(test);
+    await test.service.submit(caller(record, 'worker-task'), 'worker-task', 'first', result);
+    const decisions = await Promise.allSettled([
+      test.service.review(record.id, 'worker-task', true, 'Verified', 1),
+      test.service.review(record.id, 'worker-task', false, 'Stale window feedback', 1),
+    ]);
+    expect(decisions.map((entry) => entry.status)).toEqual(['fulfilled', 'rejected']);
+    const saved = (await test.service.getByTask(record.taskId))?.tasks['worker-task'];
+    expect(saved?.state).toBe('done');
+    expect(saved?.review).toMatchObject({ accepted: true, note: 'Verified' });
+    const restored = new CoordinatorService(test.deps);
+    test.deps.setTaskStatus.mockRejectedValueOnce(new Error('Projection interrupted'));
+    await expect(restored.review(record.id, 'worker-task', true, 'Verified', 1)).rejects.toThrow(
+      'Projection interrupted'
+    );
+    await restored.review(record.id, 'worker-task', true, 'Verified', 1);
+    expect((await restored.getByTask(record.taskId))?.tasks['worker-task'].review).toEqual(
+      saved?.review
+    );
+    await expect(
+      restored.review(record.id, 'worker-task', true, 'Different note', 1)
+    ).rejects.toThrow('already reviewed');
+    await restored.submit(caller(record, 'worker-task'), 'worker-task', 'second', {
+      ...result,
+      summary: 'Another result version',
+    });
+    await restored.review(record.id, 'worker-task', false, 'Review version two', 2);
+    expect((await restored.getByTask(record.taskId))?.tasks['worker-task'].state).toBe(
+      'changes_requested'
+    );
+  });
+
   it('retains results and their original versions across delivery failure and service recreation', async () => {
     const test = setup();
     const record = await assigned(test);

@@ -1342,9 +1342,13 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       if (!task?.result) throw new Error('This task has no submitted result to review.');
       if (task.resultVersion !== resultVersion)
         throw new Error('The result changed. Review the latest version before accepting.');
-      task.state = accepted ? 'done' : 'changes_requested';
-      task.review = { note, accepted, at: Date.now() };
-      await this.save(record);
+      if (task.review && (task.review.accepted !== accepted || task.review.note !== note))
+        throw new Error('This result version was already reviewed. Refresh to see the decision.');
+      if (!task.review) {
+        task.state = accepted ? 'done' : 'changes_requested';
+        task.review = { note, accepted, at: Date.now() };
+        await this.save(record);
+      }
       await this.deps.setTaskStatus(taskId, accepted ? 'done' : 'in_progress');
       this.deps.onSchedulingChange?.();
       return record;

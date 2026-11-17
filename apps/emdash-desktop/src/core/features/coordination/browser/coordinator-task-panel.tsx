@@ -468,7 +468,10 @@ function ResultReview({
         })
       )
       .then(onReviewed)
-      .catch((error) => toast.error('Could not review result', { description: String(error) }))
+      .catch((error) => {
+        void onReviewed();
+        toast.error('Could not review result', { description: String(error) });
+      })
       .finally(() => setSaving(false));
   };
   return (
