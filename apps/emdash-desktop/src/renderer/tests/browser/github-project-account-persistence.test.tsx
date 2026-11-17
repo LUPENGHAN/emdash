@@ -1,10 +1,15 @@
 import '@emdash/ui/style.css';
+import { localBranchRefSchema } from '@emdash/core/runtimes/git/api';
 import { deferred } from '@emdash/shared/testing';
 import { Dialog } from '@emdash/ui/react/primitives';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
+import type {
+  TaskPullRequestInput,
+  TaskPullRequestRecord,
+} from '@core/features/source-control/api/task-pull-requests';
 import { CreatePrModal } from '@core/features/source-control/browser/diff-view/changes-panel/components/pr-entry/create-pr-modal';
 import { AddRemoteModal } from '@core/features/tasks/browser/add-remote-modal';
 import type { GitHubAccountSummary } from '@core/primitives/github/api';
@@ -14,7 +19,8 @@ const mocks = vi.hoisted(() => ({
   save: vi.fn(),
   settingsAvailable: true,
   savedAccountId: 'personal',
-  createPullRequest: vi.fn(),
+  preparePullRequest: vi.fn(),
+  runPullRequest: vi.fn(),
   createRepository: vi.fn(),
   createGitlabRepository: vi.fn(),
 }));
@@ -88,8 +94,14 @@ vi.mock('@core/features/source-control/api/browser/stores/source-control-selecto
 vi.mock('@core/features/workspaces/api/browser/stores/workspace-registry', () => ({
   workspaceRegistry: { get: () => ({ get: () => checkout }) },
 }));
-vi.mock('@core/services/pull-requests/api/client', () => ({
-  getPullRequestsRuntimeClient: async () => ({ createPullRequest: mocks.createPullRequest }),
+vi.mock('@core/features/source-control/api/browser/client', () => ({
+  getSourceControlClient: async () => ({
+    taskPullRequests: {
+      prepare: mocks.preparePullRequest,
+      run: mocks.runPullRequest,
+      list: async () => [],
+    },
+  }),
 }));
 vi.mock('@core/features/github/api/browser/client', () => ({
   getGithubClient: async () => ({ createRepository: mocks.createRepository }),
@@ -137,6 +149,28 @@ vi.mock('@core/primitives/keybindings/browser/confirm-button', async () => {
   return { ConfirmButton: Button };
 });
 
+function preparedPr(requestId: string): TaskPullRequestRecord {
+  return {
+    version: '2',
+    requestId,
+    fingerprint: 'a'.repeat(64),
+    phase: 'prepared',
+    plan: {
+      taskId: 'task-1',
+      projectId: 'project-1',
+      workspaceId: 'workspace-1',
+      sourceRef: localBranchRefSchema.parse('refs/heads/feature'),
+      oid: 'a'.repeat(40),
+      pushTarget: { remote: 'origin', destination: repositoryUrl, fingerprint: 'b'.repeat(64) },
+      repositoryUrl,
+      headRepositoryUrl: repositoryUrl,
+      base: 'main',
+      title: 'feature',
+      draft: false,
+    },
+  };
+}
+
 beforeAll(() => {
   (
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -153,7 +187,14 @@ describe('project account persistence in GitHub actions', () => {
     mocks.settingsAvailable = true;
     mocks.savedAccountId = 'personal';
     mocks.save.mockResolvedValue({ success: true, data: {} });
-    mocks.createPullRequest.mockResolvedValue({ success: true });
+    mocks.preparePullRequest.mockImplementation(async (input: TaskPullRequestInput) =>
+      preparedPr(input.requestId)
+    );
+    mocks.runPullRequest.mockImplementation(async (input: { requestId: string }) => ({
+      ...preparedPr(input.requestId),
+      phase: 'complete',
+      result: { url: repositoryUrl + '/pull/1', number: 1 },
+    }));
     // Stop after observing account selection, without exercising unrelated Git operations.
     mocks.createRepository.mockResolvedValue({
       success: false,
@@ -242,9 +283,9 @@ describe('project account persistence in GitHub actions', () => {
       return { success: true, data: {} };
     });
     const usedAccounts: string[] = [];
-    mocks.createPullRequest.mockImplementation(async () => {
+    mocks.preparePullRequest.mockImplementation(async (input: TaskPullRequestInput) => {
       usedAccounts.push(mocks.savedAccountId);
-      return { success: true };
+      return preparedPr(input.requestId);
     });
     await render('pr');
     await chooseWork();
@@ -254,7 +295,7 @@ describe('project account persistence in GitHub actions', () => {
     expect(button('Create PR').disabled).toBe(true);
     expect(button('Change').disabled).toBe(true);
     await act(async () => button('Create PR').click());
-    expect(mocks.createPullRequest).not.toHaveBeenCalled();
+    expect(mocks.preparePullRequest).not.toHaveBeenCalled();
 
     await act(async () => gate.resolve());
     expect(button('Create PR').disabled).toBe(false);
@@ -276,13 +317,13 @@ describe('project account persistence in GitHub actions', () => {
       expect(button('Create PR').disabled).toBe(true);
       expect(button('Change').disabled).toBe(false);
       await act(async () => button('Create PR').click());
-      expect(mocks.createPullRequest).not.toHaveBeenCalled();
+      expect(mocks.preparePullRequest).not.toHaveBeenCalled();
 
       mocks.settingsAvailable = true;
       await chooseWork();
       expect(button('Create PR').disabled).toBe(false);
       await act(async () => button('Create PR').click());
-      expect(mocks.createPullRequest).toHaveBeenCalledOnce();
+      expect(mocks.preparePullRequest).toHaveBeenCalledOnce();
     }
   );
 

@@ -7,6 +7,7 @@ import type {
 import { localBranchRefSchema, remoteBranchRefSchema } from '@emdash/core/runtimes/git/api';
 import { ok } from '@emdash/shared';
 import { createManualClock, type ManualClock } from '@emdash/shared/testing';
+import { createEventStreamHost } from '@emdash/wire/live';
 import { cell, expose, flushStateTurn } from '@emdash/wire/state';
 import { createTestWire } from '@emdash/wire/testing';
 import { observable } from 'mobx';
@@ -342,7 +343,9 @@ function createSourceControlWire() {
     }),
   });
 
-  return createTestWire(sourceControlContract, {
+  const taskPrEvents = createEventStreamHost(sourceControlContract.taskPullRequests.events);
+  const testWire = createTestWire(sourceControlContract, {
+    taskPullRequests: { events: taskPrEvents, list: async () => [] },
     repository: {
       model: repositoryProvider,
       listWorktrees: vi.fn(),
@@ -370,6 +373,13 @@ function createSourceControlWire() {
       pull: { run: vi.fn() },
     },
   } as never);
+  return {
+    ...testWire,
+    async dispose() {
+      await testWire.dispose();
+      taskPrEvents.dispose();
+    },
+  };
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

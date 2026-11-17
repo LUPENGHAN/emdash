@@ -1,8 +1,8 @@
 import { defineContract, liveModel, liveState } from '@emdash/wire/rpc';
-import { cell, type RemoteModel } from '@emdash/wire/state';
+import { cell, family, type RemoteModel } from '@emdash/wire/state';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { useRemoteModelState } from '@core/primitives/wire/browser/use-remote-model-state';
 
@@ -18,6 +18,13 @@ const contract = defineContract({
 describe('useRemoteModelState', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let remoteModel: RemoteModel<typeof contract> | undefined;
+
+  beforeAll(() => {
+    (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+  });
 
   beforeEach(() => {
     container = document.createElement('div');
@@ -25,18 +32,23 @@ describe('useRemoteModelState', () => {
     root = createRoot(container);
   });
 
-  afterEach(() => {
-    act(() => root.unmount());
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    await remoteModel?.dispose();
     container.remove();
   });
 
   it('does not resubscribe when callers pass inline options and callbacks', async () => {
     const source = cell({ count: 1 });
-    const remoteModel = (() => ({
-      states: { value: source },
-      mutations: {},
-    })) as unknown as RemoteModel<typeof contract>;
-    const getRemote = vi.fn(async () => remoteModel);
+    const model: RemoteModel<typeof contract> = family(
+      () => ({
+        states: { value: Object.assign(source, { refresh: async () => {} }) },
+        mutations: {},
+      }),
+      { lingerMs: 0 }
+    );
+    remoteModel = model;
+    const getRemote = vi.fn(async () => model);
     let renderCount = 0;
 
     function Consumer({ parentVersion }: { readonly parentVersion: number }) {

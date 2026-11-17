@@ -5,6 +5,7 @@ import { cell, expose, flushStateTurn } from '@emdash/wire/state';
 import { createTestWire } from '@emdash/wire/testing';
 import { observable } from 'mobx';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { projectBaselineSnapshotSchema } from '@core/features/projects/api/baseline-sync';
 import { projectConfigDomainsFromState } from '../../project-settings-page';
 import { projectsWireContract } from '../../wire-contract';
 import type { ProjectHostAccess, ProjectHostAccessState } from './project-context';
@@ -211,6 +212,20 @@ describe('ProjectSettingsStore project config live model', () => {
 
 function createProjectsWire() {
   const events = createEventStreamHost(projectsWireContract.events);
+  const baselineProvider = expose(projectsWireContract.baseline, {
+    current: () =>
+      cell(
+        projectBaselineSnapshotSchema.parse({
+          version: '1',
+          revision: 0,
+          config: { verification: null },
+          attempts: [],
+          lastContactAt: null,
+          status: 'not-checked',
+          canDelegate: false,
+        })
+      ),
+  });
   const projectConfigProvider = expose(projectsWireContract.projectConfig, {
     current: () => configState,
   });
@@ -227,6 +242,7 @@ function createProjectsWire() {
     events,
     projectConfig: projectConfigProvider,
     projectList: projectListProvider,
+    baseline: baselineProvider,
     attachments: attachmentsProvider,
     creation: creationProvider,
     getProjectSettingsPage,
@@ -243,6 +259,7 @@ function createProjectsWire() {
     ...testWire,
     async dispose() {
       await testWire.dispose();
+      await baselineProvider.dispose();
       events.dispose();
     },
   };

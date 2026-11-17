@@ -7,6 +7,7 @@ import { localBranchRefSchema, remoteBranchRefSchema } from '@emdash/core/runtim
 import { err, ok } from '@emdash/shared';
 import { createScope } from '@emdash/shared/concurrency';
 import { createManualClock } from '@emdash/shared/testing';
+import { createEventStreamHost } from '@emdash/wire/live';
 import { cell, expose, flushStateTurn, query, type Query } from '@emdash/wire/state';
 import { createTestWire } from '@emdash/wire/testing';
 import { autorun } from 'mobx';
@@ -578,7 +579,9 @@ function createSourceControlWire(statusQuery?: Query<CheckoutStatusState>) {
     }
   );
 
-  return createTestWire(sourceControlContract, {
+  const taskPrEvents = createEventStreamHost(sourceControlContract.taskPullRequests.events);
+  const testWire = createTestWire(sourceControlContract, {
+    taskPullRequests: { events: taskPrEvents, list: async () => [] },
     repository: {
       model: repositoryProvider,
       listWorktrees: vi.fn(),
@@ -606,6 +609,13 @@ function createSourceControlWire(statusQuery?: Query<CheckoutStatusState>) {
       pull: { run: vi.fn() },
     },
   } as never);
+  return {
+    ...testWire,
+    async dispose() {
+      await testWire.dispose();
+      taskPrEvents.dispose();
+    },
+  };
 }
 
 function head(

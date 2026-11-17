@@ -1,5 +1,6 @@
 import type { PullRequest } from '@emdash/plugins/pull-requests/schemas';
 import { createScope, type Scope } from '@emdash/shared/concurrency';
+import { createEventStreamHost } from '@emdash/wire/live';
 import { createController } from '@emdash/wire/rpc';
 import { cell, expose, snapshot } from '@emdash/wire/state';
 import { defineWireComponent } from '@emdash/wire/worker';
@@ -53,6 +54,8 @@ function harness() {
     configSchema: z.object({}),
     requirements: {},
     create: ({ instance, scope: owner }) => {
+      const merged = createEventStreamHost(pullRequestsContract.merged);
+      owner.add(() => merged.dispose());
       const details = expose(
         pullRequestsContract.details,
         {
@@ -71,7 +74,7 @@ function harness() {
       owner.add(() => syncState.dispose());
       return instance({
         scope: owner,
-        controller: createController(pullRequestsContract, { details, syncState }),
+        controller: createController(pullRequestsContract, { details, syncState, merged }),
       });
     },
   });

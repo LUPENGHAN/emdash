@@ -1,6 +1,7 @@
 import type { PullRequest } from '@emdash/plugins/pull-requests/schemas';
 import { err, ok } from '@emdash/shared';
 import { createScope } from '@emdash/shared/concurrency';
+import { createEventStreamHost } from '@emdash/wire/live';
 import { createController, WireError, type ContractClient } from '@emdash/wire/rpc';
 import { cell, expose, type Cell } from '@emdash/wire/state';
 import { defineWireComponent } from '@emdash/wire/worker';
@@ -118,6 +119,8 @@ describe('PullRequestsStore', () => {
       requirements: {},
       configSchema: z.object({}),
       create: ({ instance, scope: componentScope }) => {
+        const merged = createEventStreamHost(pullRequestsContract.merged);
+        componentScope.add(() => merged.dispose());
         const syncState = expose(pullRequestsContract.syncState, {
           state: (key) => syncCell(syncCells, key.repositoryUrl),
         });
@@ -156,6 +159,7 @@ describe('PullRequestsStore', () => {
             mergePullRequest: () => ok({ sha: null, merged: true }),
             markReadyForReview: () => ok(),
             getPullRequestFiles: () => ok({ files: [] }),
+            merged,
             syncState,
             details,
           }),
@@ -224,6 +228,8 @@ describe('PullRequestsStore', () => {
       configSchema: z.object({}),
       create: ({ instance, scope: componentScope }) => {
         const syncCells = new Map<string, Cell<SyncState>>();
+        const merged = createEventStreamHost(pullRequestsContract.merged);
+        componentScope.add(() => merged.dispose());
         const syncState = expose(pullRequestsContract.syncState, {
           state: (key) => syncCell(syncCells, key.repositoryUrl),
         });
@@ -258,6 +264,7 @@ describe('PullRequestsStore', () => {
             mergePullRequest: () => ok({ sha: null, merged: true }),
             markReadyForReview: () => ok(),
             getPullRequestFiles: () => ok({ files: [] }),
+            merged,
             syncState,
             details,
           }),

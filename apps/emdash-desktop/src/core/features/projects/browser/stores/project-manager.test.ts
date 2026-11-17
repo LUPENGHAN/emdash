@@ -14,6 +14,7 @@ import {
   type ProjectCreationProgress,
   type ProjectListData,
 } from '@core/features/projects/api';
+import { projectBaselineSnapshotSchema } from '@core/features/projects/api/baseline-sync';
 import {
   createRegisteredProject,
   createUnregisteredProject,
@@ -202,6 +203,20 @@ describe('ProjectManagerStore contract', () => {
 
 function createProjectWire() {
   const events = createEventStreamHost(projectsWireContract.events);
+  const baselineProvider = expose(projectsWireContract.baseline, {
+    current: () =>
+      cell(
+        projectBaselineSnapshotSchema.parse({
+          version: '1',
+          revision: 0,
+          config: { verification: null },
+          attempts: [],
+          lastContactAt: null,
+          status: 'not-checked',
+          canDelegate: false,
+        })
+      ),
+  });
   const projectListProvider = expose(projectsWireContract.projectList, {
     list: projectListState,
   });
@@ -235,6 +250,7 @@ function createProjectWire() {
     recoverAttachment: (input: unknown) => mocks.recoverAttachment(input),
     events,
     projectList: projectListProvider,
+    baseline: baselineProvider,
     attachments: attachmentsProvider,
     projectConfig: projectConfigProvider,
     creation: creationProvider,
@@ -253,6 +269,7 @@ function createProjectWire() {
     ...testWire,
     async dispose() {
       await testWire.dispose();
+      await baselineProvider.dispose();
       events.dispose();
     },
   };

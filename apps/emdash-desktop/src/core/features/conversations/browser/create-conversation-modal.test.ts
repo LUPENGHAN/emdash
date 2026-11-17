@@ -35,6 +35,9 @@ vi.mock('@core/features/agents/api/browser/use-agents', () => ({
 vi.mock('@tanstack/react-query', () => ({
   useQuery: () => ({ data: [] }),
 }));
+vi.mock('@core/features/agents/api/browser/use-agent-settings', () => ({
+  useAgentSettings: () => ({ value: undefined, isLoading: false }),
+}));
 vi.mock('@core/features/conversations/api/browser/client', () => ({
   getConversationsClient: async () => ({ listImportableSessions: async () => [] }),
 }));
