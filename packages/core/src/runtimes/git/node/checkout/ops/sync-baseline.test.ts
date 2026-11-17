@@ -201,6 +201,9 @@ it.each(['after-fetch', 'after-merge'] as const)(
     expect(await t.git(t.repo, 'rev-parse', 'develop')).toBe(
       stage === 'after-merge' ? target : t.before
     );
+    expect(await readFile(path.join(t.repo, 'code.ts'), 'utf8')).toBe(
+      stage === 'after-merge' ? 'export const version = 2;' : 'export const version = 1;'
+    );
     const restored = crashWorker(t.repo, 'complete');
     expect(await restored.ready).toMatchObject({
       phase: 'complete',
@@ -212,6 +215,7 @@ it.each(['after-fetch', 'after-merge'] as const)(
     expect(await restored.exited).toEqual([0, null]);
     expect(await readFile(fetchHead, 'utf8')).toBe('Preserve the caller fetch observation\n');
     expect(await t.git(t.repo, 'rev-parse', 'HEAD')).toBe(target);
+    expect(await readFile(path.join(t.repo, 'code.ts'), 'utf8')).toBe('export const version = 2;');
   },
   20_000
 );

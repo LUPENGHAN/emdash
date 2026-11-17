@@ -194,6 +194,13 @@ async function quit() {
     app = undefined;
   }
 }
+async function crashApplication() {
+  const child = app.process();
+  const exited = once(child, 'exit');
+  assert.equal(child.kill('SIGKILL'), true);
+  assert.deepEqual(await exited, [null, 'SIGKILL']);
+  app = undefined;
+}
 try {
   await launch();
   const main = await page.evaluate((input) => window.prepareCoordinator(input), {
@@ -647,6 +654,39 @@ try {
   await advancedSection
     .getByRole('status')
     .screenshot({ path: join(profile, 'baseline-offline-delegation.png') });
+  for (const client of clients.splice(0)) await client.close();
+  await crashApplication();
+  await launch();
+  await page.evaluate((id) => window.openBaselineFixtureSettings(id), codeProjectId);
+  const afterCrash = await wait(async () => {
+    const state = await page.evaluate((id) => window.baselineFixtureState(id), codeProjectId);
+    return state.status === 'offline' && state.proof?.oid === advancedOid ? state : null;
+  }, 'The verified offline baseline did not recover after Electron SIGKILL.');
+  assert.equal(afterCrash.canDelegate, true);
+  assert.equal(afterCrash.lastContactAt, onlineState.lastContactAt);
+  assert.equal(
+    afterCrash.attempts.find((attempt) => attempt.id === savedCheck.id).cleanup.status,
+    'removed'
+  );
+  assert.equal(
+    afterCrash.attempts.find((attempt) => attempt.id === savedCheck.id).verification.output,
+    'baseline-verified'
+  );
+  await assert.rejects(lstat(checkPath));
+  assert.equal(await git('rev-parse', 'main'), advancedOid);
+  assert.equal(await taskGit('rev-parse', 'HEAD'), oid);
+  assert.equal(
+    (await exec('git', ['rev-parse', 'HEAD'], { cwd: offlineTask.path })).stdout.trim(),
+    advancedOid
+  );
+  await page
+    .getByRole('region', { name: 'Code baseline', exact: true })
+    .getByText('Using a local baseline while offline', { exact: true })
+    .waitFor();
+  await page
+    .getByRole('region', { name: 'Code baseline', exact: true })
+    .getByRole('status')
+    .screenshot({ path: join(profile, 'baseline-electron-sigkill-restored.png') });
   assert.equal(
     await git('for-each-ref', '--format=%(refname)', 'refs/emdash/baseline-candidates'),
     ''
@@ -665,6 +705,7 @@ try {
           'the settings cleanup retry removed only the unchanged checkout and retained its branch and verification evidence',
           'complete restart retained cleanup completion and approved delegation without recreating the cleaned checkout',
           'baseline fetches created no private candidate refs across success, verification failure, upstream rewrite, restart and offline recovery',
+          'Electron main SIGKILL recovered committed cleanup evidence, offline approval and pinned task commits without recreating the removed checkout',
           'real smart HTTP Git publication to a loopback personal fork with pinned task OID',
           'main platform response loss persisted and worker creation reused the same PR',
           'complete restart restored the request and UI continued without another platform create',
