@@ -691,6 +691,43 @@ describe('installGitHubSkills', () => {
     expect(sources.skills['customer-analysis']?.installedHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('downloads files concurrently with a limit', async () => {
+    const extra = Array.from({ length: 10 }, (_, index) => ({
+      path: `.agents/skills/customer-analysis/file-${index}.md`,
+      type: 'blob',
+      sha: 'b-notes',
+    }));
+    stubGitHub({ tree: [...tree, ...extra], blobs });
+    const fetchStub = vi.mocked(fetch);
+    let active = 0;
+    let peak = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (!url.startsWith('https://raw.githubusercontent.com/')) return fetchStub(url, init);
+        active += 1;
+        peak = Math.max(peak, active);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          return await fetchStub(url, init);
+        } finally {
+          active -= 1;
+        }
+      })
+    );
+    const result = await installGitHubSkills(
+      libraryDir,
+      { repo: 'o/r', ref: 'main', commit: 'commit-1', picks: [{ ...picks, overwrite: false }] },
+      null
+    );
+    expect(result.installed).toEqual(['customer-analysis']);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(6);
+    expect(await readFile(path.join(libraryDir, 'customer-analysis', 'file-9.md'), 'utf8')).toBe(
+      'notes body'
+    );
+  });
+
   it('skips a name the library already has unless overwrite is set', async () => {
     await mkdir(path.join(libraryDir, 'customer-analysis'), { recursive: true });
     await writeFile(path.join(libraryDir, 'customer-analysis', 'SKILL.md'), 'existing');

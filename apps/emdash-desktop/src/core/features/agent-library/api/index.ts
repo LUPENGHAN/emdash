@@ -173,6 +173,8 @@ export const agentLibraryContract = defineContract({
   }),
   /** Lists the skills inside a GitHub link; the account's token is used, never shown. */
   scanGitHubSkills: procedure({
+    // Scanning may fetch SKILL.md from many folders over the network.
+    callTimeoutMs: 0,
     input: z.object({ url: z.string().min(1) }),
     output: githubSkillScanSchema,
   }),
@@ -192,6 +194,8 @@ export const agentLibraryContract = defineContract({
     }),
   }),
   installGitHubSkills: procedure({
+    // Downloads and workspace synchronization have no fixed overall duration.
+    callTimeoutMs: 0,
     input: z.object({
       repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
       ref: z.string().min(1),

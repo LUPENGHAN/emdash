@@ -59,6 +59,7 @@ export type GitHubSkillCandidate = {
 const MAX_SCAN_SKILLS = 50;
 const MAX_SKILL_IMPORT_FILES = 500;
 const MAX_SKILL_IMPORT_BYTES = 8 * 1024 * 1024;
+const DOWNLOAD_CONCURRENCY = 6;
 
 const SOURCES_FILE = path.join('.emdash', 'sources.json');
 const UPDATE_DIR = path.join('.emdash', 'skill-update');
@@ -698,24 +699,30 @@ async function downloadSkillFiles(
   dest: string,
   token: string | null
 ): Promise<string[]> {
-  const written: string[] = [];
-  for (const file of files) {
-    if (!file.sha) throw new Error(`GitHub did not list a content hash for ${file.path}`);
-    const target = remoteFileTarget(dest, file.path);
-    const repoPath = snapshot.skillPath ? `${snapshot.skillPath}/${file.path}` : file.path;
-    const content = await downloadFile(
-      snapshot.repo,
-      snapshot.commit,
-      { repoPath, sha: file.sha },
-      token
+  for (let offset = 0; offset < files.length; offset += DOWNLOAD_CONCURRENCY) {
+    const batch = files.slice(offset, offset + DOWNLOAD_CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (file) => {
+        if (!file.sha) throw new Error(`GitHub did not list a content hash for ${file.path}`);
+        const target = remoteFileTarget(dest, file.path);
+        const repoPath = snapshot.skillPath ? `${snapshot.skillPath}/${file.path}` : file.path;
+        const content = await downloadFile(
+          snapshot.repo,
+          snapshot.commit,
+          { repoPath, sha: file.sha },
+          token
+        );
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, content);
+        // Scripts stay runnable (and the folder's Git tree id matches the remote's).
+        if (file.mode === '100755') await chmod(target, 0o755);
+      })
     );
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, content);
-    // Scripts stay runnable (and the folder's Git tree id matches the remote's).
-    if (file.mode === '100755') await chmod(target, 0o755);
-    written.push(file.path);
+    // Wait for every write before cleanup removes the scratch directory.
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
   }
-  return written;
+  return files.map((file) => file.path);
 }
 
 /**
