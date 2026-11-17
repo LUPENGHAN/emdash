@@ -33,6 +33,15 @@ committed and shared.
 
 ## Domain Boundaries
 
+- Delegation selection receipts belong to the agent-control domain's versioned task-delegation
+  records. Backend preparation freezes the executable conversation selection plus per-field
+  provenance and a fingerprint; status, MCP replies and the coordination task card read that
+  receipt. Waiting and startup retries do not resolve global defaults again. Historical records
+  without this optional receipt remain readable; mismatched values, provenance or an unknown
+  receipt version fail closed. This is a selection snapshot, not a freeze of a public model
+  alias's compatible routing changes. The gateway separately records the actual route revision
+  and, for task-bound models, the selected model name in durable usage at request time, so
+  historical attribution does not require a live conversation or route.
 - Project baseline verification policy belongs to the Project domain's versioned
   `project-baselines` KV state (`features/projects/node/baseline-sync-service.ts`), separate
   from Git identity and registry lifecycle settings. It stores command configuration with an
