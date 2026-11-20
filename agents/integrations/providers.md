@@ -181,7 +181,9 @@ Claude's TUI receives a per-launch `--settings` modelPicker (Claude Code >= 2.1.
 extraArgs must remain one whitespace-free argv value and must contain no credentials. ACP
 receives the same catalog through provider-owned session initialization, using the resolved
 process environment passed to `IAcpBehavior.connect`. Do not move this transform into Core's
-protocol state machine. Conversion catalogs explicitly disable Claude prompt caching and
-experimental tool features; same-protocol catalogs preserve native features. Older clients can
+protocol state machine. Each Claude session lists models that use the selected model's upstream
+protocol. Native Anthropic sessions preserve prompt caching and tool features. Conversion sessions
+disable those features for compatibility. Use the Emdash model selector to switch protocols and
+start a session with the corresponding settings. Older clients can
 still use the Emdash model selector or explicit model IDs, but native picker behavior is gated
 by their supported settings.

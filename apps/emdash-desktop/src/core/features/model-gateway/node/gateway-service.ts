@@ -35,6 +35,7 @@ import {
   fingerprint,
   migrationPreview,
   runtimeCatalog,
+  scopeClaudeCatalog,
   snapshotCatalog,
   taskModelCatalog,
   type CatalogSnapshot,
@@ -646,7 +647,14 @@ export class ModelGatewayService {
         return;
       }
       const models = (await this.deps.getModels?.())?.models ?? [];
-      const next = snapshotCatalog(models, [...this.definitions.values()], route.catalog.agent);
+      const available = snapshotCatalog(
+        models,
+        [...this.definitions.values()],
+        route.catalog.agent
+      );
+      const next = route.catalog.claudeUpstreamProtocol
+        ? scopeClaudeCatalog(available, route.catalog.claudeUpstreamProtocol)
+        : available;
       if (fingerprint(next) === fingerprint(route.catalog) && !route.restartReason) {
         this.pendingCatalogs.delete(id);
         return;
@@ -830,16 +838,22 @@ export class ModelGatewayService {
       if (!agentId) throw new Error('The gateway needs the agent protocol.');
       const models = (await this.deps.getModels?.())?.models ?? [];
       const saved = conversationId ? await this.deps.routes.getOrThrow(conversationId) : null;
-      const snapshot =
+      if (model && saved?.catalog && saved.model !== model)
+        throw new Error('Restart the agent to change its saved gateway model.');
+      const available =
         saved?.catalog ?? snapshotCatalog(models, [...this.definitions.values()], agentId);
-      const provider = catalogProvider(snapshot.models, agentId);
-      if (!model || !provider.models.includes(model))
+      const inbound = agentId === 'claude' ? 'anthropic' : 'openai-responses';
+      const selected = available.models.find((m) => m.alias === model);
+      const targetProtocol = selected && upstreamProtocol(selected, inbound);
+      if (!model || !selected || !targetProtocol)
         throw new Error(
           'Select an available gateway model in Settings → Providers → Gateway models.'
         );
-      const selected = snapshot.models.find((m) => m.alias === model);
-      if (!models.some((m) => m.id === selected?.id && m.enabled))
+      if (!models.some((m) => m.id === selected.id && m.enabled))
         throw new Error('This gateway model is disabled or unavailable.');
+      const snapshot =
+        agentId === 'claude' ? scopeClaudeCatalog(available, targetProtocol) : available;
+      const provider = catalogProvider(snapshot.models, agentId);
       const runtime = runtimeCatalog(
         snapshot,
         [...this.definitions.values()],
@@ -850,25 +864,18 @@ export class ModelGatewayService {
           'The model provider is missing credentials or its connection scope changed. Restore it or start a new session.'
         );
       const chosenProvider = runtime.providers.find((p) => p.id === runtime.models[model]);
-      const targetProtocol =
-        selected &&
-        upstreamProtocol(selected, agentId === 'claude' ? 'anthropic' : 'openai-responses');
       if (
         !chosenProvider ||
-        !targetProtocol ||
         !(chosenProvider.protocolKeys?.[targetProtocol] || chosenProvider.apiKey)
       )
         throw new Error(
           'The selected upstream protocol has no API key. Add it in Provider settings.'
         );
-      if (saved?.catalog && saved.model !== model)
-        throw new Error('Restart the agent to change its saved gateway model.');
       const id = conversationId ?? 'validation';
       if (conversationId) {
         await this.deps.routes.setOrThrow(id, { ...saved, sourceId, model, catalog: snapshot });
         await this.syncProviders();
       }
-      const inbound = agentId === 'claude' ? 'anthropic' : 'openai-responses';
       return {
         provider: {
           ...provider,
@@ -877,9 +884,7 @@ export class ModelGatewayService {
           models: [model, ...provider.models.filter((m) => m !== model)],
         },
         apiKey: this.capability(id),
-        compatibility:
-          agentId === 'claude' &&
-          snapshot.models.some((m) => upstreamProtocol(m, 'anthropic') !== 'anthropic'),
+        compatibility: agentId === 'claude' && targetProtocol !== 'anthropic',
       };
     }
     const saved = conversationId ? await this.deps.routes.getOrThrow(conversationId) : null;

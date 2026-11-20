@@ -30,7 +30,13 @@ function store<T>() {
 
 it('routes native protocols and explicit model choices through the Go process, preserves revisions and records actual usage', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'emdash-catalog-'));
-  const seen: Array<{ path: string; model: string; key: string | undefined; effort?: string }> = [];
+  const seen: Array<{
+    path: string;
+    model: string;
+    key: string | undefined;
+    effort?: string;
+    cacheControl?: { type: string };
+  }> = [];
   const upstream = createServer((req, res) => {
     void (async () => {
       const parts: Buffer[] = [];
@@ -45,12 +51,14 @@ it('routes native protocols and explicit model choices through the Go process, p
         stream?: boolean;
         reasoning_effort?: string;
         output_config?: { effort?: string };
+        system?: Array<{ cache_control?: { type: string } }>;
       };
       seen.push({
         path: req.url!,
         model: body.model,
         key: req.headers.authorization,
         effort: body.reasoning_effort ?? body.output_config?.effort,
+        cacheControl: body.system?.[0]?.cache_control,
       });
       if (body.stream && req.url?.includes('/chat/completions')) {
         res.setHeader('content-type', 'text/event-stream');
@@ -69,7 +77,7 @@ it('routes native protocols and explicit model choices through the Go process, p
             model: body.model,
             content: [{ type: 'text', text: 'native' }],
             stop_reason: 'end_turn',
-            usage: { input_tokens: 4, output_tokens: 2 },
+            usage: { input_tokens: 4, output_tokens: 2, cache_read_input_tokens: 2048 },
           })
         );
       else if (req.url?.includes('/chat/completions'))
@@ -203,7 +211,34 @@ it('routes native protocols and explicit model choices through the Go process, p
       'codex-conversation',
       'codex'
     );
-    expect(claude.provider.models).toEqual(['both', 'chat-only']);
+    expect(claude.provider.models).toEqual(['both']);
+    expect(codex.provider.models).toEqual(['both', 'chat-only']);
+    const nativeLaunch = buildSourceLaunch(
+      'claude',
+      claude.provider,
+      claude.apiKey,
+      'both',
+      [],
+      claude.compatibility
+    );
+    if (!nativeLaunch) throw new Error('Native Claude launch was unavailable');
+    expect(nativeLaunch.env.DISABLE_PROMPT_CACHING).toBeUndefined();
+    expect(JSON.parse(nativeLaunch.env.EMDASH_CLAUDE_SETTINGS)).toMatchObject({
+      availableModels: ['both'],
+      modelPicker: { options: [{ model: 'both' }] },
+    });
+    const savedNativeRoute = await service.route('claude-conversation');
+    const mixedCatalog = (await service.route('codex-conversation'))?.catalog;
+    if (!savedNativeRoute || !mixedCatalog) throw new Error('Expected both saved routes');
+    await routes.setOrThrow('old-claude', {
+      ...savedNativeRoute,
+      catalog: { ...mixedCatalog, agent: 'claude' },
+    });
+    const resumed = await service.prepareLaunch(catalogSourceId, 'both', 'old-claude', 'claude');
+    expect(resumed.compatibility).toBe(false);
+    expect((await service.route('old-claude'))?.catalog?.models.map((m) => m.alias)).toEqual([
+      'both',
+    ]);
     const send = async (
       target: typeof claude,
       protocol: 'anthropic' | 'responses',
@@ -216,7 +251,14 @@ it('routes native protocols and explicit model choices through the Go process, p
           headers: { authorization: `Bearer ${target.apiKey}`, 'content-type': 'application/json' },
           body: JSON.stringify(
             protocol === 'anthropic'
-              ? { model, max_tokens: 32, messages: [{ role: 'user', content: 'hello' }] }
+              ? {
+                  model,
+                  max_tokens: 32,
+                  messages: [{ role: 'user', content: 'hello' }],
+                  ...(target.compatibility === false && {
+                    system: [{ type: 'text', text: 'Test', cache_control: { type: 'ephemeral' } }],
+                  }),
+                }
               : { model, input: 'hello', store: false }
           ),
         }
@@ -232,6 +274,7 @@ it('routes native protocols and explicit model choices through the Go process, p
           path: '/anthropic/v1/messages',
           model: 'physical-messages',
           key: 'Bearer fake-key-anthropic',
+          cacheControl: { type: 'ephemeral' },
         },
         {
           path: '/responses/v1/responses',
@@ -248,7 +291,14 @@ it('routes native protocols and explicit model choices through the Go process, p
     const list = await fetch(claude.provider.baseUrl + '/v1/models', {
       headers: { authorization: `Bearer ${claude.apiKey}` },
     });
-    expect(await list.json()).toMatchObject({ data: [{ id: 'both' }, { id: 'chat-only' }] });
+    expect(await list.json()).toMatchObject({ data: [{ id: 'both' }] });
+    const crossProtocol = await fetch(claude.provider.baseUrl + '/v1/messages', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${claude.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'chat-only', messages: [{ role: 'user', content: 'hello' }] }),
+    });
+    expect(crossProtocol.status).toBe(400);
+    expect(await crossProtocol.text()).toContain('restart');
     await expect(
       service.prepareLaunch(catalogSourceId, undefined, undefined, 'claude')
     ).rejects.toThrow('Select an available');
@@ -286,6 +336,15 @@ it('routes native protocols and explicit model choices through the Go process, p
       'replacement',
       'claude'
     );
+    const convertedLaunch = buildSourceLaunch(
+      'claude',
+      replacement.provider,
+      replacement.apiKey,
+      'both',
+      [],
+      replacement.compatibility
+    );
+    expect(convertedLaunch?.env.DISABLE_PROMPT_CACHING).toBe('1');
     expect(await send(replacement, 'anthropic')).toContain('converted');
     expect(seen.at(-1)?.model).toBe('replacement-chat');
     await service.stop();
@@ -295,6 +354,11 @@ it('routes native protocols and explicit model choices through the Go process, p
     await expect.poll(async () => (await service.usage(100)).length).toBe(7);
     expect(await service.usage(100)).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          model: 'both',
+          upstreamProtocol: 'anthropic',
+          cachedTokens: 2048,
+        }),
         expect.objectContaining({
           accountId: 'p2',
           model: 'chat-only',

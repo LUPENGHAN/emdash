@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import type { ModelProvider } from '@core/features/model-providers/api';
+import type { ModelProvider, ProviderProtocol } from '@core/features/model-providers/api';
 import {
   configuredProtocols,
   modelAvailableForAgent,
+  upstreamProtocol,
   type GatewayModel,
 } from '../api/model-catalog';
 import type { ApiProvider } from './config';
@@ -10,6 +11,7 @@ import type { ApiProvider } from './config';
 export type CatalogSnapshot = {
   scope?: 'task';
   agent: string;
+  claudeUpstreamProtocol?: ProviderProtocol;
   models: GatewayModel[];
   providers: ModelProvider[];
 };
@@ -43,6 +45,24 @@ export function snapshotCatalog(
         endpoints: p.endpoints,
         models: [],
       })),
+  };
+}
+
+/** Claude's protocol-dependent features are set for the lifetime of the agent. */
+export function scopeClaudeCatalog(
+  snapshot: CatalogSnapshot,
+  protocol: ProviderProtocol
+): CatalogSnapshot {
+  const models = snapshot.models.filter(
+    (model) => upstreamProtocol(model, 'anthropic') === protocol
+  );
+  return {
+    ...snapshot,
+    claudeUpstreamProtocol: protocol,
+    models,
+    providers: snapshot.providers.filter((provider) =>
+      models.some((model) => model.providerId === provider.id)
+    ),
   };
 }
 
