@@ -1065,6 +1065,9 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
           submissions: {},
           ...(grantedProjectIds.length && { grantedProjectIds: [...new Set(grantedProjectIds)] }),
         };
+        if (!latest.projectIds.includes(params.projectId)) {
+          latest.projectIds = [...latest.projectIds, params.projectId];
+        }
         await this.save(latest);
       });
     });

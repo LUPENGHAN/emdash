@@ -494,6 +494,7 @@ describe('main agent coordination', () => {
     expect(
       (await restored.getByTask(record.taskId))?.tasks['granted-worker'].grantedProjectIds
     ).toEqual(['project']);
+    expect((await restored.getByTask(record.taskId))?.projectIds).toContain('other');
     await restored.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['other'] },
       projectIds: ['project', 'other'],
