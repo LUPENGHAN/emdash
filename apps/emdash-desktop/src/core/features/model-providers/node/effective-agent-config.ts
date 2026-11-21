@@ -10,7 +10,7 @@ import {
   type OfficialAccount,
 } from '../api';
 import { withAgentEffort } from '../api/node/agent-effort';
-import type { CodexModelCatalog, CodexModelInfo } from '../api/node/codex-launch';
+import type { CodexModelInfo } from '../api/node/codex-launch';
 import { buildSourceLaunch, type ExtensionProviderAgent } from '../api/node/source-launch';
 import { ACCOUNT_HOME_ENV } from './official-accounts';
 
@@ -36,7 +36,7 @@ export type EffectiveAgentConfigDeps = {
   getApiKey: (providerId: string, protocol?: ProviderProtocol) => Promise<string | null>;
   prepareAgentProvider: (agent: ExtensionProviderAgent) => Promise<void>;
   ensureCodexAppServerWrapper?: () => Promise<void>;
-  ensureCodexModelCatalog?: (catalog: CodexModelCatalog) => Promise<void>;
+  ensureCodexModelCatalog?: (contents: string) => Promise<void>;
   /** Codex's cached model metadata, for the effort a model it knows starts with. */
   readKnownCodexModels?: () => Promise<CodexModelInfo[]>;
   /** Readies an official account's config dir and returns it. */

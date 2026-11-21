@@ -20,9 +20,12 @@ import {
   type GatewayUsage,
 } from '../api/contract';
 import {
+  agentUpstreamProtocol,
   catalogProvider,
   catalogSourceId,
+  codexNativeRouteRequired,
   gatewayModelsSettingsSchema,
+  inboundProtocolForAgent,
   upstreamProtocol,
   type GatewayModel,
   type GatewayModelsSettings,
@@ -36,6 +39,7 @@ import {
   migrationPreview,
   runtimeCatalog,
   scopeClaudeCatalog,
+  scopeCodexCatalog,
   snapshotCatalog,
   taskModelCatalog,
   type CatalogSnapshot,
@@ -655,11 +659,12 @@ export class ModelGatewayService {
       const next = route.catalog.claudeUpstreamProtocol
         ? scopeClaudeCatalog(available, route.catalog.claudeUpstreamProtocol)
         : available;
-      if (fingerprint(next) === fingerprint(route.catalog) && !route.restartReason) {
+      const current = scopeCodexCatalog(route.catalog);
+      if (fingerprint(next) === fingerprint(current) && !route.restartReason) {
         this.pendingCatalogs.delete(id);
         return;
       }
-      const compatible = catalogBindings(next) === catalogBindings(route.catalog);
+      const compatible = catalogBindings(next) === catalogBindings(current);
       if (compatible && (await this.deps.conversationIdle(id))) {
         await this.deps.routes.setOrThrow(id, {
           ...route,
@@ -686,7 +691,7 @@ export class ModelGatewayService {
               };
             })
           );
-        const requiresNewSession = binding(next) !== binding(route.catalog);
+        const requiresNewSession = binding(next) !== binding(current);
         await this.deps.routes.setOrThrow(id, {
           ...route,
           requiresNewSession,
@@ -787,8 +792,9 @@ export class ModelGatewayService {
       );
       const target = runtime.providers.find((p) => p.id === runtime.models['task-model']);
       const selected = snapshot.models[0];
-      const inbound = agentId === 'claude' ? 'anthropic' : 'openai-responses';
-      const protocol = selected && upstreamProtocol(selected, inbound);
+      const inbound = inboundProtocolForAgent(agentId);
+      const protocol = selected && agentUpstreamProtocol(selected, agentId);
+      if (selected && agentId === 'codex' && !protocol) throw new Error(codexNativeRouteRequired);
       if (!target || !protocol || !(target.protocolKeys?.[protocol] || target.apiKey)) {
         throw new Error('The task supplier credentials or connection scope are unavailable.');
       }
@@ -842,9 +848,12 @@ export class ModelGatewayService {
         throw new Error('Restart the agent to change its saved gateway model.');
       const available =
         saved?.catalog ?? snapshotCatalog(models, [...this.definitions.values()], agentId);
-      const inbound = agentId === 'claude' ? 'anthropic' : 'openai-responses';
+      const inbound = inboundProtocolForAgent(agentId);
       const selected = available.models.find((m) => m.alias === model);
-      const targetProtocol = selected && upstreamProtocol(selected, inbound);
+      const targetProtocol = selected && agentUpstreamProtocol(selected, agentId);
+      const configured = selected ?? models.find((m) => m.alias === model && m.enabled);
+      if (agentId === 'codex' && configured && !agentUpstreamProtocol(configured, agentId))
+        throw new Error(codexNativeRouteRequired);
       if (!model || !selected || !targetProtocol)
         throw new Error(
           'Select an available gateway model in Settings → Providers → Gateway models.'
@@ -852,7 +861,9 @@ export class ModelGatewayService {
       if (!models.some((m) => m.id === selected.id && m.enabled))
         throw new Error('This gateway model is disabled or unavailable.');
       const snapshot =
-        agentId === 'claude' ? scopeClaudeCatalog(available, targetProtocol) : available;
+        agentId === 'claude'
+          ? scopeClaudeCatalog(available, targetProtocol)
+          : scopeCodexCatalog(available);
       const provider = catalogProvider(snapshot.models, agentId);
       const runtime = runtimeCatalog(
         snapshot,

@@ -70,3 +70,20 @@ func TestUsageCodecFailuresNeverRewriteResponseBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestAnthropicStreamKeepsExplicitCacheReadAndWriteCounts(t *testing.T) {
+	data := "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":2048}}}\n\n" +
+		"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":2}}\n\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+	body := observeBody(io.NopCloser(strings.NewReader(data)), nil, nil, true, "messages", func(payload []byte, failed bool) {
+		if failed || !bytes.Contains(payload, []byte(`"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":2048}`)) ||
+			!bytes.Contains(payload, []byte(`"total_tokens":2055`)) {
+			t.Errorf("invalid recorded usage: failed=%v %s", failed, payload)
+		}
+	})
+	defer body.Close()
+	wireBytes, err := io.ReadAll(body)
+	if err != nil || string(wireBytes) != data {
+		t.Fatalf("observer changed the stream: %v", err)
+	}
+}

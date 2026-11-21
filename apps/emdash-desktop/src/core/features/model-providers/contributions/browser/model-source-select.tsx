@@ -3,6 +3,7 @@ import { Button, Field, Select } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
 import {
   catalogSourceId,
+  codexNativeRouteRequired,
   modelAvailableForAgent,
   upstreamProtocol,
 } from '@core/features/model-gateway/api/model-catalog';
@@ -57,6 +58,7 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
       agentId
     )
   );
+  const selectedModel = models.find((m) => m.alias === model);
   const selected = source === catalogSourceId ? catalogSourceId : legacy ? source : OWN_LOGIN;
   const label =
     source === catalogSourceId
@@ -162,10 +164,14 @@ export const ModelSourceSelect = observer(function ModelSourceSelect({
               ? 'Protocols and upstream providers are managed in Settings → Providers → Gateway models.'
               : 'Publish a compatible model in Settings → Providers → Gateway models.'}
           </Field.Description>
+          {agentId === 'codex' ? (
+            <Field.Description>{codexNativeRouteRequired}</Field.Description>
+          ) : null}
           {agentId === 'claude' &&
-          models.some((m) => upstreamProtocol(m, 'anthropic') !== 'anthropic') ? (
+          selectedModel &&
+          upstreamProtocol(selectedModel, 'anthropic') !== 'anthropic' ? (
             <Field.Description>
-              This catalog uses protocol conversion. Claude prompt caching and experimental tool
+              This model uses protocol conversion. Claude prompt caching and experimental tool
               features are disabled for this session.
             </Field.Description>
           ) : null}

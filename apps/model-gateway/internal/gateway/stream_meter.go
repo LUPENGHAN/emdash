@@ -6,10 +6,23 @@ import (
 )
 
 type streamMeter struct {
-	input, output, cached, created int64
-	messages                       bool
-	known, complete, failed        bool
-	response                       []byte
+	input, output           int64
+	cache                   cacheTokenCounts
+	messages                bool
+	known, complete, failed bool
+	response                []byte
+}
+
+type cacheTokenCounts struct {
+	Read  *int64 `json:"cached_tokens,omitempty"`
+	Write *int64 `json:"cache_write_tokens,omitempty"`
+}
+
+func tokenCount(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func (m *streamMeter) observe(data []byte, protocol string) {
@@ -54,13 +67,12 @@ func (m *streamMeter) observe(data []byte, protocol string) {
 			read("input_tokens", &m.input)
 			read("completion_tokens", &m.output)
 			read("output_tokens", &m.output)
-			read("cache_read_input_tokens", &m.cached)
-			read("cache_creation_input_tokens", &m.created)
-			var details struct {
-				Cached int64 `json:"cached_tokens"`
-			}
+			readCacheCount(counts["cache_read_input_tokens"], &m.cache.Read)
+			readCacheCount(counts["cache_creation_input_tokens"], &m.cache.Write)
+			var details map[string]json.RawMessage
 			if json.Unmarshal(counts["prompt_tokens_details"], &details) == nil {
-				m.cached = details.Cached
+				readCacheCount(details["cached_tokens"], &m.cache.Read)
+				readCacheCount(details["cache_write_tokens"], &m.cache.Write)
 			}
 		}
 	}
@@ -72,6 +84,13 @@ func (m *streamMeter) observe(data []byte, protocol string) {
 	}
 }
 
+func readCacheCount(raw json.RawMessage, dest **int64) {
+	var count *int64
+	if json.Unmarshal(raw, &count) == nil && count != nil {
+		*dest = count
+	}
+}
+
 func (m *streamMeter) payload() []byte {
 	if m.response != nil {
 		return m.response
@@ -79,17 +98,13 @@ func (m *streamMeter) payload() []byte {
 	if !m.known {
 		return nil
 	}
-	cached := m.cached
-	if cached == 0 {
-		cached = m.created
-	}
 	total := m.input + m.output
 	if m.messages {
-		total += m.cached + m.created
+		total += tokenCount(m.cache.Read) + tokenCount(m.cache.Write)
 	}
 	data, _ := json.Marshal(map[string]any{"response": map[string]any{"usage": map[string]any{
 		"input_tokens": m.input, "output_tokens": m.output, "total_tokens": total,
-		"input_tokens_details": map[string]int64{"cached_tokens": cached},
+		"input_tokens_details": m.cache,
 	}}})
 	return data
 }

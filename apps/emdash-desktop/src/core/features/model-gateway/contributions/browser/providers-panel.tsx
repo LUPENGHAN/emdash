@@ -247,20 +247,33 @@ export function GatewayProvidersPanel() {
           ))}
         </div>
       ) : (
-        <div className="overflow-auto text-xs">
+        <div
+          className="overflow-auto text-xs"
+          role="region"
+          aria-label="Gateway usage"
+          tabIndex={0}
+        >
           <p className="mb-2 text-foreground-muted">
             Request usage is stored independently. Deleting conversations keeps these records.
           </p>
           <table className="w-full text-left">
+            <caption className="sr-only">Gateway request usage</caption>
             <thead>
               <tr>
-                {['Time', 'Provider', 'Model', 'Input', 'Output', 'Cached', 'Status'].map(
-                  (label) => (
-                    <th key={label} className="p-1">
-                      {label}
-                    </th>
-                  )
-                )}
+                {[
+                  'Time',
+                  'Provider',
+                  'Model',
+                  'Input',
+                  'Output',
+                  'Cache read',
+                  'Cache write',
+                  'Status',
+                ].map((label) => (
+                  <th key={label} scope="col" className="p-1">
+                    {label}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -289,9 +302,18 @@ export function GatewayProvidersPanel() {
                   <td className="p-1">
                     {item.status === 'missing' ? 'Unknown' : item.outputTokens}
                   </td>
-                  <td className="p-1">
-                    {item.status === 'missing' ? 'Unknown' : item.cachedTokens}
-                  </td>
+                  {item.status === 'complete' &&
+                  item.cacheReadTokens === undefined &&
+                  item.cacheWriteTokens === undefined ? (
+                    <td className="p-1" colSpan={2}>
+                      Legacy cached ({item.cachedTokens})
+                    </td>
+                  ) : (
+                    <>
+                      <td className="p-1">{item.cacheReadTokens ?? 'Unknown'}</td>
+                      <td className="p-1">{item.cacheWriteTokens ?? 'Unknown'}</td>
+                    </>
+                  )}
                   <td className="p-1">{item.failed ? 'Failed' : item.status}</td>
                 </tr>
               ))}

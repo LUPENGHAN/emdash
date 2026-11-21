@@ -170,12 +170,16 @@ same-protocol HTTP bytes; conversion has separate validation and SDK request/res
 It must check request, streaming and JSON response converters before executing. There is no
 fallback that sends unconverted bytes to another protocol or replays an upstream error.
 
+Codex requires a native OpenAI Responses route. Its CLI and ACP use the same exact model
+catalog file, named by a hash of the generated metadata and published atomically before launch.
+
 Conversation routes persist a non-secret catalog and connection scope. Per-request catalog IDs
 pin that snapshot while requests are active. Credentials are read only for matching connection
 scopes. Compatible metadata updates wait for explicit agent idle; binding/capability changes
 require restart, and provider-bound state may require a new session. Disabling a model blocks
 that alias while other enabled models remain usable. Usage retains the actual provider,
-upstream model, protocol pair and route revision.
+upstream model, protocol pair and route revision. The gateway ledger records reported cache
+reads and writes separately and labels older combined values as legacy.
 
 Claude's TUI receives a per-launch `--settings` modelPicker (Claude Code >= 2.1.242); JSON in
 extraArgs must remain one whitespace-free argv value and must contain no credentials. ACP

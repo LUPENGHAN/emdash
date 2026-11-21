@@ -26,6 +26,8 @@ export type GatewayUsage = {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
   failed: boolean;
   status: 'complete' | 'missing';
 };

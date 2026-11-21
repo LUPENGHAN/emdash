@@ -9,6 +9,8 @@ import {
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { getModelGatewayClient } from '../../api/browser/client';
 import {
+  agentUpstreamProtocol,
+  codexNativeRouteRequired,
   configuredProtocols,
   gatewayModelsSettingsSchema,
   type GatewayModel,
@@ -263,7 +265,12 @@ export function GatewayModelsPanel() {
                 key={agent}
                 size="sm"
                 variant="secondary"
-                disabled={busy || Boolean(draft) || !editing.enabled}
+                disabled={
+                  busy ||
+                  Boolean(draft) ||
+                  !editing.enabled ||
+                  (agent === 'codex' && !agentUpstreamProtocol(editing, agent))
+                }
                 onClick={() =>
                   void run(async () => {
                     setTestResult(undefined);
@@ -280,6 +287,9 @@ export function GatewayModelsPanel() {
               </Button>
             ))}
           </div>
+          {!agentUpstreamProtocol(editing, 'codex') ? (
+            <p className="text-xs text-foreground-muted">{codexNativeRouteRequired}</p>
+          ) : null}
           <p className="text-xs text-foreground-muted">
             Publish first. Each test sends a small model request and uses provider quota. It checks
             connectivity and response format; tool support requires separate validation.

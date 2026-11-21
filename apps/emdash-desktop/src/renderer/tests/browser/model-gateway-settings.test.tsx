@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import type { GatewayModel } from '@core/features/model-gateway/api/model-catalog';
 import { GatewayModelsPanel } from '@core/features/model-gateway/contributions/browser/models-panel';
+import { GatewayProvidersPanel } from '@core/features/model-gateway/contributions/browser/providers-panel';
 import { ThemeProvider } from '@core/primitives/theme/browser/theme-provider';
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   preview: vi.fn(),
   save: vi.fn(),
   testRoute: vi.fn(),
+  usage: vi.fn(),
 }));
 vi.mock('@core/features/settings/api/browser/use-app-settings-key', () => ({
   useAppSettingsKey: (key: string) => ({
@@ -39,6 +41,9 @@ vi.mock('@core/features/model-gateway/api/browser/client', () => ({
     migrationPreview: mocks.preview,
     saveModels: mocks.save,
     testModel: mocks.testRoute,
+    status: async () => ({ state: 'ready', providers: [] }),
+    routes: async () => [],
+    usage: mocks.usage,
   }),
 }));
 let host: HTMLDivElement;
@@ -124,6 +129,10 @@ it('previews and edits protocol mappings before explicitly publishing the catalo
     await page.getByText('Coding model · fast', { exact: true }).click();
   });
   await expect.element(page.getByLabelText('Model alias', { exact: true })).toBeDisabled();
+  await expect.element(page.getByRole('button', { name: 'Test Codex route' })).toBeDisabled();
+  await expect
+    .element(page.getByText('Codex gateway models require a native OpenAI Responses route.'))
+    .toBeVisible();
   await act(async () => {
     await page.getByRole('button', { name: 'Test Claude route' }).click();
   });
@@ -145,4 +154,44 @@ it('keeps drafts and shows the error when publishing fails', async () => {
     .element(page.getByRole('alert'))
     .toHaveTextContent('Secure model settings are unavailable');
   await expect.element(page.getByRole('button', { name: 'Discard changes' })).toBeEnabled();
+});
+
+it('displays reported cache reads and writes and labels legacy usage', async () => {
+  const common = {
+    accountId: 'p',
+    sessionId: 'test',
+    at: 0,
+    inputTokens: 5,
+    outputTokens: 2,
+    status: 'complete',
+    failed: false,
+  };
+  mocks.usage.mockResolvedValueOnce([
+    {
+      ...common,
+      id: 'current',
+      model: 'current',
+      cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 2048,
+    },
+    { ...common, id: 'old', model: 'old', cachedTokens: 1024 },
+  ]);
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ThemeProvider theme="emlight" onThemeChange={() => {}}>
+          <GatewayProvidersPanel />
+        </ThemeProvider>
+      </QueryClientProvider>
+    )
+  );
+  await act(async () => page.getByRole('button', { name: 'Router usage' }).click());
+  const table = page.getByRole('table', { name: 'Gateway request usage' });
+  await expect.element(table.getByRole('columnheader', { name: 'Cache read' })).toBeVisible();
+  await expect.element(table.getByRole('columnheader', { name: 'Cache write' })).toBeVisible();
+  const current = table.getByRole('row', { name: /current/ });
+  await expect.element(current.getByRole('cell', { name: '0', exact: true })).toBeVisible();
+  await expect.element(current.getByRole('cell', { name: '2048', exact: true })).toBeVisible();
+  await expect.element(table.getByText('Legacy cached (1024)')).toBeVisible();
 });

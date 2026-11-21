@@ -287,15 +287,12 @@ describe('buildSourceLaunch', () => {
     expect(JSON.parse(launch.env.CODEX_CONFIG!).model_context_window).toBe(1_000_000);
     // The catalog lists every provider model, sized only where a window is set;
     // without one Codex would list OpenAI's own models instead.
-    expect(launch.codexCatalog).toEqual({
-      providerKey: 'emdash-newapi',
-      models: [
-        { id: 'moonshotai/kimi-k3', contextWindow: 1_000_000, reasoning: true },
-        { id: 'z-ai/glm-5.3-flash', reasoning: true },
-      ],
-    });
+    expect(JSON.parse(launch.codexCatalog!).models).toMatchObject([
+      { slug: 'moonshotai/kimi-k3', context_window: 1_000_000 },
+      { slug: 'z-ai/glm-5.3-flash' },
+    ]);
     const catalogArg = launch.args.find((arg) => arg.startsWith('model_catalog_json='));
-    expect(catalogArg).toMatch(/emdash-model-catalog-emdash-newapi\.json"$/);
+    expect(catalogArg).toMatch(/emdash-model-catalog-[a-f0-9]{64}\.json"$/);
     expect(JSON.parse(launch.env.CODEX_CONFIG!).model_catalog_json).toBe(
       JSON.parse(catalogArg!.slice('model_catalog_json='.length))
     );
@@ -315,7 +312,7 @@ describe('buildSourceLaunch', () => {
     expect(JSON.parse(other.env.CODEX_CONFIG!).model_context_window).toBeUndefined();
     expect(other.codexCatalog).toEqual(launch.codexCatalog);
     expect(other.args.find((arg) => arg.startsWith('model_catalog_json='))).toMatch(
-      /emdash-model-catalog-emdash-newapi\.json"$/
+      /emdash-model-catalog-[a-f0-9]{64}\.json"$/
     );
   });
 
@@ -326,14 +323,11 @@ describe('buildSourceLaunch', () => {
       contextWindows: { 'a/two': 200_000 },
     };
     const launch = buildSourceLaunch('codex', three, 'sk-1', 'a/three')!;
-    expect(launch.codexCatalog).toEqual({
-      providerKey: 'emdash-newapi',
-      models: [
-        { id: 'a/one', reasoning: true },
-        { id: 'a/two', contextWindow: 200_000, reasoning: true },
-        { id: 'a/three', reasoning: true },
-      ],
-    });
+    expect(JSON.parse(launch.codexCatalog!).models).toMatchObject([
+      { slug: 'a/one' },
+      { slug: 'a/two', context_window: 200_000 },
+      { slug: 'a/three' },
+    ]);
     expect(launch.args.find((arg) => arg.startsWith('model_catalog_json='))).toBeDefined();
     expect(launch.args.every((arg) => !/\s/.test(arg))).toBe(true);
   });
@@ -423,16 +417,16 @@ describe('buildSourceLaunch', () => {
         'sk-1',
         'moonshotai/kimi-k3'
       )!;
-      expect(launch.codexCatalog?.models).toEqual([
+      expect(JSON.parse(launch.codexCatalog!).models).toMatchObject([
         {
-          id: 'moonshotai/kimi-k3',
-          reasoning: true,
-          efforts: { levels: ['low', 'high'], default: 'high' },
+          slug: 'moonshotai/kimi-k3',
+          supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }],
+          default_reasoning_level: 'high',
         },
         {
-          id: 'z-ai/glm-5.3-flash',
-          reasoning: false,
-          efforts: { levels: ['low', 'high'], default: 'high' },
+          slug: 'z-ai/glm-5.3-flash',
+          supported_reasoning_levels: [],
+          default_reasoning_level: null,
         },
       ]);
     });

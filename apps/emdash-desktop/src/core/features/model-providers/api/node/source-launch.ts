@@ -10,10 +10,10 @@ import {
 import { AGENT_MODEL_ENV } from '../launch-env';
 import {
   codexAppServerWrapperPath,
+  buildCodexModelCatalog,
   codexModelCatalogPath,
   codexStartingEffort,
   type CodexCatalogModel,
-  type CodexModelCatalog,
   type CodexModelInfo,
 } from './codex-launch';
 
@@ -41,7 +41,7 @@ export type SourceLaunch = {
   /** The agent needs Emdash's extension current (and old model-file entries gone). */
   extensionAgent?: ExtensionProviderAgent;
   /** Model metadata Codex reads (model_catalog_json), written before the launch. */
-  codexCatalog?: CodexModelCatalog;
+  codexCatalog?: string;
   codexWrapper?: boolean;
 };
 
@@ -137,7 +137,6 @@ export function buildSourceLaunch(
       // sized where the provider sets a window; without a catalog it lists OpenAI's own.
       // A path extraArgs cannot carry (whitespace anywhere; "'" on Windows breaks the
       // wrapper's TOML literal) means no catalog.
-      const catalogFile = provider.models.length > 0 ? codexModelCatalogPath(key) : undefined;
       const catalogModel = (id: string): CodexCatalogModel => {
         const efforts = userCodexEfforts(provider, id);
         return {
@@ -148,11 +147,15 @@ export function buildSourceLaunch(
           ...(efforts && { efforts }),
         };
       };
-      const catalog: CodexModelCatalog | undefined =
-        catalogFile &&
-        !/\s/.test(catalogFile) &&
-        !(process.platform === 'win32' && catalogFile.includes("'"))
-          ? { providerKey: key, models: provider.models.map(catalogModel) }
+      const catalog = provider.models.length
+        ? JSON.stringify(
+            buildCodexModelCatalog({ models: provider.models.map(catalogModel) }, codexKnownModels)
+          )
+        : undefined;
+      const file = catalog && codexModelCatalogPath(catalog);
+      const catalogFile =
+        file && !/\s/.test(file) && !(process.platform === 'win32' && file.includes("'"))
+          ? file
           : undefined;
       // The user's own config.toml effort is meant for their own provider; on this one,
       // start from a level this model is offered with.
@@ -179,7 +182,7 @@ export function buildSourceLaunch(
             ...(effort && { model_reasoning_effort: effort }),
             ...(webSearch && { web_search: webSearch }),
             ...(contextWindow && { model_context_window: contextWindow }),
-            ...(catalog && { model_catalog_json: catalogFile }),
+            ...(catalogFile && { model_catalog_json: catalogFile }),
           }),
           MODEL_PROVIDER: providerId,
           // Without a ChatGPT login the chat UI adapter refuses to start ("sign in")
@@ -200,9 +203,9 @@ export function buildSourceLaunch(
           // The chat UI's Codex reads the catalog only at startup (see the wrapper),
           // through a platform-appropriate script the launch writes first.
           ...(provider.id.startsWith('gateway:') && { EMDASH_CODEX_GATEWAY_URL: openai.url }),
-          ...((catalog || provider.id.startsWith('gateway:')) && {
+          ...((catalogFile || provider.id.startsWith('gateway:')) && {
             CODEX_PATH: codexAppServerWrapperPath(),
-            ...(catalog && { EMDASH_CODEX_MODEL_CATALOG: catalogFile! }),
+            ...(catalogFile && { EMDASH_CODEX_MODEL_CATALOG: catalogFile }),
           }),
         },
         args: [
@@ -214,9 +217,9 @@ export function buildSourceLaunch(
           ...(effort ? codexOverride('model_reasoning_effort', effort) : []),
           ...(webSearch ? codexOverride('web_search', webSearch) : []),
           ...(contextWindow ? codexOverride('model_context_window', contextWindow) : []),
-          ...(catalog ? codexOverride('model_catalog_json', catalogFile!) : []),
+          ...(catalogFile ? codexOverride('model_catalog_json', catalogFile) : []),
         ],
-        ...(catalog && { codexCatalog: catalog }),
+        ...(catalogFile && { codexCatalog: catalog }),
         codexWrapper: provider.id.startsWith('gateway:'),
       };
     }

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { ModelProvider, ProviderProtocol } from '@core/features/model-providers/api';
 import {
+  agentUpstreamProtocol,
+  codexNativeRouteRequired,
   configuredProtocols,
   modelAvailableForAgent,
   upstreamProtocol,
@@ -56,9 +58,22 @@ export function scopeClaudeCatalog(
   const models = snapshot.models.filter(
     (model) => upstreamProtocol(model, 'anthropic') === protocol
   );
+  return { ...withCatalogModels(snapshot, models), claudeUpstreamProtocol: protocol };
+}
+
+/** Older Codex snapshots could include conversion-only models. */
+export function scopeCodexCatalog(snapshot: CatalogSnapshot): CatalogSnapshot {
+  return snapshot.agent === 'codex'
+    ? withCatalogModels(
+        snapshot,
+        snapshot.models.filter((model) => agentUpstreamProtocol(model, 'codex'))
+      )
+    : snapshot;
+}
+
+function withCatalogModels(snapshot: CatalogSnapshot, models: GatewayModel[]): CatalogSnapshot {
   return {
     ...snapshot,
-    claudeUpstreamProtocol: protocol,
     models,
     providers: snapshot.providers.filter((provider) =>
       models.some((model) => model.providerId === provider.id)
@@ -97,7 +112,7 @@ export function runtimeCatalog(
 ): { providers: ApiProvider[]; models: Record<string, string> } {
   const entries: ApiProvider[] = [];
   const models: Record<string, string> = {};
-  for (const model of snapshot.models) {
+  for (const model of scopeCodexCatalog(snapshot).models) {
     const saved = snapshot.providers.find((p) => p.id === model.providerId);
     const current = inventory.find((p) => p.id === model.providerId);
     const runtime = providers.find((p) => p.id === model.providerId);
@@ -218,6 +233,8 @@ export function taskModelCatalog(
       provider.codexReasoning,
   };
   const snapshot = snapshotCatalog([binding], [provider], agent);
+  if (agent === 'codex' && !agentUpstreamProtocol(binding, agent))
+    throw new Error(codexNativeRouteRequired);
   if (!snapshot.models.length)
     throw new Error('This supplier model has no compatible agent protocol.');
   return { ...snapshot, scope: 'task' };

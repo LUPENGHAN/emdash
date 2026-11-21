@@ -92,7 +92,12 @@ describe.runIf(built)('model gateway process integration', () => {
                 content: [{ type: 'output_text', text: name, annotations: [] }],
               },
             ],
-            usage: { input_tokens: 7, output_tokens: 3, total_tokens: 10 },
+            usage: {
+              input_tokens: 7,
+              output_tokens: 3,
+              total_tokens: 10,
+              input_tokens_details: { cached_tokens: 2, cache_write_tokens: 3 },
+            },
           };
           const emit = (type: string, value: Record<string, unknown>) =>
             res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`);
@@ -231,7 +236,12 @@ describe.runIf(built)('model gateway process integration', () => {
       await new Promise((done) => setTimeout(done, 20));
     expect(await service.usage(100), JSON.stringify(await service.usage(100))).toHaveLength(5);
     expect((await service.status()).usageError).toBeUndefined();
-    expect((await service.usage(100))[0]).toMatchObject({ inputTokens: 7, outputTokens: 3 });
+    expect((await service.usage(100))[0]).toMatchObject({
+      inputTokens: 7,
+      outputTokens: 3,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 3,
+    });
     // Exercise the actual Codex CLI and the bundled ACP adapter through the product service.
     const codex = process.env.EMDASH_CODEX_TEST_BINARY ?? 'codex';
     const cli = await promisify(execFile)(codex, ['--version']).then(
@@ -307,7 +317,7 @@ describe.runIf(built)('model gateway process integration', () => {
       await mkdir(acpHome);
       if (!acpLaunch.codexCatalog) throw new Error('No ACP model catalog');
       await ensureCodexModelCatalog(acpLaunch.codexCatalog, acpHome);
-      const catalogFile = codexModelCatalogPath(acpLaunch.codexCatalog.providerKey, acpHome);
+      const catalogFile = codexModelCatalogPath(acpLaunch.codexCatalog, acpHome);
       const adapter = resolve('out/main/adapters/codex-acp.cjs');
       const adapterBuilt = await access(adapter).then(
         () => true,

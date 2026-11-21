@@ -7,6 +7,8 @@ import {
 } from '@core/features/model-providers/api';
 
 export const catalogSourceId = 'gateway:models';
+export const codexNativeRouteRequired =
+  'Codex gateway models require a native OpenAI Responses route.';
 const protocol = z.enum(PROVIDER_PROTOCOLS);
 const protocolModels = z.partialRecord(protocol, z.object({ upstreamModel: z.string().min(1) }));
 export const gatewayModelSchema = z
@@ -97,6 +99,13 @@ export function inboundProtocolForAgent(agent: string): ProviderProtocol {
   return agent === 'claude' ? 'anthropic' : 'openai-responses';
 }
 
+export function agentUpstreamProtocol(model: GatewayModel, agent: string): ProviderProtocol | null {
+  const inbound = inboundProtocolForAgent(agent);
+  const target = upstreamProtocol(model, inbound);
+  // Codex sends Responses-specific state and tool definitions in its normal requests.
+  return agent === 'codex' && target !== inbound ? null : target;
+}
+
 export function configuredProtocols(provider: ModelProvider): ProviderProtocol[] {
   return provider.endpoints
     ? PROVIDER_PROTOCOLS.filter((p) => provider.endpoints?.[p] !== undefined)
@@ -117,14 +126,12 @@ export function modelAvailableForAgent(
     Object.keys(model.protocolModels).every((protocol) =>
       configuredProtocols(provider).includes(protocol as ProviderProtocol)
     ) &&
-    upstreamProtocol(model, inboundProtocolForAgent(agent))
+    agentUpstreamProtocol(model, agent)
   );
 }
 
 export function catalogProvider(models: GatewayModel[], agent?: string): ModelProvider {
-  const available = models.filter(
-    (m) => m.enabled && (!agent || upstreamProtocol(m, inboundProtocolForAgent(agent)))
-  );
+  const available = models.filter((m) => m.enabled && (!agent || agentUpstreamProtocol(m, agent)));
   return {
     id: catalogSourceId,
     name: 'Gateway',

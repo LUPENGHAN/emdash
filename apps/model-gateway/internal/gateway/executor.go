@@ -208,12 +208,10 @@ func usageRecord(ctx context.Context, auth *a.Auth, req e.Request, started time.
 	var event struct {
 		Response struct {
 			Usage *struct {
-				Input  int64 `json:"input_tokens"`
-				Output int64 `json:"output_tokens"`
-				Total  int64 `json:"total_tokens"`
-				Cached struct {
-					Tokens int64 `json:"cached_tokens"`
-				} `json:"input_tokens_details"`
+				Input  int64            `json:"input_tokens"`
+				Output int64            `json:"output_tokens"`
+				Total  int64            `json:"total_tokens"`
+				Cache  cacheTokenCounts `json:"input_tokens_details"`
 			} `json:"usage"`
 		} `json:"response"`
 	}
@@ -226,9 +224,14 @@ func usageRecord(ctx context.Context, auth *a.Auth, req e.Request, started time.
 	v := event.Response.Usage
 	source := ""
 	detail := u.Detail{}
+	attribution := map[string]any{}
 	if v != nil {
 		source = "emdash:usage-known"
-		detail = u.Detail{InputTokens: v.Input, OutputTokens: v.Output, TotalTokens: v.Total, CachedTokens: v.Cached.Tokens}
+		read, write := tokenCount(v.Cache.Read), tokenCount(v.Cache.Write)
+		detail = u.Detail{InputTokens: v.Input, OutputTokens: v.Output, TotalTokens: v.Total,
+			CachedTokens: read, CacheReadTokens: read, CacheCreationTokens: write}
+		attribution["cacheReadTokens"] = v.Cache.Read
+		attribution["cacheWriteTokens"] = v.Cache.Write
 	}
 	sessionID, _ := ctx.Value(sessionContextKey{}).(string)
 	accountID := auth.ID
@@ -238,12 +241,15 @@ func usageRecord(ctx context.Context, auth *a.Auth, req e.Request, started time.
 		accountID = route.ProviderID
 		var mapping map[string]string
 		_ = json.Unmarshal([]byte(auth.Attributes["emdash_models"]), &mapping)
-		attribution := map[string]any{"upstreamModel": mapping[req.Model], "inboundProtocol": auth.Attributes["emdash_inbound_protocol"], "upstreamProtocol": auth.Attributes["emdash_upstream_protocol"], "routeRevision": route.Revision}
+		attribution["upstreamModel"] = mapping[req.Model]
+		attribution["inboundProtocol"] = auth.Attributes["emdash_inbound_protocol"]
+		attribution["upstreamProtocol"] = auth.Attributes["emdash_upstream_protocol"]
+		attribution["routeRevision"] = route.Revision
 		if route.RequestedModel != "" {
 			attribution["requestedModel"] = route.RequestedModel
 		}
-		ctx = context.WithValue(ctx, usageAttributionKey{}, attribution)
 	}
+	ctx = context.WithValue(ctx, usageAttributionKey{}, attribution)
 	u.PublishRecord(ctx, u.Record{Provider: ResponsesProvider, Source: source, Model: req.Model, AuthID: accountID, SessionID: sessionID,
 		RequestedAt: started, Latency: time.Since(started), Failed: failed, Detail: detail})
 }

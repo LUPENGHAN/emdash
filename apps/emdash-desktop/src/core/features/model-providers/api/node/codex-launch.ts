@@ -1,4 +1,5 @@
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import {
@@ -23,7 +24,6 @@ export type CodexCatalogModel = {
 
 /** The models a Codex model catalog describes; context windows only where set. */
 export type CodexModelCatalog = {
-  providerKey: string;
   models: CodexCatalogModel[];
 };
 
@@ -31,12 +31,10 @@ export function codexHome(env: NodeJS.ProcessEnv = process.env, home = homedir()
   return env.CODEX_HOME ?? path.join(home, '.codex');
 }
 
-/**
- * Where Emdash keeps a provider's catalog: next to Codex's own files, as a file of its
- * own that the user's config.toml never names, so only Emdash's launches read it.
- */
-export function codexModelCatalogPath(providerKey: string, home = codexHome()): string {
-  return path.join(home, `emdash-model-catalog-${providerKey}.json`);
+/** Launches with identical catalogs share a file next to Codex's own files. */
+export function codexModelCatalogPath(contents: string, home = codexHome()): string {
+  const digest = createHash('sha256').update(contents).digest('hex');
+  return path.join(home, `emdash-model-catalog-${digest}.json`);
 }
 
 /**
@@ -85,7 +83,11 @@ export async function ensureCodexAppServerWrapper(
   platform: NodeJS.Platform = process.platform
 ): Promise<void> {
   const wrapper = codexAppServerWrapperPath(home, platform);
-  await writeIfChanged(wrapper, platform === 'win32' ? APP_SERVER_WRAPPER_CMD : APP_SERVER_WRAPPER);
+  await writeIfChanged(
+    wrapper,
+    platform === 'win32' ? APP_SERVER_WRAPPER_CMD : APP_SERVER_WRAPPER,
+    platform === 'win32' ? 0o644 : 0o755
+  );
   if (platform !== 'win32') await chmod(wrapper, 0o755);
 }
 
@@ -222,16 +224,13 @@ function fallbackModelInfo(slug: string): CodexModelInfo {
   };
 }
 
-/** Writes (only when changed) the catalog a Codex launch on a provider points at. */
+/** Publishes the exact catalog contents used to compute the launch's file path. */
 export async function ensureCodexModelCatalog(
-  catalog: CodexModelCatalog,
+  contents: string,
   home = codexHome(),
   platform: NodeJS.Platform = process.platform
 ): Promise<void> {
-  const known = await readKnownCodexModels(home);
-  const file = codexModelCatalogPath(catalog.providerKey, home);
-  const next = `${JSON.stringify(buildCodexModelCatalog(catalog, known), null, 2)}\n`;
-  await writeIfChanged(file, next);
+  await writeIfChanged(codexModelCatalogPath(contents, home), contents, 0o644);
   await ensureCodexAppServerWrapper(home, platform);
 }
 
@@ -248,9 +247,18 @@ export async function readKnownCodexModels(home = codexHome()): Promise<CodexMod
   }
 }
 
-async function writeIfChanged(file: string, content: string): Promise<void> {
+async function writeIfChanged(file: string, content: string, mode: number): Promise<void> {
   const current = await readFile(file, 'utf8').catch(() => null);
   if (current === content) return;
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, content);
+  const temp = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temp, content, { mode, flag: 'wx' });
+    await rename(temp, file);
+  } catch (error) {
+    await rm(temp, { force: true });
+    // A concurrent launch may already have published the same contents.
+    if ((await readFile(file, 'utf8').catch(() => null)) === content) return;
+    throw error;
+  }
 }

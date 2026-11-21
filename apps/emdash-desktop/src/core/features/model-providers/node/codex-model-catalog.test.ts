@@ -30,7 +30,6 @@ describe('Codex model catalog', () => {
   it('keeps what Codex knows of a model, prefixed or not, and only widens its context', () => {
     const { models } = buildCodexModelCatalog(
       {
-        providerKey: 'emdash-x',
         models: [
           { id: 'gpt-6-sol', contextWindow: 1_000_000, reasoning: true },
           { id: 'openai/gpt-6-sol', contextWindow: 1_000_000, reasoning: true },
@@ -56,7 +55,6 @@ describe('Codex model catalog', () => {
   it("describes unknown models with Codex's own fallback and its base instructions", () => {
     const [model] = buildCodexModelCatalog(
       {
-        providerKey: 'emdash-x',
         models: [{ id: 'deepseek/v4-flash', contextWindow: 128_000, reasoning: true }],
       },
       known
@@ -77,7 +75,6 @@ describe('Codex model catalog', () => {
     // overrides it, and an unknown model gets no context_window at all.
     const [knownModel, unknownModel] = buildCodexModelCatalog(
       {
-        providerKey: 'emdash-x',
         models: [
           { id: 'gpt-6-sol', reasoning: true },
           { id: 'deepseek/v4-flash', reasoning: true },
@@ -99,7 +96,7 @@ describe('Codex model catalog', () => {
     const levels = (model: Record<string, unknown> | undefined) =>
       ((model?.supported_reasoning_levels ?? []) as { effort: string }[]).map((l) => l.effort);
     const build = (models: Parameters<typeof buildCodexModelCatalog>[0]['models']) =>
-      buildCodexModelCatalog({ providerKey: 'emdash-x', models }, known).models;
+      buildCodexModelCatalog({ models }, known).models;
 
     it('offers none for a model that does not reason, known or not, set or not', () => {
       const efforts: CodexReasoning = { levels: ['low', 'high'], default: 'high' };
@@ -177,19 +174,29 @@ describe('Codex model catalog', () => {
       await rm(home, { recursive: true, force: true });
     });
 
-    it("writes the provider's catalog next to Codex's files, from its model cache", async () => {
+    it('keeps concurrent launches on their own model catalogs', async () => {
       await writeFile(path.join(home, 'models_cache.json'), JSON.stringify({ models: known }));
-      await ensureCodexModelCatalog(
-        {
-          providerKey: 'emdash-x',
-          models: [{ id: 'gpt-6-sol', contextWindow: 1_000_000, reasoning: true }],
-        },
-        home
+      const metadata = await readKnownCodexModels(home);
+      const catalogs = [32_000, 128_000].map((contextWindow) =>
+        JSON.stringify(
+          buildCodexModelCatalog(
+            { models: [{ id: 'task-model', contextWindow, reasoning: true }] },
+            metadata
+          )
+        )
       );
-      const file = codexModelCatalogPath('emdash-x', home);
-      expect(path.dirname(file)).toBe(home);
-      const written = JSON.parse(await readFile(file, 'utf8'));
-      expect(written.models[0]).toMatchObject({ slug: 'gpt-6-sol', context_window: 1_000_000 });
+      const files = catalogs.map((contents) => codexModelCatalogPath(contents, home));
+      expect(files[0]).not.toBe(files[1]);
+      await Promise.all(
+        [...catalogs, catalogs[0]].map((contents) => ensureCodexModelCatalog(contents, home))
+      );
+      expect(
+        await Promise.all(
+          files.map(
+            async (file) => JSON.parse(await readFile(file, 'utf8')).models[0].context_window
+          )
+        )
+      ).toEqual([32_000, 128_000]);
       // The chat UI's Codex gets the catalog through an executable wrapper.
       const wrapper = codexAppServerWrapperPath(home);
       expect((await stat(wrapper)).mode & 0o111).not.toBe(0);
@@ -206,10 +213,12 @@ describe('Codex model catalog', () => {
 
     it('writes a Windows .cmd wrapper with a TOML literal and no chmod', async () => {
       await ensureCodexModelCatalog(
-        {
-          providerKey: 'emdash-x',
-          models: [{ id: 'gpt-6-sol', contextWindow: 1_000_000, reasoning: true }],
-        },
+        JSON.stringify(
+          buildCodexModelCatalog(
+            { models: [{ id: 'gpt-6-sol', contextWindow: 1_000_000, reasoning: true }] },
+            known
+          )
+        ),
         home,
         'win32'
       );

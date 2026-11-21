@@ -77,7 +77,12 @@ it('routes native protocols and explicit model choices through the Go process, p
             model: body.model,
             content: [{ type: 'text', text: 'native' }],
             stop_reason: 'end_turn',
-            usage: { input_tokens: 4, output_tokens: 2, cache_read_input_tokens: 2048 },
+            usage: {
+              input_tokens: 4,
+              output_tokens: 2,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 2048,
+            },
           })
         );
       else if (req.url?.includes('/chat/completions'))
@@ -211,8 +216,21 @@ it('routes native protocols and explicit model choices through the Go process, p
       'codex-conversation',
       'codex'
     );
+    const opencode = await service.prepareLaunch(
+      catalogSourceId,
+      'both',
+      'opencode-conversation',
+      'opencode'
+    );
     expect(claude.provider.models).toEqual(['both']);
-    expect(codex.provider.models).toEqual(['both', 'chat-only']);
+    expect(codex.provider.models).toEqual(['both']);
+    expect(opencode.provider.models).toEqual(['both', 'chat-only']);
+    await expect(
+      service.prepareLaunch(catalogSourceId, 'chat-only', 'blocked', 'codex')
+    ).rejects.toThrow('native OpenAI Responses');
+    await expect(
+      service.prepareTaskLaunch('p2', 'physical-chat', 'blocked-task', 'codex')
+    ).rejects.toThrow('native OpenAI Responses');
     const nativeLaunch = buildSourceLaunch(
       'claude',
       claude.provider,
@@ -228,8 +246,14 @@ it('routes native protocols and explicit model choices through the Go process, p
       modelPicker: { options: [{ model: 'both' }] },
     });
     const savedNativeRoute = await service.route('claude-conversation');
-    const mixedCatalog = (await service.route('codex-conversation'))?.catalog;
-    if (!savedNativeRoute || !mixedCatalog) throw new Error('Expected both saved routes');
+    const savedCodexRoute = await service.route('codex-conversation');
+    const mixedCatalog = (await service.route('opencode-conversation'))?.catalog;
+    if (!savedNativeRoute || !savedCodexRoute || !mixedCatalog)
+      throw new Error('Expected saved routes');
+    await routes.setOrThrow('codex-conversation', {
+      ...savedCodexRoute,
+      catalog: { ...mixedCatalog, agent: 'codex' },
+    });
     await routes.setOrThrow('old-claude', {
       ...savedNativeRoute,
       catalog: { ...mixedCatalog, agent: 'claude' },
@@ -283,7 +307,16 @@ it('routes native protocols and explicit model choices through the Go process, p
         },
       ])
     );
-    expect(await send(codex, 'responses', 'chat-only')).toContain('converted');
+    expect((await service.route('codex-conversation'))?.restartReason).toBeUndefined();
+    const blockedCodex = await fetch(codex.provider.baseUrl + '/responses', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${codex.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'chat-only', input: 'hello', prompt_cache_key: 'test' }),
+    });
+    expect(blockedCodex.status).toBe(400);
+    expect(await blockedCodex.text()).toContain('Unknown or unavailable gateway model alias');
+    expect(seen).toHaveLength(2);
+    expect(await send(opencode, 'responses', 'chat-only')).toContain('converted');
     expect(seen.at(-1)).toMatchObject({
       path: '/alternate/v1/chat/completions',
       model: 'physical-chat',
@@ -357,7 +390,9 @@ it('routes native protocols and explicit model choices through the Go process, p
         expect.objectContaining({
           model: 'both',
           upstreamProtocol: 'anthropic',
-          cachedTokens: 2048,
+          cachedTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 2048,
         }),
         expect.objectContaining({
           accountId: 'p2',

@@ -141,10 +141,20 @@ func (s *usageSink) HandleUsage(ctx context.Context, v u.Record) {
 		id = uuid.NewString()
 	}
 	status := "complete"
-	if v.Source != "emdash:usage-known" && v.Detail.TotalTokens == 0 && v.Detail.InputTokens == 0 && v.Detail.OutputTokens == 0 {
+	if v.Source != "emdash:usage-known" && v.Detail.TotalTokens == 0 && v.Detail.InputTokens == 0 &&
+		v.Detail.OutputTokens == 0 && v.Detail.CacheReadTokens == 0 && v.Detail.CacheCreationTokens == 0 {
 		status = "missing"
 	}
 	entry := map[string]any{"id": id, "accountId": v.AuthID, "model": v.Model, "sessionId": v.SessionID, "at": v.RequestedAt.UnixMilli(), "inputTokens": v.Detail.InputTokens, "outputTokens": v.Detail.OutputTokens, "cachedTokens": v.Detail.CachedTokens, "failed": v.Failed, "status": status}
+	entry["cacheReadTokens"] = nil
+	entry["cacheWriteTokens"] = nil
+	// SDK executors expose counts as integers without field presence.
+	if v.Detail.CacheReadTokens > 0 {
+		entry["cacheReadTokens"] = v.Detail.CacheReadTokens
+	}
+	if v.Detail.CacheCreationTokens > 0 {
+		entry["cacheWriteTokens"] = v.Detail.CacheCreationTokens
+	}
 	for key, value := range gateway.UsageAttribution(ctx) {
 		entry[key] = value
 	}
