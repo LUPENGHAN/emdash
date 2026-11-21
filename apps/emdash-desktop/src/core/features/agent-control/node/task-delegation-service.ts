@@ -202,13 +202,8 @@ export class TaskDelegationService {
       const record = this.parseRecord(latest);
       if (record.params.id !== taskId) throw new Error('The task delegation changed.');
       const current = await this.context(record);
-      if (
-        caller.conversationId !== current.caller.conversationId ||
-        caller.taskId !== current.caller.taskId ||
-        caller.projectId !== current.caller.projectId ||
-        caller.providerId !== current.caller.providerId
-      )
-        throw new Error('Only the current responsible conversation can retry this task.');
+      if (caller.taskId !== current.caller.taskId || caller.projectId !== current.caller.projectId)
+        throw new Error('Only a conversation in the responsible main agent can retry this task.');
       await this.deps.authorize(caller, record.params.projectId, current.request);
       return this.execute(saved.key, record, caller, current.request);
     });
@@ -218,7 +213,7 @@ export class TaskDelegationService {
     await this.deps.authorize(caller, projectId, request);
     const requestId = request.requestId ?? randomUUID();
     const key = createHash('sha256')
-      .update(JSON.stringify([caller.conversationId, requestId]))
+      .update(JSON.stringify([caller.taskId, requestId]))
       .digest('hex');
     return this.requests.runExclusive(key, async () => {
       const fingerprint = requestFingerprint(request, projectId);

@@ -168,7 +168,7 @@ describe('main agent coordination', () => {
     });
     expect(first.params?.taskConfig.initialConversation?.initialQueue).toBeUndefined();
     expect(test.resources.start).not.toHaveBeenCalled();
-    expect(await test.service.instructionsForTask(first.taskId)).toContain('main agent');
+    expect(await test.service.instructionsForTask(first.taskId)).toContain('Main Agent');
   });
 
   it('attaches delegated tasks to one coordinator and exposes worker instructions', async () => {
@@ -293,7 +293,7 @@ describe('main agent coordination', () => {
       test.service.submit(worker, worker.taskId, 'one', { ...result, summary: 'Changed' })
     ).rejects.toThrow('different content');
     await expect(test.service.acknowledge(worker, [receipt.eventId])).rejects.toThrow(
-      'Only the responsible'
+      'conversation in this main agent'
     );
   });
 
@@ -394,9 +394,7 @@ describe('main agent coordination', () => {
     expect(test.deps.deliver).toHaveBeenCalledOnce();
     expect(test.deps.deliver.mock.calls[0][0].conversationId).toBe('replacement-main');
     expect(test.deps.deliver.mock.calls[0][1]).toBe(second.eventId);
-    await expect(test.service.acknowledge(caller(record), [second.eventId])).rejects.toThrow(
-      'responsible main conversation'
-    );
+    await test.service.acknowledge(caller(record), [second.eventId]);
     await test.service.acknowledge({ ...caller(record), conversationId: 'replacement-main' }, [
       second.eventId,
     ]);
@@ -405,7 +403,7 @@ describe('main agent coordination', () => {
     expect(saved?.events.every((event) => event.state === 'acknowledged')).toBe(true);
   });
 
-  it('rechecks consumption authority inside the lock when switching races an acknowledgment', async () => {
+  it('keeps every main-task conversation authorized while the notification receiver changes', async () => {
     const test = setup();
     const record = await assigned(test);
     const receipt = await test.service.submit(
@@ -431,15 +429,20 @@ describe('main agent coordination', () => {
       return snapshot;
     });
     const acknowledgment = test.service.acknowledge(caller(record), [receipt.eventId]);
-    const rejected = expect(acknowledgment).rejects.toThrow('responsible main conversation');
     await read.promise;
     resume.resolve();
     await switching;
-    await rejected;
-    await expect(
-      test.service.review(record.id, 'worker-task', true, 'Stale main', 1, caller(record))
-    ).rejects.toThrow('responsible main conversation');
-    expect((await test.service.getByTask(record.taskId))?.events[0].state).not.toBe('acknowledged');
+    await acknowledgment;
+    await test.service.review(
+      record.id,
+      'worker-task',
+      true,
+      'Main-task review',
+      1,
+      caller(record)
+    );
+    expect((await test.service.getByTask(record.taskId))?.events[0].state).toBe('acknowledged');
+    expect((await test.service.getByTask(record.taskId))?.tasks['worker-task'].state).toBe('done');
   });
 
   it('rejects missing and foreign main conversations without changing the receiver', async () => {
@@ -505,11 +508,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('9');
+    expect((await test.service.ensureProject('project')).version).toBe('10');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('9');
+    expect(test.records.get(record.id)?.version).toBe('10');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -533,7 +536,7 @@ describe('main agent coordination', () => {
     ]);
     expect(two).toEqual(one);
     expect(one.kind).toBe('cross-project');
-    expect(one.projectIds).toEqual(['other', 'project']);
+    expect(one.projectIds).toEqual(['other']);
     expect(one.taskId).not.toBe(project.taskId);
     expect(test.resources.prepare).not.toHaveBeenCalled();
     expect(
@@ -543,6 +546,69 @@ describe('main agent coordination', () => {
       'different main agent parameters'
     );
     expect((await new CoordinatorService(test.deps).createCrossProject(input)).id).toBe(one.id);
+  });
+
+  it('persists idempotent workspace work items separately from task results', async () => {
+    const test = setup();
+    const record = await test.service.createCrossProject({
+      id: 'workspace',
+      name: '分析缓存数据',
+      purpose: '找出缓存命中率异常的原因',
+      lifecycle: { kind: 'finite', state: 'active' },
+      projectId: 'project',
+      projectIds: [],
+    });
+    const input = {
+      requestId: '5d5a4879-01a0-47d6-a65b-6af9709d3786',
+      title: '核对统计口径',
+      detail: '不创建代码任务',
+    };
+    const first = await test.service.addWorkItem(record.id, input);
+    const repeated = await test.service.addWorkItem(record.id, input);
+    expect(repeated.workItems).toEqual(first.workItems);
+    expect(Object.keys(first.tasks)).toHaveLength(0);
+    await expect(test.service.setLifecycleState(record.id, 'complete')).rejects.toThrow(
+      'work items'
+    );
+    const done = await test.service.updateWorkItem(record.id, input.requestId, { state: 'done' });
+    expect(done.workItems[input.requestId]).toMatchObject({
+      state: 'done',
+      resolvedAt: expect.any(Number),
+    });
+    expect((await test.service.setLifecycleState(record.id, 'complete')).lifecycle).toMatchObject({
+      kind: 'finite',
+      state: 'completed',
+      completedAt: expect.any(Number),
+    });
+  });
+
+  it('checkpoints and pauses ongoing work without completing it', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    const checkpoint = await test.service.checkpoint(
+      record.id,
+      '44dcf9f7-7398-47fa-bf1d-5bc65e78651b',
+      '第一阶段'
+    );
+    expect(checkpoint.lifecycle).toMatchObject({
+      kind: 'ongoing',
+      state: 'active',
+      lastCheckpointAt: expect.any(Number),
+    });
+    expect(checkpoint.checkpoints).toHaveLength(1);
+    expect(
+      (await test.service.checkpoint(record.id, '44dcf9f7-7398-47fa-bf1d-5bc65e78651b', '第一阶段'))
+        .checkpoints
+    ).toHaveLength(1);
+    expect((await test.service.setLifecycleState(record.id, 'pause')).lifecycle.state).toBe(
+      'paused'
+    );
+    expect((await test.service.setLifecycleState(record.id, 'resume')).lifecycle.state).toBe(
+      'active'
+    );
+    await expect(test.service.setLifecycleState(record.id, 'complete')).rejects.toThrow(
+      'checkpoints'
+    );
   });
 
   it('transfers one owner atomically, preserves result history and redirects unconfirmed events', async () => {
@@ -631,7 +697,7 @@ describe('main agent coordination', () => {
     );
     await expect(
       test.service.takeOverTask(destination.id, 'worker-task', source.id, caller(source))
-    ).rejects.toThrow('designated main');
+    ).rejects.toThrow('conversation in this main agent');
     await expect(test.service.takeOverTask(destination.id, 'missing', null)).rejects.toThrow(
       'unavailable'
     );
@@ -867,12 +933,10 @@ it('keeps cancelled plans blocked after review, restart and repeated cancellatio
     [],
     ['worker-task']
   );
-  await expect(
-    test.service.cancelPendingTask(main.id, 'cancelled', {
-      ...caller(main),
-      conversationId: 'stale-main',
-    })
-  ).rejects.toThrow('responsible main');
+  await test.service.cancelPendingTask(main.id, 'cancelled', {
+    ...caller(main),
+    conversationId: 'another-main-task-conversation',
+  });
   await test.service.cancelPendingTask(main.id, 'cancelled', caller(main));
   await test.service.cancelPendingTask(main.id, 'cancelled', caller(main));
   await test.service.submit(caller(main, 'worker-task'), 'worker-task', 'result', result);
@@ -950,7 +1014,7 @@ it('preserves a legacy main checkout until its separate document migration runs'
   vi.mocked(test.resources.prepare).mockClear();
   vi.mocked(test.resources.create).mockClear();
   const reopened = await new CoordinatorService(test.deps).open(first.id);
-  expect(reopened.version).toBe('9');
+  expect(reopened.version).toBe('10');
   expect(reopened.params?.workspaceConfig.git).toEqual(saved.params.workspaceConfig.git);
   expect(reopened.taskId).toBe(first.taskId);
   expect(reopened.conversationId).toBe(first.conversationId);
@@ -1093,7 +1157,7 @@ describe('management document authorization', () => {
     expect(test.records.get(main.id)?.documentStorage?.projectId).toBe('git-project');
   });
 
-  it('allows only the designated main conversation to write shared documents', async () => {
+  it('allows every main-task conversation, but no worker, to write shared documents', async () => {
     const test = setup();
     const main = await assigned(test);
     const write = vi.fn(async () => ({
@@ -1110,12 +1174,13 @@ describe('management document authorization', () => {
     const input = { path: 'plan.md', content: 'saved' };
     await expect(
       service.writeDocument(main.id, input, caller(main, 'worker-task'))
-    ).rejects.toThrow('designated main');
-    await expect(
-      service.writeDocument(main.id, input, { ...caller(main), conversationId: 'superseded' })
-    ).rejects.toThrow('designated main');
+    ).rejects.toThrow('conversation in this main agent');
+    await service.writeDocument(main.id, input, {
+      ...caller(main),
+      conversationId: 'another-main-task-conversation',
+    });
     await service.writeDocument(main.id, input, caller(main));
-    expect(write).toHaveBeenCalledOnce();
+    expect(write).toHaveBeenCalledTimes(2);
   });
 
   it('requires migration rather than replacing a management checkout with empty storage', async () => {

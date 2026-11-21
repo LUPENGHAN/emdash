@@ -807,9 +807,41 @@ export async function bootServices(
           'review_task_result',
           'take_over_task',
           'cancel_pending_task',
+          'add_work_item',
+          'update_work_item',
+          'create_checkpoint',
+          'set_main_agent_state',
         ].includes(action.kind)
       )
         await assertActiveAgentCaller(caller);
+      if (
+        action.kind === 'add_work_item' ||
+        action.kind === 'update_work_item' ||
+        action.kind === 'create_checkpoint' ||
+        action.kind === 'set_main_agent_state'
+      ) {
+        const service = coordinationRuntime.service;
+        if (!service) throw new Error('Main agent coordination is starting.');
+        const main = await service.getByTask(caller.taskId);
+        if (!main) throw new Error('Only a main-agent conversation can change its workspace.');
+        const record =
+          action.kind === 'add_work_item'
+            ? await service.addWorkItem(main.id, {
+                requestId: action.requestId,
+                title: action.title,
+                ...(action.detail !== undefined && { detail: action.detail }),
+              })
+            : action.kind === 'update_work_item'
+              ? await service.updateWorkItem(main.id, action.workItemId, {
+                  state: action.state,
+                  ...(action.title !== undefined && { title: action.title }),
+                  ...(action.detail !== undefined && { detail: action.detail }),
+                })
+              : action.kind === 'create_checkpoint'
+                ? await service.checkpoint(main.id, action.requestId, action.title)
+                : await service.setLifecycleState(main.id, action.action, action.note);
+        return { text: JSON.stringify(record) };
+      }
       if (
         action.kind === 'read_management_document' ||
         action.kind === 'write_management_document'
@@ -884,12 +916,10 @@ export async function bootServices(
       if (action.kind === 'review_task_result') {
         if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
         const record = await coordinationRuntime.service.getByTask(caller.taskId);
-        if (
-          !record ||
-          record.conversationId !== caller.conversationId ||
-          !record.tasks[action.taskId]
-        )
-          throw new Error('Only the responsible main agent can review this task.');
+        if (!record?.tasks[action.taskId])
+          throw new Error(
+            'Only a conversation in the responsible main agent can review this task.'
+          );
         await coordinationRuntime.service.review(
           record.id,
           action.taskId,

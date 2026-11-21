@@ -85,26 +85,24 @@ export function CoordinatorDocumentPush({
   return (
     <div className="space-y-2 border-t border-border pt-2" data-testid="coordinator-document-push">
       <p className="text-xs text-foreground-muted">
-        {saved
-          ? `Document remote: ${saved.remote} · ${saved.destination}`
-          : 'Management documents are stored locally.'}
+        {saved ? `文档远端：${saved.remote} · ${saved.destination}` : '管理文档仅保存在本地。'}
       </p>
       <details>
-        <summary className="cursor-pointer text-xs">Configure document remote</summary>
+        <summary className="cursor-pointer text-xs">配置文档远端</summary>
         <div className="mt-2 space-y-2">
           <p className="text-xs text-foreground-muted">
-            Choose your personal fork for documents. Saving this selection does not push.
+            选择用于文档的个人 Fork。保存此设置不会自动推送。
           </p>
           <Select.Root value={value} onValueChange={(value) => setSelection(value ?? 'local')}>
             <Select.Trigger
               disabled={disabled || busy}
-              aria-label="Document push remote"
+              aria-label="文档推送远端"
               data-testid="document-push-remote"
             >
               <Select.Value />
             </Select.Trigger>
             <Select.Content>
-              <Select.Item value="local">Keep documents local</Select.Item>
+              <Select.Item value="local">仅在本地保存文档</Select.Item>
               {options.data?.targets.map((target) => (
                 <Select.Item key={target.remote} value={`remote:${target.remote}`}>
                   {target.remote} · {target.destination}
@@ -128,7 +126,7 @@ export function CoordinatorDocumentPush({
             disabled={disabled || busy || !changed || (value !== 'local' && !selected)}
             onClick={() => void configure()}
           >
-            Save document remote
+            保存文档远端
           </Button>
         </div>
       </details>
@@ -139,7 +137,7 @@ export function CoordinatorDocumentPush({
           disabled={disabled || busy || !saved}
           onClick={() => void push()}
         >
-          Push committed documents
+          推送已提交的文档
         </Button>
         <Button
           size="sm"
@@ -147,12 +145,12 @@ export function CoordinatorDocumentPush({
           disabled={disabled || busy}
           onClick={() => void Promise.all([options.refetch(), refresh()])}
         >
-          Refresh document Git state
+          刷新文档 Git 状态
         </Button>
       </div>
       {receipt && (
         <p role="status" data-testid="coordinator-document-pushed" className="text-xs">
-          Pushed {receipt.oid} to {receipt.destination}
+          已将 {receipt.oid} 推送到 {receipt.destination}
         </p>
       )}
       {error && (

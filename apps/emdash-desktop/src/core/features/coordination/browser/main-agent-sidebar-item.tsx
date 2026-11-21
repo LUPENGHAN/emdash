@@ -19,7 +19,7 @@ export function MainAgentSidebarItem({
     <button
       type="button"
       disabled={busy}
-      aria-label="Open main agent"
+      aria-label="打开主任务工作区"
       data-testid="project-main-agent"
       data-project-id={projectId}
       className={`flex h-8 w-full items-center gap-2 rounded-lg text-sm hover:bg-background-tertiary-1 ${nested ? 'pl-10' : 'pl-7'}`}
@@ -29,18 +29,16 @@ export function MainAgentSidebarItem({
           .then((client) => client.openProject({ projectId }))
           .then(async (record) => {
             const manager = getTaskManagerStore(projectId);
-            if (!manager) throw new Error('The project is not available.');
+            if (!manager) throw new Error('该项目当前不可用。');
             await manager.loadTasks();
             navigate(taskViewDef({ projectId, taskId: record.taskId }));
           })
-          .catch((error) =>
-            toast.error('Could not open main agent', { description: String(error) })
-          )
+          .catch((error) => toast.error('无法打开主任务工作区', { description: String(error) }))
           .finally(() => setBusy(false));
       }}
     >
       {busy ? <Loader2 className="size-4 animate-spin" /> : <Bot className="size-4" />}
-      <span>Main agent</span>
+      <span>主任务工作区</span>
     </button>
   );
 }

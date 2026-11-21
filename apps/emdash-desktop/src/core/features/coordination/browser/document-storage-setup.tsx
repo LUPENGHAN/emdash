@@ -49,18 +49,17 @@ export const DocumentStorageSetup = observer(function DocumentStorageSetup({
   };
   return (
     <div className="space-y-3 p-4" data-testid="document-storage-setup">
-      <p>Choose a Git repository to store this main agent's management documents.</p>
+      <p>选择一个 Git 仓库，用于保存这个主任务工作区的管理文档。</p>
       <p className="text-sm text-foreground-muted">
-        Documents use their own branch. Your conversation, directory files and code baseline stay in
-        place.
+        文档使用独立分支；对话、目录文件和代码基线均保持原位。
       </p>
       <Select.Root value={projectId} onValueChange={(value) => setProjectId(value ?? '')}>
         <Select.Trigger
-          aria-label="Document storage project"
+          aria-label="文档存储项目"
           data-testid="document-storage-project"
           disabled={busy || !!record.documentStorage}
         >
-          <Select.Value placeholder="Choose a Git repository" />
+          <Select.Value placeholder="选择 Git 仓库" />
         </Select.Trigger>
         <Select.Content>
           {projects.map((project) => (
@@ -75,7 +74,7 @@ export const DocumentStorageSetup = observer(function DocumentStorageSetup({
         data-testid="configure-document-storage"
         onClick={() => void configure()}
       >
-        {record.documentStorage ? 'Retry document storage setup' : 'Use repository for documents'}
+        {record.documentStorage ? '重试文档存储设置' : '使用此仓库保存文档'}
       </Button>
       {record.documentStorage && (
         <Button
@@ -84,7 +83,7 @@ export const DocumentStorageSetup = observer(function DocumentStorageSetup({
           data-testid="cancel-document-storage-setup"
           onClick={() => void cancel()}
         >
-          Cancel setup and choose another repository
+          取消设置并选择其他仓库
         </Button>
       )}
       {error && (

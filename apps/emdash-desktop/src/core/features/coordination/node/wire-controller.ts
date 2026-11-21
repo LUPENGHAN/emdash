@@ -36,6 +36,16 @@ export function createCoordinationWireController(service: CoordinatorService) {
     getByTask: ({ taskId }) => service.getByTask(taskId),
     openProject: ({ projectId }) => service.openProject(projectId),
     update: ({ id, ...patch }) => service.update(id, patch),
+    addWorkItem: ({ id, requestId, title, detail }) =>
+      service.addWorkItem(id, { requestId, title, ...(detail !== undefined && { detail }) }),
+    updateWorkItem: ({ id, workItemId, state, title, detail }) =>
+      service.updateWorkItem(id, workItemId, {
+        state,
+        ...(title !== undefined && { title }),
+        ...(detail !== undefined && { detail }),
+      }),
+    checkpoint: ({ id, requestId, title }) => service.checkpoint(id, requestId, title),
+    setLifecycleState: ({ id, action, note }) => service.setLifecycleState(id, action, note),
     review: ({ id, taskId, accepted, note, resultVersion }) =>
       service.review(id, taskId, accepted, note, resultVersion),
     retryDelivery: ({ id }) => service.deliverPending(id),

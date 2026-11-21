@@ -15,6 +15,8 @@ import {
 import {
   agentSelectionSchema,
   projectAccessSchema,
+  workspaceLifecycleSchema,
+  workspaceWorkItemSchema,
   type Coordinator,
   type CoordinationEvent,
   type ResolvedAgentSelection,
@@ -118,6 +120,8 @@ export const coordinationContract = defineContract({
       projectIds: z.array(z.string().min(1)),
       primary: agentSelectionSchema.optional(),
       delegationDefaults: agentSelectionSchema.optional(),
+      purpose: z.string().max(20_000).optional(),
+      lifecycle: workspaceLifecycleSchema.optional(),
     }),
     output: z.custom<Coordinator>(),
   }),
@@ -146,6 +150,41 @@ export const coordinationContract = defineContract({
       delegationDefaults: agentSelectionSchema.optional(),
       projectAccess: projectAccessSchema.optional(),
       projectIds: z.array(z.string().min(1)).optional(),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  addWorkItem: procedure({
+    input: z.object({
+      id: z.string(),
+      requestId: z.uuid(),
+      title: z.string().trim().min(1).max(200),
+      detail: z.string().max(20_000).optional(),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  updateWorkItem: procedure({
+    input: z.object({
+      id: z.string(),
+      workItemId: z.string(),
+      title: z.string().trim().min(1).max(200).optional(),
+      detail: z.string().max(20_000).optional(),
+      state: workspaceWorkItemSchema.shape.state,
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  checkpoint: procedure({
+    input: z.object({
+      id: z.string(),
+      requestId: z.uuid(),
+      title: z.string().trim().min(1).max(200),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  setLifecycleState: procedure({
+    input: z.object({
+      id: z.string(),
+      action: z.enum(['complete', 'pause', 'resume', 'archive']),
+      note: z.string().max(20_000).optional(),
     }),
     output: z.custom<Coordinator>(),
   }),

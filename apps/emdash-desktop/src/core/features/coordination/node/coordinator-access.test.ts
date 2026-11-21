@@ -5,7 +5,7 @@ import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordin
 
 function main(id = 'a'): Coordinator {
   return {
-    version: '9',
+    version: '10',
     id,
     kind: 'project',
     name: 'Main',
@@ -17,6 +17,12 @@ function main(id = 'a'): Coordinator {
     delegationDefaults: {},
     tasks: {},
     events: [],
+    purpose: '',
+    lifecycle: { kind: 'ongoing', state: 'active' },
+    workItems: {},
+    checkpoints: [],
+    createdAt: 0,
+    updatedAt: 0,
   };
 }
 function caller(record: Coordinator, taskId = record.taskId): AgentCaller {
@@ -94,7 +100,7 @@ describe('coordinator access', () => {
       mayAccessTask(actor, [record, other], { id: 'unowned', projectId: 'b' }, 'control')
     ).toBe(false);
   });
-  it('keeps ordinary agent scope in its project and prevents replaced main conversations from delegating', () => {
+  it('keeps ordinary agent scope in its project and gives every main-task conversation equal coordination access', () => {
     const record = main();
     const actor = { ...caller(record), taskId: 'ordinary' };
     expect(mayAccessProject(actor, coordinatorPrincipal(actor, [record]), 'a', 'delegate')).toBe(
@@ -106,6 +112,9 @@ describe('coordinator access', () => {
     const replaced = { ...caller(record), conversationId: 'replaced' };
     expect(
       mayAccessProject(replaced, coordinatorPrincipal(replaced, [record]), 'a', 'delegate')
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      mayAccessProject(replaced, coordinatorPrincipal(replaced, [record]), 'b', 'delegate')
+    ).toBe(true);
   });
 });

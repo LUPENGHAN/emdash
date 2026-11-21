@@ -309,10 +309,7 @@ describe('SidebarStore project ordering', () => {
       { projectId: 'project-1', taskId: 'regular-task' },
     ]);
     expect(store.visibleTaskIdsForProject('project-1')).toEqual([]);
-    expect(store.sidebarRows).toEqual([
-      { kind: 'project', projectId: 'project-1', nested: false },
-      { kind: 'main-agent', projectId: 'project-1', nested: false },
-    ]);
+    expect(store.sidebarRows).toEqual([{ kind: 'project', projectId: 'project-1', nested: false }]);
   });
 });
 

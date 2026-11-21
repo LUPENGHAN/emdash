@@ -16,37 +16,36 @@ export function TakeOverTaskForm({ record }: { record: Coordinator }) {
         void getCoordinationClient()
           .then((client) => client.inspectTask({ id: record.id, taskId: taskId.trim() }))
           .then(setPreview)
-          .catch((error) => toast.error('Could not inspect task', { description: String(error) }))
+          .catch((error) => toast.error('无法检查任务', { description: String(error) }))
           .finally(() => setBusy(false));
       }}
     >
-      <p className="text-sm">Take over an existing task</p>
+      <p className="text-sm">接管已有独立 Task</p>
       <div className="flex gap-2">
         <Input
           data-testid="takeover-task-id"
-          aria-label="Task ID to take over"
+          aria-label="要接管的 Task ID"
           value={taskId}
-          placeholder="Task ID"
+          placeholder="Task ID（任务标识）"
           onChange={(event) => {
             setTaskId(event.target.value);
             setPreview(undefined);
           }}
         />
         <Button data-testid="inspect-task-takeover" type="submit" disabled={busy || !taskId.trim()}>
-          Inspect task
+          检查任务
         </Button>
       </div>
       {preview && (
         <div className="space-y-2 rounded border border-border p-3 text-sm">
           <p>{preview.name}</p>
-          <p>Managed by: {preview.ownerName ?? 'No main agent'}</p>
+          <p>当前管理方：{preview.ownerName ?? '尚无 Main Agent'}</p>
           {preview.ownerId === record.id ? (
-            <p>This main agent already manages the task.</p>
+            <p>当前主任务工作区已经管理这个 Task。</p>
           ) : (
             <>
               <p>
-                The task keeps its branch and running agent. Results and pending notifications move
-                here.
+                接管后沿用原 Task、branch、worktree 和运行中的 Agent；结果与待处理通知会转移到这里。
               </p>
               <Button
                 type="button"
@@ -65,10 +64,10 @@ export function TakeOverTaskForm({ record }: { record: Coordinator }) {
                     .then(() => {
                       setPreview(undefined);
                       setTaskId('');
-                      toast.success('Task ownership updated');
+                      toast.success('任务管理关系已更新');
                     })
                     .catch(async (error) => {
-                      toast.error('Could not take over task', { description: String(error) });
+                      toast.error('无法接管任务', { description: String(error) });
                       try {
                         setPreview(
                           await (
@@ -85,7 +84,7 @@ export function TakeOverTaskForm({ record }: { record: Coordinator }) {
                     .finally(() => setBusy(false));
                 }}
               >
-                Take over task
+                接管任务
               </Button>
             </>
           )}

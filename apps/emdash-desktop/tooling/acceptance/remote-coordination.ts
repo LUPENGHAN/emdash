@@ -84,7 +84,7 @@ export async function verifyRemoteCoordination(input: {
   checks.push('Packaged remote Host created independent management history without code files');
 
   const record: Coordinator = {
-    version: '9',
+    version: '10',
     id: id('main'),
     kind: 'project',
     name: 'Remote acceptance',
@@ -96,6 +96,12 @@ export async function verifyRemoteCoordination(input: {
     delegationDefaults: {},
     tasks: {},
     events: [],
+    purpose: '',
+    lifecycle: { kind: 'finite', state: 'active' },
+    workItems: {},
+    checkpoints: [],
+    createdAt: 0,
+    updatedAt: 0,
     params: {
       id: id('documents'),
       projectId: id('project'),

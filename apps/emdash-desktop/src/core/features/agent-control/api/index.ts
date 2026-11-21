@@ -89,6 +89,20 @@ export type AgentControlAction =
     }
   | { kind: 'list_projects'; query?: string }
   | { kind: 'get_task_status'; taskId: string }
+  | { kind: 'add_work_item'; requestId: string; title: string; detail?: string }
+  | {
+      kind: 'update_work_item';
+      workItemId: string;
+      state: 'open' | 'in_progress' | 'waiting' | 'review' | 'done' | 'deferred' | 'cancelled';
+      title?: string;
+      detail?: string;
+    }
+  | { kind: 'create_checkpoint'; requestId: string; title: string }
+  | {
+      kind: 'set_main_agent_state';
+      action: 'complete' | 'pause' | 'resume' | 'archive';
+      note?: string;
+    }
   | { kind: 'list_conversations'; scope: 'task' | 'project'; projectId?: string; taskId?: string }
   | {
       kind: 'create_conversation';

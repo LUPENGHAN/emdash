@@ -176,6 +176,79 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
   );
 
   server.registerTool(
+    'add_work_item',
+    {
+      description:
+        'Main agent: add a workspace work item for an outcome, analysis question or coordination item. This does not create a Project requirement or a code task. Reuse request_id for retries.',
+      inputSchema: {
+        request_id: z.uuid(),
+        title: z.string().trim().min(1).max(200),
+        detail: z.string().max(20_000).optional(),
+      },
+    },
+    ({ request_id, title, detail }) =>
+      dispatch({ kind: 'add_work_item', requestId: request_id, title, ...(detail && { detail }) })
+  );
+
+  server.registerTool(
+    'update_work_item',
+    {
+      description:
+        'Main agent: update a workspace work item independently from Project requirements, task results and workspace completion.',
+      inputSchema: {
+        work_item_id: z.string().min(1),
+        state: z.enum([
+          'open',
+          'in_progress',
+          'waiting',
+          'review',
+          'done',
+          'deferred',
+          'cancelled',
+        ]),
+        title: z.string().trim().min(1).max(200).optional(),
+        detail: z.string().max(20_000).optional(),
+      },
+    },
+    ({ work_item_id, state, title, detail }) =>
+      dispatch({
+        kind: 'update_work_item',
+        workItemId: work_item_id,
+        state,
+        ...(title && { title }),
+        ...(detail !== undefined && { detail }),
+      })
+  );
+
+  server.registerTool(
+    'create_checkpoint',
+    {
+      description:
+        'Ongoing main agent: record a named checkpoint without completing the workspace or resetting its conversations.',
+      inputSchema: {
+        request_id: z
+          .uuid()
+          .describe('Stable idempotency key; reuse it when retrying this action.'),
+        title: z.string().trim().min(1).max(200),
+      },
+    },
+    ({ request_id, title }) => dispatch({ kind: 'create_checkpoint', requestId: request_id, title })
+  );
+
+  server.registerTool(
+    'set_main_agent_state',
+    {
+      description:
+        'Main agent lifecycle: complete a finite workspace, pause or resume an ongoing workspace, or archive either. Completion is rejected while code tasks or work items remain active.',
+      inputSchema: {
+        action: z.enum(['complete', 'pause', 'resume', 'archive']),
+        note: z.string().max(20_000).optional(),
+      },
+    },
+    ({ action, note }) => dispatch({ kind: 'set_main_agent_state', action, ...(note && { note }) })
+  );
+
+  server.registerTool(
     'list_conversations',
     {
       description:
@@ -434,7 +507,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'retry_task',
     {
       description:
-        'Retry startup of a saved delegated task by task ID after fixing its failure. Only its current responsible main conversation (or its original caller when unowned) can retry. Preserves the task, branch, conversation, model configuration and document snapshots; never creates a replacement task.',
+        'Retry startup of a saved delegated task by task ID after fixing its failure. Any conversation in its responsible main-agent task (or its original caller when unowned) can retry. Preserves the task, branch, conversation, model configuration and document snapshots; never creates a replacement task.',
       inputSchema: { task_id: z.string().min(1) },
     },
     ({ task_id }) => dispatch({ kind: 'retry_task', taskId: task_id })

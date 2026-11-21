@@ -55,20 +55,19 @@ export const DocumentMigrationForm = observer(function DocumentMigrationForm({
   };
   return (
     <div className="space-y-3 p-3" data-testid="document-migration-form">
-      <p>Move selected management documents to an independent Git worktree.</p>
+      <p>将选中的管理文档迁移到独立 Git 工作树。</p>
       <p className="text-xs text-foreground-muted">
-        Original files, branches and conversations are preserved. Select only plans and decisions
-        managed by this main agent; product documentation stays with code tasks. If storage is
-        disconnected, reconnect it before copying.
+        原文件、分支和对话都会保留。仅选择由该主任务工作区管理的方案与决策；产品文档仍跟随代码
+        Task。如果存储已断开，请先重新连接再复制。
       </p>
       {pending ? (
         <>
           <p className="text-sm">
-            Migration: {migration.phase} · {migration.copied.length}/{migration.files.length} files
-            copied
+            迁移状态：{migration.phase} · 已复制 {migration.copied.length}/{migration.files.length}{' '}
+            个文件
           </p>
           <details>
-            <summary>Selected document versions</summary>
+            <summary>已选文档版本</summary>
             {migration.files.map((file) => (
               <div key={file.path} className="my-2 text-xs">
                 <p>
@@ -84,7 +83,7 @@ export const DocumentMigrationForm = observer(function DocumentMigrationForm({
               data-testid="run-document-migration"
               onClick={() => void perform('run')}
             >
-              Copy, verify and use documents
+              复制、验证并启用文档
             </Button>
             <Button
               disabled={busy}
@@ -92,7 +91,7 @@ export const DocumentMigrationForm = observer(function DocumentMigrationForm({
               data-testid="cancel-document-migration"
               onClick={() => void perform('cancel')}
             >
-              Keep original storage
+              保留原存储
             </Button>
           </div>
           {migration.error && (
@@ -105,12 +104,12 @@ export const DocumentMigrationForm = observer(function DocumentMigrationForm({
         <>
           {migration?.phase === 'complete' && (
             <p role="status" data-testid="document-migration-complete">
-              Document migration completed. Original storage is preserved.
+              文档迁移完成，原存储已保留。
             </p>
           )}
           <Select.Root value={projectId} onValueChange={(value) => setProjectId(value ?? '')}>
             <Select.Trigger
-              aria-label="Migration destination project"
+              aria-label="迁移目标项目"
               data-testid="migration-destination-project"
               disabled={busy}
             >
@@ -125,7 +124,7 @@ export const DocumentMigrationForm = observer(function DocumentMigrationForm({
             </Select.Content>
           </Select.Root>
           <Textarea
-            aria-label="Management document paths"
+            aria-label="管理文档路径"
             data-testid="migration-document-paths"
             placeholder={'plans/decision.md\nnotes/acceptance.md'}
             value={paths}
@@ -133,15 +132,15 @@ export const DocumentMigrationForm = observer(function DocumentMigrationForm({
             disabled={busy}
           />
           <p className="text-xs text-foreground-muted">
-            One relative file path per line. Up to 100 text documents and 16 MiB per migration. The
-            next step shows the saved versions before copying.
+            每行填写一个相对路径。每次最多迁移 100 个文本文档、共 16 MiB；复制前会先展示已保存的
+            版本。
           </p>
           <Button
             disabled={busy || !projectId || !paths.trim()}
             data-testid="prepare-document-migration"
             onClick={() => void perform('prepare')}
           >
-            Prepare selected documents
+            准备所选文档
           </Button>
         </>
       )}
@@ -152,8 +151,7 @@ export const DocumentMigrationForm = observer(function DocumentMigrationForm({
       )}
       {!!record.documentStorageHistory?.length && (
         <p className="text-xs text-foreground-muted">
-          Preserved document workspaces: {record.documentStorageHistory.length}. No original files
-          were deleted.
+          已保留 {record.documentStorageHistory.length} 个文档工作区，未删除任何原文件。
         </p>
       )}
     </div>

@@ -1,5 +1,5 @@
 import { Button, Input, Select, toast } from '@emdash/ui/react/primitives';
-import { Bot } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { when } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
@@ -10,70 +10,120 @@ import { taskViewDef } from '@core/features/tasks/contributions/views';
 import { useNavigate, useViewParams } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
 import { useCoordinators } from '../api/browser/use-coordinators';
-import type { Coordinator } from '../api/types';
 
 export function CrossProjectMainAgents() {
   const query = useCoordinators();
-  const records = query.data?.filter((record) => record.kind === 'cross-project') ?? [];
+  const records = query.data?.filter((record) => record.lifecycle.state !== 'archived') ?? [];
   const { navigate } = useNavigate();
   const active = useViewParams(taskViewDef);
   const [opening, setOpening] = useState<string>();
-  if (!records.length) return null;
+  const [creating, setCreating] = useState(false);
   return (
-    <div className="space-y-1 px-2 pb-2" data-testid="cross-project-main-agents">
-      <p className="px-2 py-1 text-xs text-foreground-muted">Cross-project coordination</p>
-      {records.map((record) => (
-        <button
-          key={record.id}
-          type="button"
-          aria-current={active?.taskId === record.taskId ? 'page' : undefined}
-          disabled={opening === record.id}
-          className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-sm hover:bg-background-tertiary-1 aria-[current=page]:bg-background-tertiary-2"
-          onClick={() => {
-            setOpening(record.id);
-            void getCoordinationClient()
-              .then((client) => client.open({ id: record.id }))
-              .then(async (opened) => {
-                await when(() => !!getTaskManagerStore(opened.projectId), { timeout: 20000 });
-                const manager = getTaskManagerStore(opened.projectId);
-                if (!manager) throw new Error('The document storage project is unavailable.');
-                await manager.loadTasks();
-                navigate(taskViewDef({ projectId: opened.projectId, taskId: opened.taskId }));
-              })
-              .catch((error) =>
-                toast.error('Could not open cross-project main agent', {
-                  description: String(error),
-                })
-              )
-              .finally(() => setOpening(undefined));
-          }}
+    <section className="space-y-1 px-2 pb-3" data-testid="main-agent-workspaces">
+      <div className="flex items-center justify-between px-2 py-1">
+        <p className="text-xs font-medium text-foreground-muted">主任务工作区</p>
+        <Button
+          variant="ghost"
+          size="xs"
+          aria-label={creating ? '收起新建主任务工作区' : '新建主任务工作区'}
+          onClick={() => setCreating((value) => !value)}
         >
-          <Bot className="size-4 shrink-0" />
-          <span className="truncate">{record.name}</span>
-        </button>
-      ))}
-    </div>
+          {creating ? <ChevronDown className="size-4" /> : <Plus className="size-4" />}
+        </Button>
+      </div>
+      {creating && <CreateCrossProjectMainAgent onCreated={() => setCreating(false)} />}
+      {query.isPending && <p className="px-2 py-2 text-xs text-foreground-muted">正在加载…</p>}
+      {query.isError && (
+        <p role="alert" className="text-destructive px-2 py-2 text-xs">
+          无法加载主任务工作区
+        </p>
+      )}
+      {!query.isPending && !records.length && !creating && (
+        <p className="px-2 py-2 text-xs text-foreground-muted">还没有主任务工作区</p>
+      )}
+      {records.map((record) => {
+        const projectName = getProjectManagerStore().projects.get(record.projectId)?.name;
+        const displayName =
+          record.kind === 'project' && projectName ? `${projectName} 主任务` : record.name;
+        return (
+          <button
+            key={record.id}
+            type="button"
+            aria-current={active?.taskId === record.taskId ? 'page' : undefined}
+            disabled={opening === record.id}
+            className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-background-tertiary-1 aria-[current=page]:bg-background-tertiary-2"
+            onClick={() => {
+              setOpening(record.id);
+              void getCoordinationClient()
+                .then((client) => client.open({ id: record.id }))
+                .then(async (opened) => {
+                  await when(() => !!getTaskManagerStore(opened.projectId), { timeout: 20000 });
+                  const manager = getTaskManagerStore(opened.projectId);
+                  if (!manager) throw new Error('主任务工作区的兼容项目不可用。');
+                  await manager.loadTasks();
+                  navigate(taskViewDef({ projectId: opened.projectId, taskId: opened.taskId }));
+                })
+                .catch((error) =>
+                  toast.error('无法打开主任务工作区', {
+                    description: String(error),
+                  })
+                )
+                .finally(() => setOpening(undefined));
+            }}
+          >
+            <Bot className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate">{displayName}</span>
+              <span className="block truncate text-[11px] text-foreground-muted">
+                {record.lifecycle.kind === 'finite' ? '一次性' : '长期'} ·{' '}
+                {record.lifecycle.state === 'active'
+                  ? '进行中'
+                  : record.lifecycle.state === 'paused'
+                    ? '已暂停'
+                    : record.lifecycle.state === 'completed'
+                      ? '已完成'
+                      : '待处理'}
+              </span>
+            </span>
+            {Object.values(record.tasks).filter((task) =>
+              ['blocked', 'review', 'changes_requested'].includes(task.state)
+            ).length > 0 && (
+              <span className="rounded-full bg-background-tertiary-2 px-1.5 text-[11px]">
+                {
+                  Object.values(record.tasks).filter((task) =>
+                    ['blocked', 'review', 'changes_requested'].includes(task.state)
+                  ).length
+                }
+              </span>
+            )}
+            <ChevronRight className="size-3.5 shrink-0 text-foreground-muted" />
+          </button>
+        );
+      })}
+    </section>
   );
 }
 
 export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectMainAgent({
-  record,
+  onCreated,
 }: {
-  record: Coordinator;
+  onCreated?: () => void;
 }) {
   const [name, setName] = useState('');
-  const [projectId, setProjectId] = useState(record.projectId);
-  const [projectIds, setProjectIds] = useState(record.projectIds);
+  const [purpose, setPurpose] = useState('');
+  const [lifecycleKind, setLifecycleKind] = useState<'finite' | 'ongoing'>('finite');
+  const [projectIds, setProjectIds] = useState<string[]>([]);
   const [agent, setAgent] = useState('inherit');
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false);
   const projects = Array.from(getProjectManagerStore().projects.values()).filter(
     (project) => !project.data?.archivedAt
   );
+  const compatibilityProjectId = projects[0]?.id || '';
   return (
     <form
       data-testid="cross-project-agent-form"
-      className="max-w-lg space-y-3"
+      className="mb-2 space-y-2 rounded-lg border border-border p-2"
       onSubmit={(event) => {
         event.preventDefault();
         setSaving(true);
@@ -82,49 +132,53 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
             client.createCrossProject({
               id: requestId,
               name,
-              projectId,
+              purpose,
+              lifecycle: { kind: lifecycleKind, state: 'active' },
+              projectId: compatibilityProjectId,
               projectIds,
               ...(agent !== 'inherit' && { primary: { agent } }),
             })
           )
           .then(() => {
-            toast.success('Cross-project main agent created');
+            toast.success('主任务工作区已创建');
             setName('');
+            setPurpose('');
             setRequestId(crypto.randomUUID());
+            onCreated?.();
           })
-          .catch((error) =>
-            toast.error('Could not create main agent', { description: String(error) })
-          )
+          .catch((error) => toast.error('无法创建主任务工作区', { description: String(error) }))
           .finally(() => setSaving(false));
       }}
     >
-      <p className="text-sm">Create a cross-project main agent</p>
+      <p className="text-sm font-medium">新建主任务工作区</p>
       <Input
-        aria-label="Cross-project main agent name"
+        aria-label="工作区名称"
         data-testid="cross-project-agent-name"
         value={name}
-        placeholder="Main agent name"
+        placeholder="工作区名称"
         onChange={(event) => setName(event.target.value)}
       />
-      <p className="text-xs text-foreground-muted">Document storage project</p>
+      <Input
+        aria-label="工作目标"
+        value={purpose}
+        placeholder="这项工作要实现什么？"
+        onChange={(event) => setPurpose(event.target.value)}
+      />
       <Select.Root
-        value={projectId}
+        value={lifecycleKind}
         onValueChange={(value) => {
-          if (value) setProjectId(value);
+          if (value === 'finite' || value === 'ongoing') setLifecycleKind(value);
         }}
       >
-        <Select.Trigger>
+        <Select.Trigger aria-label="工作区生命周期">
           <Select.Value />
         </Select.Trigger>
         <Select.Content>
-          {projects.map((project) => (
-            <Select.Item key={project.id} value={project.id}>
-              {project.name}
-            </Select.Item>
-          ))}
+          <Select.Item value="finite">一次性任务</Select.Item>
+          <Select.Item value="ongoing">长期工作区</Select.Item>
         </Select.Content>
       </Select.Root>
-      <p className="text-xs text-foreground-muted">Main agent</p>
+      <p className="text-xs text-foreground-muted">主任务 Agent</p>
       <Select.Root
         value={agent}
         onValueChange={(value) => {
@@ -135,7 +189,7 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
           <Select.Value />
         </Select.Trigger>
         <Select.Content>
-          <Select.Item value="inherit">Follow agent settings</Select.Item>
+          <Select.Item value="inherit">跟随应用设置</Select.Item>
           {PROVIDER_CAPABLE_AGENTS.map((id) => (
             <Select.Item key={id} value={id}>
               {id}
@@ -144,15 +198,13 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
         </Select.Content>
       </Select.Root>
       <p className="text-xs text-foreground-muted">
-        Linked projects organize context. Project access is configured independently in the main
-        agent settings.
+        可先不关联项目；需要修改仓库时再加入。下面的选择只影响工作上下文。
       </p>
       {projects.map((project) => (
         <label key={project.id} className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
-            checked={project.id === projectId || projectIds.includes(project.id)}
-            disabled={project.id === projectId}
+            checked={projectIds.includes(project.id)}
             onChange={(event) =>
               setProjectIds(
                 event.target.checked
@@ -167,10 +219,15 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
       <Button
         data-testid="create-cross-project-agent"
         type="submit"
-        disabled={saving || !name.trim() || !projectId}
+        disabled={saving || !name.trim() || !compatibilityProjectId}
       >
-        Create cross-project main agent
+        创建工作区
       </Button>
+      {!projects.length && (
+        <p role="alert" className="text-destructive text-xs">
+          当前版本需要至少一个已有项目作为隐藏兼容工作目录；它不会自动成为关联项目。
+        </p>
+      )}
     </form>
   );
 });

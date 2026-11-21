@@ -7,11 +7,11 @@ import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-s
 import { getCoordinationClient } from '../api/browser/client';
 
 const sourceLabels: Record<DelegationSelectionSnapshot['sources']['agent'], string> = {
-  request: 'Specified for this task',
-  'main-default': 'Main agent delegation default',
-  'agent-default': 'Agent setting',
-  'adapter-default': 'Model / agent default',
-  caller: 'Calling agent',
+  request: '本次任务明确选择',
+  'main-default': '已迁移的工作区偏好',
+  'agent-default': '应用级 Agent 设置',
+  'adapter-default': '模型或 Agent 默认值',
+  caller: '调用方 Agent',
 };
 
 export function TaskStartupStatus({
@@ -54,38 +54,36 @@ export function TaskStartupStatus({
     <div className="mt-2 space-y-2 text-sm" data-testid="task-startup-status" data-task-id={taskId}>
       {snapshot && selection ? (
         <details data-testid="task-execution-configuration">
-          <summary>Saved execution configuration</summary>
+          <summary>已冻结的执行配置</summary>
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
             {(
               [
                 [
-                  'Agent',
+                  '执行 Agent',
                   agents?.find((agent) => agent.id === selection.agent)?.name ?? selection.agent,
                   snapshot.sources.agent,
                 ],
                 [
-                  'Interface',
-                  selection.transport === 'acp' ? 'Chat' : 'Terminal',
+                  '交互方式',
+                  selection.transport === 'acp' ? '聊天' : '终端',
                   snapshot.sources.transport,
                 ],
                 [
-                  'Access method',
+                  '连接方式',
                   selection.modelSource === 'gateway:models'
                     ? 'Gateway'
                     : selection.modelSource
                       ? providerName(selection.modelSource)
-                      : 'Agent login / configuration',
+                      : 'Agent 登录或自身配置',
                   snapshot.sources.modelSource,
                 ],
                 [
-                  'Model supplier',
-                  selection.supplierId
-                    ? providerName(selection.supplierId)
-                    : 'Model route / default',
+                  '模型供应方',
+                  selection.supplierId ? providerName(selection.supplierId) : '模型路由或默认值',
                   snapshot.sources.supplierId,
                 ],
-                ['Model', selection.model ?? 'Model / agent default', snapshot.sources.model],
-                ['Effort', selection.effort ?? 'Model / agent default', snapshot.sources.effort],
+                ['模型', selection.model ?? '模型或 Agent 默认值', snapshot.sources.model],
+                ['思考强度', selection.effort ?? '模型或 Agent 默认值', snapshot.sources.effort],
               ] as const
             ).map(([label, value, source]) => (
               <div key={label} className="contents">
@@ -97,15 +95,15 @@ export function TaskStartupStatus({
             ))}
           </dl>
           <p className="mt-2 text-xs text-foreground-muted">
-            Saved when this task was prepared. Waiting and startup retries keep these selections.
+            此配置在任务准备时冻结；等待和启动重试都会沿用，不受后续设置变化影响。
           </p>
         </details>
       ) : null}
       {status.data?.error && (
         <div className="space-y-1">
-          <p role="alert">Task startup failed. Fix the Agent or host configuration, then retry.</p>
+          <p role="alert">任务启动失败。请修复 Agent 或 Host 配置后重试。</p>
           <details>
-            <summary>Failure details</summary>
+            <summary>失败详情</summary>
             <pre className="max-h-40 overflow-auto whitespace-pre-wrap">{status.data.error}</pre>
           </details>
         </div>
@@ -119,7 +117,7 @@ export function TaskStartupStatus({
           data-testid="retry-task-startup"
           onClick={() => void retry()}
         >
-          Retry task startup
+          重试任务启动
         </Button>
       )}
     </div>

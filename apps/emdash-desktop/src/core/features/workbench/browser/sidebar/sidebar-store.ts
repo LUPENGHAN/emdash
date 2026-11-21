@@ -44,7 +44,6 @@ function isVisibleRegularTask(task: TaskStore): boolean {
 
 export type SidebarRow =
   | { kind: 'project'; projectId: string; nested: boolean }
-  | { kind: 'main-agent'; projectId: string; nested: boolean }
   | { kind: 'task'; projectId: string; taskId: string; nested: boolean }
   | { kind: 'folder'; folderId: string }
   | { kind: 'archived-header'; count: number }
@@ -432,7 +431,6 @@ export class SidebarStore {
     rows.push({ kind: 'project', projectId, nested });
     const context = asAvailableProject(project);
     if (!this.expandedProjectIds.has(projectId)) return;
-    rows.push({ kind: 'main-agent', projectId, nested });
     if (!context) return;
     const tasks = Array.from(context.get(taskManagerStoreToken).tasks.values()).filter(
       isVisibleRegularTask

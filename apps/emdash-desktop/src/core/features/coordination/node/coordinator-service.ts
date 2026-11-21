@@ -26,6 +26,8 @@ import {
   type ProjectAccess,
   type TakeoverPreview,
   type DocumentStorage,
+  type WorkspaceLifecycle,
+  type WorkspaceWorkItem,
 } from '../api/types';
 import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordinator-access';
 import type { CoordinatorDocuments } from './coordinator-documents';
@@ -78,7 +80,9 @@ type Dependencies = {
   reportError?(error: unknown, id: string): void;
 };
 
-const instruction = `You are this project's main agent. Coordinate existing Emdash tasks through MCP.
+const instruction = `You are working in an app-level Emdash Main Agent workspace. Every conversation in this main-agent task has the same coordination permissions; the configured notification conversation only receives automatic result wake-ups.
+Keep workspace work items separate from Project requirements: work items describe this workspace's outcomes and analysis, while requirements remain the Project backlog authority.
+Coordinate existing Emdash tasks through MCP.
 Delegate implementation into task worktrees; keep code changes on their own branches.
 Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort. Use depends_on for tasks that must wait for approved prerequisite results. Attach only relevant management documents with document_refs; their versions and content are frozen for that task.
 If a saved task fails to start, inspect get_task_status and use retry_task with its task ID after fixing the failure. This also works after a receiver switch or explicit task takeover; do not create a replacement task to recover startup.
@@ -110,10 +114,10 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '9',
+        version: '10',
         id,
         kind: 'project',
-        name: 'Main agent',
+        name: '主任务',
         projectId,
         projectIds: [projectId],
         taskId: randomUUID(),
@@ -122,6 +126,12 @@ export class CoordinatorService {
         delegationDefaults: {},
         tasks: {},
         events: [],
+        purpose: '',
+        lifecycle: { kind: 'ongoing', state: 'active' },
+        workItems: {},
+        checkpoints: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
       };
       await this.save(record);
       return record;
@@ -134,11 +144,13 @@ export class CoordinatorService {
     projectIds: string[];
     primary?: AgentSelection;
     delegationDefaults?: AgentSelection;
+    purpose?: string;
+    lifecycle?: WorkspaceLifecycle;
   }): Promise<Coordinator> {
     const id = `cross:${input.id}`;
     const name = input.name.trim();
     if (!name) throw new Error('Name the cross-project main agent.');
-    const projectIds = [...new Set([input.projectId, ...input.projectIds])].sort();
+    const projectIds = [...new Set(input.projectIds)].sort();
     const primary = agentSelectionSchema.parse(input.primary ?? {});
     const delegationDefaults = agentSelectionSchema.parse(input.delegationDefaults ?? {});
     const fingerprint = createHash('sha256')
@@ -149,6 +161,8 @@ export class CoordinatorService {
           projectIds,
           primary,
           delegationDefaults,
+          purpose: input.purpose?.trim() ?? '',
+          lifecycle: input.lifecycle ?? { kind: 'finite', state: 'active' },
         })
       )
       .digest('hex');
@@ -160,13 +174,14 @@ export class CoordinatorService {
           throw new Error('This creation request has different main agent parameters.');
         return record;
       }
+      await this.deps.assertProjectAvailable(input.projectId);
       for (const projectId of projectIds) await this.deps.assertProjectAvailable(projectId);
       for (const selection of [primary, delegationDefaults]) {
         const resolved = await this.deps.resolveSelection(selection);
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '9',
+        version: '10',
         id,
         name,
         kind: 'cross-project',
@@ -179,6 +194,12 @@ export class CoordinatorService {
         tasks: {},
         events: [],
         creationFingerprint: fingerprint,
+        purpose: input.purpose?.trim() ?? '',
+        lifecycle: input.lifecycle ?? { kind: 'finite', state: 'active' },
+        workItems: {},
+        checkpoints: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
       };
       await this.save(record);
       return record;
@@ -277,6 +298,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     return this.parseRecord(record);
   }
   private async save(record: Coordinator): Promise<void> {
+    record.updatedAt = Date.now();
     await this.deps.store.setOrThrow(record.id, coordinatorRecord.schema.parse(record));
     this.deps.emit({
       coordinatorId: record.id,
@@ -623,11 +645,8 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
       await this.assertDocumentAvailable(record);
-      if (
-        caller &&
-        (caller.taskId !== record.taskId || caller.conversationId !== record.conversationId)
-      )
-        throw new Error('Only the designated main conversation can write management documents.');
+      if (caller && caller.taskId !== record.taskId)
+        throw new Error('Only a conversation in this main agent can write management documents.');
       const documents = this.documentService();
       if (!documents.write) throw new Error('Management document writes are unavailable.');
       const result = await documents.write(record, input);
@@ -748,6 +767,115 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       await this.save(next);
       if (patch.projectAccess) this.deps.onSchedulingChange?.();
       return next;
+    });
+  }
+
+  async addWorkItem(
+    id: string,
+    input: Pick<WorkspaceWorkItem, 'title' | 'detail'> & { requestId: string }
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const title = input.title.trim();
+      const detail = input.detail?.trim() || undefined;
+      const existing = record.workItems[input.requestId];
+      if (existing) {
+        if (existing.title !== title || existing.detail !== detail)
+          throw new Error('This work item request has different content.');
+        return record;
+      }
+      const now = Date.now();
+      record.workItems[input.requestId] = {
+        id: input.requestId,
+        title,
+        ...(detail && { detail }),
+        state: 'open',
+        taskIds: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      await this.save(record);
+      return record;
+    });
+  }
+
+  async updateWorkItem(
+    id: string,
+    workItemId: string,
+    patch: Pick<WorkspaceWorkItem, 'state'> & Partial<Pick<WorkspaceWorkItem, 'title' | 'detail'>>
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const item = record.workItems[workItemId];
+      if (!item) throw new Error('The work item no longer exists.');
+      item.title = patch.title?.trim() || item.title;
+      if ('detail' in patch) item.detail = patch.detail?.trim() || undefined;
+      item.state = patch.state;
+      item.updatedAt = Date.now();
+      item.resolvedAt = ['done', 'deferred', 'cancelled'].includes(item.state)
+        ? Date.now()
+        : undefined;
+      await this.save(record);
+      return record;
+    });
+  }
+
+  async checkpoint(id: string, requestId: string, title: string): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      if (record.lifecycle.kind !== 'ongoing')
+        throw new Error('Only an ongoing main agent can create checkpoints.');
+      const existing = record.checkpoints.find((checkpoint) => checkpoint.id === requestId);
+      if (existing) {
+        if (existing.title !== title.trim())
+          throw new Error('Checkpoint request_id was already used with a different title.');
+        return record;
+      }
+      const now = Date.now();
+      record.checkpoints.push({
+        id: requestId,
+        title: title.trim(),
+        workItemIds: Object.keys(record.workItems),
+        createdAt: now,
+      });
+      record.lifecycle.lastCheckpointAt = now;
+      await this.save(record);
+      return record;
+    });
+  }
+
+  async setLifecycleState(
+    id: string,
+    action: 'complete' | 'pause' | 'resume' | 'archive',
+    note?: string
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      if (action === 'complete') {
+        if (record.lifecycle.kind !== 'finite')
+          throw new Error('Ongoing main agents use checkpoints instead of completion.');
+        if (Object.values(record.tasks).some((task) => !['done', 'cancelled'].includes(task.state)))
+          throw new Error('Finish or cancel active tasks before completing this main agent.');
+        if (
+          Object.values(record.workItems).some(
+            (item) => !['done', 'deferred', 'cancelled'].includes(item.state)
+          )
+        )
+          throw new Error(
+            'Resolve, defer or cancel open work items before completing this main agent.'
+          );
+        record.lifecycle.state = 'completed';
+        record.lifecycle.completedAt = Date.now();
+        record.lifecycle.completionNote = note?.trim() || undefined;
+      } else if (action === 'pause' || action === 'resume') {
+        if (record.lifecycle.kind !== 'ongoing')
+          throw new Error('Only an ongoing main agent can be paused or resumed.');
+        record.lifecycle.state = action === 'pause' ? 'paused' : 'active';
+      } else {
+        record.lifecycle.state = 'archived';
+      }
+      await this.save(record);
+      return record;
     });
   }
   async selectionOptions(id: string, selection: AgentSelection): Promise<ResolvedAgentSelection> {
@@ -1053,11 +1181,8 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     return this.ownership.runExclusive('ownership', () =>
       this.locks.runExclusive(id, async () => {
         const record = await this.get(id);
-        if (
-          caller &&
-          (caller.taskId !== record.taskId || caller.conversationId !== record.conversationId)
-        )
-          throw new Error('Only the responsible main conversation can cancel this planned task.');
+        if (caller && caller.taskId !== record.taskId)
+          throw new Error('Only a conversation in this main agent can cancel this planned task.');
         const task = record.tasks[taskId];
         if (!task || task.taskCreated !== false)
           throw new Error('Choose a waiting task that has not started.');
@@ -1139,11 +1264,8 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
             .map((value) => this.parseRecord(value));
           const next = records.find((entry) => entry.id === id);
           if (!next) throw new Error('The destination main agent is unavailable.');
-          if (
-            caller &&
-            (caller.taskId !== next.taskId || caller.conversationId !== next.conversationId)
-          )
-            throw new Error('Only the designated main conversation can take over a task.');
+          if (caller && caller.taskId !== next.taskId)
+            throw new Error('Only a conversation in this main agent can take over a task.');
           const task = await this.codeTask(taskId, records);
           if (!task || task.archivedAt)
             throw new Error('The target task is unavailable or archived.');
@@ -1262,21 +1384,14 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     input: TaskResult
   ): Promise<{ eventId: string; version: number }> {
     const record = (await this.list()).find((entry) => entry.tasks[taskId]);
-    if (
-      !record ||
-      (caller.taskId !== taskId &&
-        (caller.taskId !== record.taskId || caller.conversationId !== record.conversationId))
-    )
+    if (!record || (caller.taskId !== taskId && caller.taskId !== record.taskId))
       throw new Error('This task is not assigned to this caller.');
     const result = taskResultSchema.parse(input);
     const fingerprint = createHash('sha256').update(JSON.stringify(result)).digest('hex');
     const receipt = await this.locks.runExclusive(record.id, async () => {
       const latest = await this.get(record.id);
-      if (
-        caller.taskId !== taskId &&
-        (caller.taskId !== latest.taskId || caller.conversationId !== latest.conversationId)
-      )
-        throw new Error('Only the responsible main conversation can submit another task result.');
+      if (caller.taskId !== taskId && caller.taskId !== latest.taskId)
+        throw new Error('Only a conversation in this main agent can submit another task result.');
       const task = latest.tasks[taskId];
       if (!task) throw new Error('The task owner changed. Retry submitting the result.');
       if (task.taskCreated === false)
@@ -1310,12 +1425,9 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   }
   async acknowledge(caller: AgentCaller, eventIds: string[]): Promise<void> {
     const record = await this.getByTask(caller.taskId);
-    if (!record || record.conversationId !== caller.conversationId)
-      throw new Error('Only the responsible main conversation can acknowledge results.');
+    if (!record) throw new Error('Only a conversation in this main agent can acknowledge results.');
     await this.locks.runExclusive(record.id, async () => {
       const latest = await this.get(record.id);
-      if (latest.conversationId !== caller.conversationId)
-        throw new Error('Only the responsible main conversation can acknowledge results.');
       if (eventIds.some((id) => !latest.events.some((event) => event.id === id)))
         throw new Error('Unknown result event ID.');
       for (const event of latest.events)
@@ -1333,11 +1445,8 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   ): Promise<Coordinator> {
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
-      if (
-        caller &&
-        (caller.taskId !== record.taskId || caller.conversationId !== record.conversationId)
-      )
-        throw new Error('Only the responsible main conversation can review this task.');
+      if (caller && caller.taskId !== record.taskId)
+        throw new Error('Only a conversation in this main agent can review this task.');
       const task = record.tasks[taskId];
       if (!task?.result) throw new Error('This task has no submitted result to review.');
       if (task.resultVersion !== resultVersion)

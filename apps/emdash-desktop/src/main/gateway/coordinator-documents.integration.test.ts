@@ -80,7 +80,7 @@ async function setup() {
     git: client(gitContract, connect(gp.left)),
   };
   const record: Coordinator = {
-    version: '9',
+    version: '10',
     id: 'project:project',
     kind: 'project',
     name: 'Main agent',
@@ -92,6 +92,12 @@ async function setup() {
     delegationDefaults: {},
     tasks: {},
     events: [],
+    purpose: '',
+    lifecycle: { kind: 'ongoing', state: 'active' },
+    workItems: {},
+    checkpoints: [],
+    createdAt: 0,
+    updatedAt: 0,
     params: {
       id: 'main',
       projectId: 'project',

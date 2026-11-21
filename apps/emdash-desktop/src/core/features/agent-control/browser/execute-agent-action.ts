@@ -147,6 +147,10 @@ export async function executeAgentAction(
     case 'submit_task_result':
     case 'acknowledge_task_results':
     case 'review_task_result':
+    case 'add_work_item':
+    case 'update_work_item':
+    case 'create_checkpoint':
+    case 'set_main_agent_state':
       throw new Error('Result coordination must run in the background.');
 
     case 'create_task':

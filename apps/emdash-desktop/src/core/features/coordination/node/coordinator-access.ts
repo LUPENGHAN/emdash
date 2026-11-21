@@ -33,8 +33,6 @@ export function mayAccessProject(
 ): boolean {
   if (principal.kind === 'ordinary') return caller.projectId === projectId;
   if (principal.kind === 'main') {
-    if (intent === 'delegate' && caller.conversationId !== principal.coordinator.conversationId)
-      return false;
     if (intent === 'read' && projectId === caller.projectId) return true;
     return coordinatorAllows(principal.coordinator, projectId);
   }

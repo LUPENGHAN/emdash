@@ -4,12 +4,10 @@ import { observer } from 'mobx-react-lite';
 import { useEffect, useState, type ReactNode } from 'react';
 import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
 import { openFileInTaskEditor } from '@core/features/editor/api/browser/open-file-in-file-editor';
-import { PROVIDER_CAPABLE_AGENTS } from '@core/features/model-providers/api';
 import {
   getProjectStore,
   getProjectManagerStore,
 } from '@core/features/projects/api/browser/stores/project-selectors';
-import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import { TaskPullRequestStatus } from '@core/features/source-control/contributions/browser/task-pull-requests';
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
@@ -18,10 +16,9 @@ import { useTaskComposition } from '@core/features/workbench/api/browser/task-co
 import { useMemento } from '@core/primitives/mementos/react';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
-import type { AgentSelection, AssignedTask, Coordinator, ProjectAccess } from '../api/types';
+import type { AssignedTask, Coordinator, ProjectAccess } from '../api/types';
 import { coordinatorViewMemento } from '../contributions/mementos';
 import { CoordinatorDocumentsPanel } from './coordinator-documents-panel';
-import { CreateCrossProjectMainAgent } from './cross-project-main-agents';
 import { TakeOverTaskForm } from './take-over-task-form';
 import { TaskStartupStatus } from './task-startup-status';
 
@@ -86,9 +83,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
         if (disposed) next();
         else unsubscribe = next;
       })
-      .catch((error) =>
-        toast.error('Could not subscribe to main agent updates', { description: String(error) })
-      );
+      .catch((error) => toast.error('无法订阅主任务工作区更新', { description: String(error) }));
     return () => {
       disposed = true;
       unsubscribe?.();
@@ -106,14 +101,14 @@ const CoordinatorContent = observer(function CoordinatorContent({
           variant={tab === 'conversation' ? 'secondary' : 'ghost'}
           onClick={() => setTab('conversation')}
         >
-          Conversation
+          对话
         </Button>
         <Button
           data-testid="coordinator-tasks-tab"
           variant={tab === 'tasks' ? 'secondary' : 'ghost'}
           onClick={() => setTab('tasks')}
         >
-          Assigned tasks ({Object.keys(record?.tasks ?? {}).length})
+          概览
         </Button>
         <Button
           data-testid="coordinator-documents-tab"
@@ -125,40 +120,49 @@ const CoordinatorContent = observer(function CoordinatorContent({
             if (record && path) void openFileInTaskEditor(record.projectId, taskId, path);
           }}
         >
-          Documents
+          文档
         </Button>
         <Button
           data-testid="coordinator-settings-tab"
           variant={tab === 'settings' ? 'secondary' : 'ghost'}
           onClick={() => setTab('settings')}
         >
-          Delegation defaults
+          设置
         </Button>
       </div>
       {tab === 'documents' ? (
         record ? (
           <CoordinatorDocumentsPanel record={record}>{children}</CoordinatorDocumentsPanel>
         ) : (
-          <p className="p-4">Loading main agent…</p>
+          <p className="p-4">正在加载主任务工作区…</p>
         )
       ) : tab === 'conversation' ? (
         <div className="min-h-0 flex-1">{children}</div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {!record ? (
-            <p>Loading main agent…</p>
+            <p>正在加载主任务工作区…</p>
           ) : tab === 'settings' ? (
             <div className="space-y-6">
               <ProjectAccessSettings record={record} />
               <MainConversationSettings record={record} />
-              <DelegationDefaults record={record} />
-              <CreateCrossProjectMainAgent record={record} />
             </div>
           ) : (
             <>
+              <WorkspaceOverview
+                record={record}
+                displayName={
+                  record.kind === 'project'
+                    ? `${getProjectStore(record.projectId)?.name ?? '项目'} 主任务`
+                    : record.name
+                }
+                onChanged={() => queryClient.invalidateQueries({ queryKey: key })}
+              />
               <TakeOverTaskForm record={record} />
               {Object.values(record.tasks).length === 0 && (
-                <p>No tasks assigned yet. Describe your goal in the main agent conversation.</p>
+                <p className="mt-4 text-sm text-foreground-muted">
+                  还没有代码任务。可以继续分析和讨论；需要修改仓库时再创建独立 Emdash Task。
+                </p>
               )}
               {Object.values(record.tasks).map((task) => (
                 <article key={task.taskId} className="mb-3 rounded-lg border border-border p-3">
@@ -172,7 +176,8 @@ const CoordinatorContent = observer(function CoordinatorContent({
                     {task.name}
                   </Button>
                   <span className="ml-2 text-xs text-foreground-muted">
-                    {getProjectStore(task.projectId)?.name ?? 'Project unavailable'} · {task.state}
+                    {getProjectStore(task.projectId)?.name ?? '项目不可用'} ·{' '}
+                    {taskStateLabel(task.state)}
                   </span>
                   {task.taskCreated === false && task.state === 'blocked' && (
                     <Button
@@ -185,11 +190,11 @@ const CoordinatorContent = observer(function CoordinatorContent({
                           )
                           .then(() => queryClient.invalidateQueries({ queryKey: key }))
                           .catch((error) =>
-                            toast.error('Could not cancel task', { description: String(error) })
+                            toast.error('无法取消任务', { description: String(error) })
                           );
                       }}
                     >
-                      Cancel waiting task
+                      取消等待中的任务
                     </Button>
                   )}
                   {task.blockedReason && <p className="mt-2 text-sm">{task.blockedReason}</p>}
@@ -201,20 +206,18 @@ const CoordinatorContent = observer(function CoordinatorContent({
                   {task.taskCreated !== false && <TaskPullRequestStatus taskId={task.taskId} />}
                   {!!task.dependsOn?.length && (
                     <p className="mt-2 text-xs text-foreground-muted">
-                      Prerequisites: {task.dependsOn.join(', ')}
+                      前置任务：{task.dependsOn.join(', ')}
                     </p>
                   )}
                   {!!task.documents?.length && (
                     <details className="mt-2 text-sm" data-testid="assigned-task-documents">
-                      <summary>Saved task documents ({task.documents.length})</summary>
+                      <summary>冻结的任务文档（{task.documents.length}）</summary>
                       {task.documents.map((doc, index) => (
                         <details key={index} className="mt-2">
                           <summary>
                             {doc.path} · {doc.revision}
                           </summary>
-                          <p className="text-xs text-foreground-muted">
-                            Source: {doc.coordinatorId}
-                          </p>
+                          <p className="text-xs text-foreground-muted">来源：{doc.coordinatorId}</p>
                           <pre className="max-h-64 overflow-auto p-2 whitespace-pre-wrap">
                             {doc.content}
                           </pre>
@@ -227,17 +230,17 @@ const CoordinatorContent = observer(function CoordinatorContent({
                       <p className="whitespace-pre-wrap">{task.result.summary}</p>
                       {task.result.checks.map((check, index) => (
                         <p key={index}>
-                          {check.passed ? 'Passed' : 'Failed'}: <code>{check.command}</code>
+                          {check.passed ? '通过' : '失败'}：<code>{check.command}</code>
                           {check.output && (
                             <span className="block whitespace-pre-wrap">{check.output}</span>
                           )}
                         </p>
                       ))}
                       {task.result.commits.length > 0 && (
-                        <p>Commits: {task.result.commits.join(', ')}</p>
+                        <p>提交：{task.result.commits.join(', ')}</p>
                       )}
                       {task.result.prUrls.map((url) => (
-                        <p key={url}>PR: {url}</p>
+                        <p key={url}>PR：{url}</p>
                       ))}
                       {task.result.unresolved.map((issue, index) => (
                         <p key={index}>{issue}</p>
@@ -249,24 +252,24 @@ const CoordinatorContent = observer(function CoordinatorContent({
                           onReviewed={() => queryClient.invalidateQueries({ queryKey: key })}
                         />
                       )}
-                      {task.review && <p>Review: {task.review.note}</p>}
+                      {task.review && <p>验收：{task.review.note}</p>}
                     </div>
                   )}
                 </article>
               ))}
               {record.events.some((event) => event.error && event.state === 'pending') && (
                 <div className="space-y-2">
-                  <p>Some results are saved and waiting for delivery to the main agent.</p>
+                  <p>有结果已保存，正在等待通知 Main Agent。</p>
                   <Button
                     onClick={() => {
                       void getCoordinationClient()
                         .then((client) => client.retryDelivery({ id: record.id }))
                         .catch((error) =>
-                          toast.error('Could not deliver results', { description: String(error) })
+                          toast.error('无法发送结果通知', { description: String(error) })
                         );
                     }}
                   >
-                    Retry result delivery
+                    重试结果通知
                   </Button>
                 </div>
               )}
@@ -277,6 +280,287 @@ const CoordinatorContent = observer(function CoordinatorContent({
     </div>
   );
 });
+
+const workItemStateLabels = {
+  open: '待开始',
+  in_progress: '进行中',
+  waiting: '等待中',
+  review: '待验收',
+  done: '已完成',
+  deferred: '已推迟',
+  cancelled: '已取消',
+} as const;
+
+function taskStateLabel(state: AssignedTask['state']) {
+  return {
+    assigned: '已分配',
+    blocked: '受阻',
+    cancelled: '已取消',
+    review: '待验收',
+    changes_requested: '需要修改',
+    done: '已完成',
+  }[state];
+}
+
+function WorkspaceOverview({
+  record,
+  displayName,
+  onChanged,
+}: {
+  record: Coordinator;
+  displayName: string;
+  onChanged(): Promise<unknown>;
+}) {
+  const [title, setTitle] = useState('');
+  const [checkpointTitle, setCheckpointTitle] = useState('');
+  const [saving, setSaving] = useState(false);
+  const tasks = Object.values(record.tasks);
+  const attention = tasks.filter((task) =>
+    ['blocked', 'review', 'changes_requested'].includes(task.state)
+  );
+  const nextAction = attention[0]
+    ? attention[0].state === 'review'
+      ? `验收「${attention[0].name}」的结果`
+      : `处理「${attention[0].name}」的${taskStateLabel(attention[0].state)}状态`
+    : (Object.values(record.workItems).find((item) => item.state !== 'done')?.title ??
+      '继续在对话中明确下一步');
+  const mutate = (action: () => Promise<unknown>, success: string) => {
+    setSaving(true);
+    void action()
+      .then(onChanged)
+      .then(() => toast.success(success))
+      .catch((error) => toast.error('操作失败', { description: String(error) }))
+      .finally(() => setSaving(false));
+  };
+  return (
+    <section className="@container mb-6 space-y-4" aria-labelledby="workspace-overview-title">
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 id="workspace-overview-title" className="text-lg font-medium">
+              {displayName}
+            </h2>
+            <span className="rounded-full bg-background-tertiary-2 px-2 py-0.5 text-xs">
+              {record.lifecycle.kind === 'finite' ? '一次性' : '长期'} ·{' '}
+              {record.lifecycle.state === 'active'
+                ? '进行中'
+                : record.lifecycle.state === 'paused'
+                  ? '已暂停'
+                  : record.lifecycle.state === 'completed'
+                    ? '已完成'
+                    : '已归档'}
+            </span>
+          </div>
+          <p className="mt-1 max-w-3xl text-sm text-foreground-muted">
+            {record.purpose || '尚未填写工作目标。可以在对话中继续细化。'}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {record.lifecycle.kind === 'finite' && record.lifecycle.state !== 'completed' && (
+            <Button
+              disabled={saving}
+              onClick={() =>
+                mutate(
+                  async () =>
+                    (await getCoordinationClient()).setLifecycleState({
+                      id: record.id,
+                      action: 'complete',
+                    }),
+                  '工作区已完成'
+                )
+              }
+            >
+              完成工作区
+            </Button>
+          )}
+          {record.lifecycle.kind === 'ongoing' && record.lifecycle.state === 'active' && (
+            <Button
+              variant="secondary"
+              disabled={saving}
+              onClick={() =>
+                mutate(
+                  async () =>
+                    (await getCoordinationClient()).setLifecycleState({
+                      id: record.id,
+                      action: 'pause',
+                    }),
+                  '工作区已暂停'
+                )
+              }
+            >
+              暂停
+            </Button>
+          )}
+          {record.lifecycle.kind === 'ongoing' && record.lifecycle.state === 'paused' && (
+            <Button
+              disabled={saving}
+              onClick={() =>
+                mutate(
+                  async () =>
+                    (await getCoordinationClient()).setLifecycleState({
+                      id: record.id,
+                      action: 'resume',
+                    }),
+                  '工作区已恢复'
+                )
+              }
+            >
+              恢复
+            </Button>
+          )}
+          {record.lifecycle.state !== 'archived' && (
+            <Button
+              variant="ghost"
+              disabled={saving}
+              onClick={() =>
+                mutate(
+                  async () =>
+                    (await getCoordinationClient()).setLifecycleState({
+                      id: record.id,
+                      action: 'archive',
+                    }),
+                  '工作区已归档'
+                )
+              }
+            >
+              归档
+            </Button>
+          )}
+        </div>
+      </header>
+
+      <div className="grid gap-3 @xl:grid-cols-2">
+        <article className="rounded-lg border border-border p-3">
+          <h3 className="text-xs font-medium text-foreground-muted">下一步</h3>
+          <p className="mt-1 text-sm">{nextAction}</p>
+        </article>
+        <article className="rounded-lg border border-border p-3">
+          <h3 className="text-xs font-medium text-foreground-muted">需要关注</h3>
+          <p className="mt-1 text-sm">
+            {attention.length ? `${attention.length} 项需要处理` : '当前没有阻塞或待验收事项'}
+          </p>
+        </article>
+      </div>
+
+      <section className="space-y-2" aria-labelledby="work-items-title">
+        <h3 id="work-items-title" className="font-medium">
+          工作事项
+        </h3>
+        <form
+          className="flex flex-wrap gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!title.trim()) return;
+            mutate(
+              async () =>
+                (await getCoordinationClient()).addWorkItem({
+                  id: record.id,
+                  requestId: crypto.randomUUID(),
+                  title: title.trim(),
+                }),
+              '工作事项已添加'
+            );
+            setTitle('');
+          }}
+        >
+          <Input
+            className="min-w-56 flex-1"
+            aria-label="新工作事项标题"
+            value={title}
+            placeholder="添加结果、分析问题或协调事项"
+            onChange={(event) => setTitle(event.target.value)}
+          />
+          <Button type="submit" disabled={saving || !title.trim()}>
+            添加
+          </Button>
+        </form>
+        {!Object.keys(record.workItems).length && (
+          <p className="text-sm text-foreground-muted">还没有工作事项。</p>
+        )}
+        {Object.values(record.workItems).map((item) => (
+          <div
+            key={item.id}
+            className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2"
+          >
+            <span className="min-w-48 flex-1 text-sm">{item.title}</span>
+            <Select.Root
+              value={item.state}
+              onValueChange={(state) => {
+                if (!state) return;
+                mutate(
+                  async () =>
+                    (await getCoordinationClient()).updateWorkItem({
+                      id: record.id,
+                      workItemId: item.id,
+                      state,
+                    }),
+                  '工作事项已更新'
+                );
+              }}
+            >
+              <Select.Trigger aria-label={`更新“${item.title}”的状态`}>
+                <Select.Value>{workItemStateLabels[item.state]}</Select.Value>
+              </Select.Trigger>
+              <Select.Content>
+                {Object.entries(workItemStateLabels).map(([value, label]) => (
+                  <Select.Item key={value} value={value}>
+                    {label}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+          </div>
+        ))}
+      </section>
+
+      {record.lifecycle.kind === 'ongoing' && (
+        <section className="space-y-2 rounded-lg border border-border p-3">
+          <p className="text-sm font-medium">阶段检查点</p>
+          <form
+            className="flex flex-wrap gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!checkpointTitle.trim()) return;
+              mutate(
+                async () =>
+                  (await getCoordinationClient()).checkpoint({
+                    id: record.id,
+                    requestId: crypto.randomUUID(),
+                    title: checkpointTitle.trim(),
+                  }),
+                '阶段检查点已创建'
+              );
+              setCheckpointTitle('');
+            }}
+          >
+            <Input
+              className="min-w-56 flex-1"
+              aria-label="阶段检查点标题"
+              value={checkpointTitle}
+              placeholder="记录本阶段成果和下一步"
+              onChange={(event) => setCheckpointTitle(event.target.value)}
+            />
+            <Button type="submit" variant="secondary" disabled={saving || !checkpointTitle.trim()}>
+              创建检查点
+            </Button>
+          </form>
+          {!record.checkpoints.length && (
+            <p className="text-xs text-foreground-muted">还没有检查点。</p>
+          )}
+          {[...record.checkpoints].reverse().map((checkpoint) => (
+            <div key={checkpoint.id} className="flex flex-wrap items-center gap-2 text-xs">
+              <span>{checkpoint.title}</span>
+              <span className="text-foreground-muted">
+                {new Date(checkpoint.createdAt).toLocaleString()} · {checkpoint.workItemIds.length}{' '}
+                个工作事项
+              </span>
+            </div>
+          ))}
+        </section>
+      )}
+    </section>
+  );
+}
 
 const ProjectAccessSettings = observer(function ProjectAccessSettings({
   record,
@@ -291,7 +575,7 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
   );
   return (
     <div className="max-w-lg space-y-3">
-      <p className="text-sm">Project access</p>
+      <p className="text-sm font-medium">项目访问与关联</p>
       <Select.Root
         value={access.mode}
         onValueChange={(value) =>
@@ -307,16 +591,15 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
         </Select.Trigger>
         <Select.Content>
           <Select.Item data-testid="coordinator-access-all" value="all">
-            All accessible Emdash projects
+            所有可访问的 Emdash 项目
           </Select.Item>
           <Select.Item data-testid="coordinator-access-selected" value="selected">
-            Selected projects
+            仅所选项目
           </Select.Item>
         </Select.Content>
       </Select.Root>
       <p className="text-xs text-foreground-muted">
-        Linked projects organize context. Allowed projects control discovery and delegation. Workers
-        only receive explicitly granted project access.
+        关联项目用于组织上下文；允许项目控制发现和派活。Task worker 只获得明确授予的项目访问权。
       </p>
       <div className="space-y-2">
         {projects.map((project) => (
@@ -334,7 +617,7 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
                   )
                 }
               />{' '}
-              Linked
+              已关联
             </label>
             {access.mode === 'selected' && (
               <label className="flex items-center gap-1">
@@ -350,7 +633,7 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
                     })
                   }
                 />{' '}
-                Allowed
+                允许访问
               </label>
             )}
           </div>
@@ -365,14 +648,12 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
             .then((client) =>
               client.update({ id: record.id, projectAccess: access, projectIds: linked })
             )
-            .then(() => toast.success('Project access saved'))
-            .catch((error) =>
-              toast.error('Could not save project access', { description: String(error) })
-            )
+            .then(() => toast.success('项目访问设置已保存'))
+            .catch((error) => toast.error('无法保存项目访问设置', { description: String(error) }))
             .finally(() => setSaving(false));
         }}
       >
-        Save project access
+        保存项目访问设置
       </Button>
     </div>
   );
@@ -393,10 +674,9 @@ const MainConversationSettings = observer(function MainConversationSettings({
   }, [record.conversationId]);
   return (
     <div className="max-w-lg space-y-3">
-      <p className="text-sm">Main conversation</p>
+      <p className="text-sm font-medium">结果通知会话</p>
       <p className="text-xs text-foreground-muted">
-        Create or configure a conversation in the conversation tabs, then choose it here to receive
-        task results. Assigned tasks and result history stay with this main agent.
+        同一主任务工作区中的所有会话都有相同协调权限；这里只决定任务结果自动唤醒哪个会话。
       </p>
       <Select.Root
         value={selected}
@@ -410,9 +690,7 @@ const MainConversationSettings = observer(function MainConversationSettings({
         <Select.Content>
           {!conversations.some(
             (conversation) => conversation.data.id === record.conversationId
-          ) && (
-            <Select.Item value={record.conversationId}>Main conversation unavailable</Select.Item>
-          )}
+          ) && <Select.Item value={record.conversationId}>当前通知会话不可用</Select.Item>}
           {conversations.map(({ data }) => (
             <Select.Item key={data.id} value={data.id}>
               {data.title} · {data.providerId}
@@ -427,14 +705,12 @@ const MainConversationSettings = observer(function MainConversationSettings({
           setSaving(true);
           void getCoordinationClient()
             .then((client) => client.bindConversation({ id: record.id, conversationId: selected }))
-            .then(() => toast.success('Main conversation updated'))
-            .catch((error) =>
-              toast.error('Could not change main conversation', { description: String(error) })
-            )
+            .then(() => toast.success('结果通知会话已更新'))
+            .catch((error) => toast.error('无法更新结果通知会话', { description: String(error) }))
             .finally(() => setSaving(false));
         }}
       >
-        Use as main conversation
+        设为结果通知会话
       </Button>
     </div>
   );
@@ -453,7 +729,7 @@ function ResultReview({
   const [saving, setSaving] = useState(false);
   const review = (accepted: boolean) => {
     if (!accepted && !note.trim()) {
-      toast.error('Describe the changes needed before requesting a revision.');
+      toast.error('请说明需要修改的内容。');
       return;
     }
     setSaving(true);
@@ -464,22 +740,22 @@ function ResultReview({
           taskId: task.taskId,
           accepted,
           resultVersion: task.resultVersion,
-          note: note.trim() || 'Reviewed by the user in Emdash.',
+          note: note.trim() || '用户已在 Emdash 中验收。',
         })
       )
       .then(onReviewed)
       .catch((error) => {
         void onReviewed();
-        toast.error('Could not review result', { description: String(error) });
+        toast.error('无法提交验收结果', { description: String(error) });
       })
       .finally(() => setSaving(false));
   };
   return (
     <div className="space-y-2">
       <Input
-        aria-label="Review feedback"
+        aria-label="验收意见"
         value={note}
-        placeholder="Review feedback"
+        placeholder="验收意见"
         onChange={(event) => setNote(event.target.value)}
       />
       <div className="flex gap-2">
@@ -488,175 +764,12 @@ function ResultReview({
           disabled={saving}
           onClick={() => review(true)}
         >
-          Accept reviewed result
+          接受结果
         </Button>
         <Button variant="secondary" disabled={saving} onClick={() => review(false)}>
-          Request changes
+          要求修改
         </Button>
       </div>
     </div>
-  );
-}
-
-function DelegationDefaults({ record }: { record: Coordinator }) {
-  const [draft, setDraft] = useState<AgentSelection>(record.delegationDefaults);
-  const { value: providers } = useAppSettingsKey('modelProviders');
-  const [saving, setSaving] = useState(false);
-  const {
-    data: resolved,
-    isPending,
-    error,
-  } = useQuery({
-    queryKey: ['coordinator-selection', record.id, draft],
-    queryFn: async () =>
-      (await getCoordinationClient()).selectionOptions({ id: record.id, selection: draft }),
-  });
-  const effortOptions = resolved?.effortOptions ?? {};
-
-  return (
-    <form
-      className="max-w-lg space-y-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        setSaving(true);
-        void getCoordinationClient()
-          .then((client) => client.update({ id: record.id, delegationDefaults: draft }))
-          .then(() => toast.success('Delegation defaults saved'))
-          .catch((error) =>
-            toast.error('Could not save delegation defaults', { description: String(error) })
-          )
-          .finally(() => setSaving(false));
-      }}
-    >
-      <p className="text-sm">
-        Omitted fields follow the selected agent defaults in Settings. Explicit task selections take
-        priority.
-      </p>
-      <label className="block text-sm">Agent</label>
-      <Select.Root
-        value={draft.agent ?? 'inherit'}
-        onValueChange={(value) =>
-          setDraft({ ...draft, agent: value === 'inherit' ? undefined : (value ?? undefined) })
-        }
-      >
-        <Select.Trigger>
-          <Select.Value />
-        </Select.Trigger>
-        <Select.Content>
-          <Select.Item value="inherit">Follow default</Select.Item>
-          {PROVIDER_CAPABLE_AGENTS.map((id) => (
-            <Select.Item key={id} value={id}>
-              {id}
-            </Select.Item>
-          ))}
-        </Select.Content>
-      </Select.Root>
-      <label className="block text-sm">Connection</label>
-      <Select.Root
-        value={draft.connection ?? 'inherit'}
-        onValueChange={(value) =>
-          setDraft({
-            ...draft,
-            connection: value === 'gateway' || value === 'official' ? value : undefined,
-            ...(value === 'official' && { supplierId: undefined }),
-          })
-        }
-      >
-        <Select.Trigger>
-          <Select.Value />
-        </Select.Trigger>
-        <Select.Content>
-          <Select.Item value="inherit">Follow default</Select.Item>
-          <Select.Item value="gateway">Gateway</Select.Item>
-          <Select.Item value="official">Official login</Select.Item>
-        </Select.Content>
-      </Select.Root>
-      <label className="block text-sm">Supplier</label>
-      <Select.Root
-        value={draft.supplierId ?? 'inherit'}
-        onValueChange={(value) =>
-          setDraft({
-            ...draft,
-            supplierId: value === 'inherit' ? undefined : (value ?? undefined),
-            ...(value && value !== 'inherit' && { connection: 'gateway' }),
-          })
-        }
-      >
-        <Select.Trigger>
-          <Select.Value />
-        </Select.Trigger>
-        <Select.Content>
-          <Select.Item value="inherit">Use model alias / default</Select.Item>
-          {(providers?.providers ?? [])
-            .filter((provider) => !provider.account)
-            .map((provider) => (
-              <Select.Item key={provider.id} value={provider.id}>
-                {provider.name}
-              </Select.Item>
-            ))}
-        </Select.Content>
-      </Select.Root>
-      <label className="block text-sm" htmlFor="delegation-model">
-        Model alias or supplier model
-      </label>
-      <Input
-        id="delegation-model"
-        value={draft.model ?? ''}
-        onChange={(event) => setDraft({ ...draft, model: event.target.value || undefined })}
-      />
-      <label className="block text-sm" htmlFor="delegation-effort">
-        Effort
-      </label>
-      <Select.Root
-        value={draft.effort === null ? 'adapter-default' : (draft.effort ?? 'inherit')}
-        onValueChange={(value) =>
-          setDraft({
-            ...draft,
-            effort: value === 'inherit' ? undefined : value === 'adapter-default' ? null : value,
-          })
-        }
-      >
-        <Select.Trigger id="delegation-effort">
-          <Select.Value />
-        </Select.Trigger>
-        <Select.Content>
-          <Select.Item value="inherit">Follow agent settings</Select.Item>
-          <Select.Item value="adapter-default">Follow model / agent default</Select.Item>
-          {draft.effort && !effortOptions[draft.effort] && (
-            <Select.Item value={draft.effort}>{draft.effort} (unsupported)</Select.Item>
-          )}
-          {Object.entries(effortOptions).map(([id, option]) => (
-            <Select.Item key={id} value={id}>
-              {option.label}
-            </Select.Item>
-          ))}
-        </Select.Content>
-      </Select.Root>
-      {resolved && (
-        <div className="space-y-1 text-xs text-foreground-muted">
-          <p>
-            Effective agent: {resolved.values.agent} · {resolved.values.connection}
-          </p>
-          <p>
-            Model: {resolved.values.model ?? 'Agent default'} · {resolved.sources.model}
-          </p>
-          <p>
-            Effort: {resolved.values.effort ?? 'Model / agent default'} · {resolved.sources.effort}
-          </p>
-          {Object.keys(effortOptions).length === 0 && (
-            <p>This combination has no selectable effort.</p>
-          )}
-          {resolved.errors.map((message) => (
-            <p key={message} role="alert">
-              {message}
-            </p>
-          ))}
-        </div>
-      )}
-      {error && <p role="alert">Could not resolve defaults: {String(error)}</p>}
-      <Button type="submit" disabled={saving || isPending || !!error || !!resolved?.errors.length}>
-        Save defaults
-      </Button>
-    </form>
   );
 }

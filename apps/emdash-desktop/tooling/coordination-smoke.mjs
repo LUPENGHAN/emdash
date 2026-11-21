@@ -234,7 +234,12 @@ try {
     repository,
     worktreeRoot: join(profile, 'worktrees'),
   });
-  await page.getByRole('button', { name: /main agent/i }).click();
+  await page
+    .getByTestId('main-agent-workspaces')
+    .getByRole('button')
+    .filter({ hasText: /Main agent|主任务/ })
+    .first()
+    .click();
   await page.getByTestId('coordinator-tasks-tab').waitFor();
   assert.ok(
     !(await readdir(capture)).includes('main-session.json'),
@@ -248,7 +253,7 @@ try {
   await send.click();
   const main = await waitForCapture('main-session');
   assert.ok(main.mcpUrl, 'The main ACP session was not given its authenticated MCP URL');
-  await waitForPrompt('main agent');
+  await waitForPrompt('Main Agent');
   client = new Client({ name: 'isolated-main-agent', version: '1' });
   await client.connect(new StreamableHTTPClientTransport(new URL(main.mcpUrl)));
   const call = async (caller, name, args) => {
@@ -264,6 +269,27 @@ try {
     connection: 'official',
     request_id: 'coordinated-request',
   };
+  const workItem = JSON.parse(
+    await call(client, 'add_work_item', {
+      request_id: 'ffac8d81-c23c-478d-9a24-c624b409517b',
+      title: '验证独立 Task 全流程',
+      detail: '工作事项与 Project TODO、Task Result 分层保存',
+    })
+  );
+  assert.equal(workItem.workItems['ffac8d81-c23c-478d-9a24-c624b409517b'].state, 'open');
+  const checkpointArgs = {
+    request_id: 'abf5f197-6bad-4bc0-babb-ae20467cdce6',
+    title: '派活前检查点',
+  };
+  const checkpoint = JSON.parse(await call(client, 'create_checkpoint', checkpointArgs));
+  const repeatedCheckpoint = JSON.parse(await call(client, 'create_checkpoint', checkpointArgs));
+  assert.equal(checkpoint.checkpoints.length, 1);
+  assert.equal(repeatedCheckpoint.checkpoints.length, 1);
+  assert.equal(checkpoint.checkpoints[0].id, checkpointArgs.request_id);
+  const paused = JSON.parse(await call(client, 'set_main_agent_state', { action: 'pause' }));
+  assert.equal(paused.lifecycle.state, 'paused');
+  const resumed = JSON.parse(await call(client, 'set_main_agent_state', { action: 'resume' }));
+  assert.equal(resumed.lifecycle.state, 'active');
   const created = JSON.parse(await call(client, 'create_task', args));
   const duplicate = JSON.parse(await call(client, 'create_task', args));
   assert.equal(created.task_id, duplicate.task_id);
@@ -317,6 +343,8 @@ try {
   const repeated = JSON.parse(await call(workerClient, 'submit_task_result', submission));
   assert.deepEqual(repeated, receipt);
   await page.getByTestId('coordinator-tasks-tab').click();
+  await page.getByText('验证独立 Task 全流程', { exact: true }).waitFor();
+  await page.getByText('派活前检查点', { exact: true }).waitFor();
   await page.getByText('Simulated task result', { exact: true }).waitFor();
   await page.getByTestId('coordinator-accept-result').waitFor();
   await page.waitForFunction(async (id) => {
@@ -335,16 +363,25 @@ try {
   });
   const revision = await page.evaluate((id) => window.coordinatorSnapshot(id), coordinator.taskId);
   assert.equal(revision.tasks[created.task_id].state, 'changes_requested');
+  const reworkedReceipt = JSON.parse(
+    await call(workerClient, 'submit_task_result', {
+      ...submission,
+      request_id: 'result-1-reworked',
+      result: { ...submission.result, summary: 'Reworked simulated task result' },
+    })
+  );
+  await waitForPrompt(reworkedReceipt.eventId);
+  await call(client, 'acknowledge_task_results', { event_ids: [reworkedReceipt.eventId] });
   await call(client, 'review_task_result', {
     task_id: created.task_id,
-    result_version: 1,
+    result_version: 2,
     accepted: true,
     note: 'Inspected simulated evidence',
   });
   const final = await page.evaluate((id) => window.coordinatorSnapshot(id), coordinator.taskId);
   assert.equal(final.tasks[created.task_id].state, 'done');
   assert.equal(final.events[0].state, 'acknowledged');
-  assert.equal(final.events.length, 1);
+  assert.equal(final.events.length, 2);
   const replacement = await page.evaluate((input) => window.createReplacementMain(input), {
     projectId: coordinator.projectId,
     taskId: coordinator.taskId,
@@ -368,15 +405,7 @@ try {
   const replacementCapture = await waitForCapture(replacement.id);
   await waitForPrompt(secondReceipt.eventId, replacementCapture.sessionId);
   assert.notEqual(replacementCapture.mcpUrl, main.mcpUrl);
-  const oldAcknowledgment = await client.callTool({
-    name: 'acknowledge_task_results',
-    arguments: { event_ids: [secondReceipt.eventId] },
-  });
-  assert.equal(
-    oldAcknowledgment.isError,
-    true,
-    'The replaced main conversation retained result consumption authority'
-  );
+  await call(client, 'acknowledge_task_results', { event_ids: [secondReceipt.eventId] });
   replacementClient = new Client({ name: 'replacement-main-agent', version: '1' });
   await replacementClient.connect(
     new StreamableHTTPClientTransport(new URL(replacementCapture.mcpUrl))
@@ -384,14 +413,14 @@ try {
   await call(replacementClient, 'acknowledge_task_results', { event_ids: [secondReceipt.eventId] });
   await call(replacementClient, 'review_task_result', {
     task_id: created.task_id,
-    result_version: 2,
+    result_version: 3,
     accepted: true,
     note: 'Replacement main inspected revision 2',
   });
   const switched = await page.evaluate((id) => window.coordinatorSnapshot(id), coordinator.taskId);
   assert.equal(switched.taskId, coordinator.taskId);
   assert.equal(switched.tasks[created.task_id].state, 'done');
-  assert.equal(switched.events.length, 2);
+  assert.equal(switched.events.length, 3);
   assert.ok(switched.events.every((event) => event.state === 'acknowledged'));
   await page.getByTestId('coordinator-tasks-tab').click();
   await page.screenshot({ path: join(profile, 'coordinator-result.png') });
@@ -408,10 +437,12 @@ try {
           'simulated code change committed and syntax checked in the worker branch',
           'opening a fresh main agent does not start its process',
           'idempotent delegation and result submission',
+          'workspace work item persisted independently from code tasks',
+          'idempotent checkpoint creation and ongoing workspace pause/resume lifecycle',
           'result delivered through ACP and explicitly acknowledged',
           'changes requested and versioned result accepted',
           'main conversation switched through the UI without losing task history',
-          'unconfirmed result redirected and old main consumption authority revoked',
+          'unconfirmed result redirected while every main-task conversation retained coordination authority',
         ],
         workerCommit,
         taskId: created.task_id,
