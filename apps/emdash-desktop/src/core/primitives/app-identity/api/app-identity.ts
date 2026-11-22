@@ -3,6 +3,7 @@ type ImportMetaWithEnv = ImportMeta & {
     DEV?: boolean;
     VITE_BUILD?: string;
     VITE_FORK_VERSION?: string;
+    VITE_LIVE_REPLACES_FORK?: string;
     VITE_LIVE_REVISION?: string;
   };
 };
@@ -13,40 +14,53 @@ const isCanary = env?.VITE_BUILD === 'canary';
 // The source-running macOS channel. It has a durable identity and profile of its
 // own, but deliberately never participates in the packaged-app updater.
 const isLive = env?.VITE_BUILD === 'live';
+// A Mac can opt into using the source-running channel as its only Emdash.
+// Keeping the fork identity preserves its existing profile and Safe Storage key.
+const liveReplacesFork = isLive && env?.VITE_LIVE_REPLACES_FORK === '1';
 // A locally built fork: its own bundle id, profile and keychain item, so it can run
 // next to (or instead of) the official app without sharing signed-app secrets.
 const isFork = env?.VITE_BUILD === 'fork';
 
 export const APP_ID = isLive
-  ? 'com.emdash.live'
+  ? liveReplacesFork
+    ? 'com.emdash.fork'
+    : 'com.emdash.live'
   : isFork
     ? 'com.emdash.fork'
     : isCanary
       ? 'com.emdash.canary'
       : 'com.emdash.stable';
 export const PRODUCT_NAME = isLive
-  ? 'Emdash 实时开发版'
+  ? liveReplacesFork
+    ? 'Emdash Fork'
+    : 'Emdash 实时开发版'
   : isFork
     ? 'Emdash Fork'
     : isCanary
       ? 'Emdash Canary'
       : 'Emdash';
 export const APP_NAME_LOWER = isLive
-  ? 'emdash-live'
+  ? liveReplacesFork
+    ? 'emdash-fork'
+    : 'emdash-live'
   : isFork
     ? 'emdash-fork'
     : isCanary
       ? 'emdash-canary'
       : 'emdash';
 export const LINUX_DESKTOP_ID = isLive
-  ? 'emdash-live'
+  ? liveReplacesFork
+    ? 'emdash-fork'
+    : 'emdash-live'
   : isFork
     ? 'emdash-fork'
     : isCanary
       ? 'emdash-canary'
       : 'Emdash';
 export const USER_DATA_DIR_NAME = isLive
-  ? 'emdash-live'
+  ? liveReplacesFork
+    ? 'emdash-fork'
+    : 'emdash-live'
   : isDev
     ? 'emdash-dev'
     : isFork
@@ -56,7 +70,9 @@ export const USER_DATA_DIR_NAME = isLive
         : 'emdash';
 export const UPDATE_CHANNEL = isLive ? 'disabled' : isCanary ? 'v1-canary' : 'v1-stable';
 export const ARTIFACT_PREFIX = isLive
-  ? 'emdash-live'
+  ? liveReplacesFork
+    ? 'emdash-fork'
+    : 'emdash-live'
   : isFork
     ? 'emdash-fork'
     : isCanary
