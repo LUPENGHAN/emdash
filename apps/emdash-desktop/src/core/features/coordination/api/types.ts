@@ -65,11 +65,13 @@ export const workspaceLifecycleSchema = z.discriminatedUnion('kind', [
     state: z.enum(['active', 'waiting', 'ready_to_complete', 'completed', 'archived']),
     completedAt: z.number().optional(),
     completionNote: z.string().optional(),
+    archivedFrom: z.enum(['active', 'waiting', 'ready_to_complete', 'completed']).optional(),
   }),
   z.object({
     kind: z.literal('ongoing'),
     state: z.enum(['active', 'paused', 'archived']),
     lastCheckpointAt: z.number().optional(),
+    archivedFrom: z.enum(['active', 'paused']).optional(),
   }),
 ]);
 export type WorkspaceLifecycle = z.infer<typeof workspaceLifecycleSchema>;
@@ -93,6 +95,42 @@ export const workspaceCheckpointSchema = z.object({
   createdAt: z.number(),
 });
 export type WorkspaceCheckpoint = z.infer<typeof workspaceCheckpointSchema>;
+
+export const workspaceProjectImportSchema = z.object({
+  requestId: z.string().uuid(),
+  repositoryUrl: z.string().min(1),
+  name: z.string().min(1),
+  directory: z.string().min(1),
+  state: z.enum(['cloning', 'registering', 'ready', 'failed', 'cancelled']),
+  progress: z.number().min(0).max(100).optional(),
+  projectId: z.string().optional(),
+  error: z.string().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type WorkspaceProjectImport = z.infer<typeof workspaceProjectImportSchema>;
+
+export const workspaceCompletionReportSchema = z.object({
+  generatedAt: z.number(),
+  summary: z.string(),
+  linkedProjectIds: z.array(z.string()),
+  workItems: z.object({ total: z.number(), done: z.number(), deferred: z.number(), cancelled: z.number() }),
+  tasks: z.array(
+    z.object({
+      taskId: z.string(),
+      name: z.string(),
+      projectId: z.string(),
+      state: z.string(),
+      summary: z.string().optional(),
+      commits: z.array(z.string()),
+      checks: z.array(z.object({ command: z.string(), passed: z.boolean(), output: z.string().optional() })),
+      unresolved: z.array(z.string()),
+      prUrls: z.array(z.string()),
+    })
+  ),
+  checkpoints: z.array(workspaceCheckpointSchema),
+});
+export type WorkspaceCompletionReport = z.infer<typeof workspaceCompletionReportSchema>;
 
 export type Coordinator = {
   version: '10';
@@ -118,6 +156,10 @@ export type Coordinator = {
   lifecycle: WorkspaceLifecycle;
   workItems: Record<string, WorkspaceWorkItem>;
   checkpoints: WorkspaceCheckpoint[];
+  completionReport?: WorkspaceCompletionReport;
+  projectImports?: Record<string, WorkspaceProjectImport>;
+  migratedFromId?: string;
+  supersededById?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -306,6 +348,10 @@ export const coordinatorRecord = defineVersionedSchema()
       lifecycle: workspaceLifecycleSchema,
       workItems: z.record(z.string(), workspaceWorkItemSchema),
       checkpoints: z.array(workspaceCheckpointSchema),
+      completionReport: workspaceCompletionReportSchema.optional(),
+      projectImports: z.record(z.string(), workspaceProjectImportSchema).optional(),
+      migratedFromId: z.string().optional(),
+      supersededById: z.string().optional(),
       createdAt: z.number(),
       updatedAt: z.number(),
     }),

@@ -125,6 +125,35 @@ export const coordinationContract = defineContract({
     }),
     output: z.custom<Coordinator>(),
   }),
+  migrateToStandalone: procedure({
+    input: z.object({ id: z.string(), requestId: z.uuid() }),
+    output: z.custom<Coordinator>(),
+  }),
+  rollbackStandaloneMigration: procedure({
+    input: z.object({ id: z.string() }),
+    output: z.custom<Coordinator>(),
+  }),
+  prepareProjectImport: procedure({
+    input: z.object({
+      id: z.string(),
+      requestId: z.uuid(),
+      repositoryUrl: z.string().trim().min(1),
+      name: z.string().trim().min(1).max(100),
+      directory: z.string().trim().min(1).max(120),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  updateProjectImport: procedure({
+    input: z.object({
+      id: z.string(),
+      requestId: z.uuid(),
+      state: z.enum(['cloning', 'registering', 'ready', 'failed', 'cancelled']),
+      progress: z.number().min(0).max(100).optional(),
+      projectId: z.string().optional(),
+      error: z.string().optional(),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
   open: procedure({ input: z.object({ id: z.string() }), output: z.custom<Coordinator>() }),
   bindConversation: procedure({
     input: z.object({ id: z.string(), conversationId: z.string().min(1) }),
@@ -183,7 +212,7 @@ export const coordinationContract = defineContract({
   setLifecycleState: procedure({
     input: z.object({
       id: z.string(),
-      action: z.enum(['complete', 'pause', 'resume', 'archive']),
+      action: z.enum(['complete', 'pause', 'resume', 'archive', 'restore']),
       note: z.string().max(20_000).optional(),
     }),
     output: z.custom<Coordinator>(),

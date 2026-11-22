@@ -240,8 +240,8 @@ try {
 
   await page.addScriptTag({
     type: 'module',
-    content: `import { prepareStandaloneCoordinator, seedMainAgentKnowledge, coordinatorSnapshot, createReplacementMain } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
-      Object.assign(window, { prepareStandaloneCoordinator, seedMainAgentKnowledge, coordinatorSnapshot, createReplacementMain });`,
+    content: `import { prepareStandaloneCoordinator, seedMainAgentKnowledge, coordinatorSnapshot, createReplacementMain, createCompletedWorkspace, verifyStandaloneMigration } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
+      Object.assign(window, { prepareStandaloneCoordinator, seedMainAgentKnowledge, coordinatorSnapshot, createReplacementMain, createCompletedWorkspace, verifyStandaloneMigration });`,
   });
   await page.waitForFunction(() => typeof window.prepareStandaloneCoordinator === 'function');
   const coordinator = await page.evaluate((input) => window.prepareStandaloneCoordinator(input), {
@@ -250,6 +250,12 @@ try {
     repository,
     worktreeRoot: join(profile, 'worktrees'),
   });
+  const migration = await page.evaluate(
+    (projectId) => window.verifyStandaloneMigration(projectId),
+    coordinator.targetProjectId
+  );
+  assert.equal(migration.sourceId, migration.rolledBackId);
+  assert.equal(migration.migratedProjectId, '__emdash_main_agent_host__');
   await page
     .getByTestId('main-agent-workspaces')
     .getByRole('button')
@@ -325,11 +331,16 @@ try {
     request_id: 'ea9fcf9d-c865-4492-bdb0-6a4bc6f2162a',
     repository_url: importRepository,
     name: '组织协作仓库',
+    directory: 'organization-collaboration',
   };
   const importedProject = JSON.parse(await call(client, 'import_project', importArgs));
   const repeatedImport = JSON.parse(await call(client, 'import_project', importArgs));
   assert.equal(importedProject.id, importArgs.request_id);
   assert.equal(repeatedImport.id, importedProject.id);
+  await assert.rejects(
+    call(client, 'import_project', { ...importArgs, repository_url: repository }),
+    /different parameters/
+  );
   await page.getByText('组织协作仓库', { exact: true }).waitFor();
   const importedContext = JSON.parse(await call(client, 'get_main_agent_context', {}));
   assert.ok(importedContext.projects.some((project) => project.id === importedProject.id));
@@ -388,6 +399,14 @@ try {
   await page.getByText('验证项目 TODO 聚合', { exact: true }).waitFor();
   await page.getByText('最新决策：验证项目决策聚合', { exact: true }).waitFor();
   await page.getByText('最新记录：验证全局记忆聚合', { exact: true }).waitFor();
+  await page.getByText('已导入并关联', { exact: true }).waitFor();
+  await page.getByText('查看完整上下文', { exact: true }).first().click();
+  await page
+    .getByText('完整上下文需要展示状态、详情、来源与更新时间。', { exact: true })
+    .waitFor();
+  await page.getByText(/来源：用户 · 更新于/).first().waitFor();
+  await page.getByText('查看完整全局记忆', { exact: true }).click();
+  await page.getByText('所有主任务都应读取这条记忆。', { exact: true }).waitFor();
   await page.getByText('Simulated task result', { exact: true }).waitFor();
   await page.getByTestId('coordinator-accept-result').waitFor();
   await page.waitForFunction(async (id) => {
@@ -465,7 +484,28 @@ try {
   assert.equal(switched.tasks[created.task_id].state, 'done');
   assert.equal(switched.events.length, 3);
   assert.ok(switched.events.every((event) => event.state === 'acknowledged'));
+  const completedWorkspace = await page.evaluate(() => window.createCompletedWorkspace());
+  await page.getByTestId('main-workspace-filter').click();
+  await page.getByRole('option', { name: '已完成', exact: true }).click();
+  await page
+    .getByTestId('main-agent-workspaces')
+    .getByRole('button')
+    .filter({ hasText: '完成报告验收' })
+    .first()
+    .click();
+  await page.waitForFunction(
+    (taskId) => document.querySelector('[data-testid="coordinator-panel"]')?.getAttribute('data-task-id') === taskId,
+    completedWorkspace.taskId
+  );
   await page.getByTestId('coordinator-tasks-tab').click();
+  await page.getByTestId('completion-report').waitFor();
+  await page.getByText('完成报告', { exact: true }).click();
+  await page.getByText('结构化完成报告已生成', { exact: true }).waitFor();
+  const completedSnapshot = await page.evaluate(
+    (taskId) => window.coordinatorSnapshot(taskId),
+    completedWorkspace.taskId
+  );
+  assert.equal(completedSnapshot.completionReport.workItems.done, 1);
   await page.screenshot({ path: join(profile, 'coordinator-result.png') });
   await writeFile(
     join(profile, 'result.json'),
@@ -484,6 +524,10 @@ try {
           'linked project requirements, decisions and global memory aggregated in UI and MCP context',
           'idempotent repository clone, Emdash project registration and main-workspace linking',
           'idempotent checkpoint creation and ongoing workspace pause/resume lifecycle',
+          'safe legacy workspace migration to the internal repository and rollback',
+          'persisted import fingerprint, target directory, progress and completion state',
+          'Chinese workspace filters, full searchable context details and source timestamps',
+          'finite workspace completion generated a structured completion report',
           'result delivered through ACP and explicitly acknowledged',
           'changes requested and versioned result accepted',
           'main conversation switched through the UI without losing task history',

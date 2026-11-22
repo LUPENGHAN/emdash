@@ -184,15 +184,40 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         request_id: z.uuid(),
         repository_url: z.string().min(1),
         name: z.string().trim().min(1).max(100).optional(),
+        directory: z
+          .string()
+          .trim()
+          .min(1)
+          .max(120)
+          .regex(/^[a-zA-Z0-9._-]+$/)
+          .optional(),
       },
     },
-    ({ request_id, repository_url, name }) =>
+    ({ request_id, repository_url, name, directory }) =>
       dispatch({
         kind: 'import_project',
         requestId: request_id,
         repositoryUrl: repository_url,
         ...(name && { name }),
+        ...(directory && { directory }),
       })
+  );
+  server.registerTool(
+    'retry_project_import',
+    {
+      description:
+        'Main agent: retry a failed or cancelled repository import with its frozen URL, name and target directory.',
+      inputSchema: { request_id: z.uuid() },
+    },
+    ({ request_id }) => dispatch({ kind: 'retry_project_import', requestId: request_id })
+  );
+  server.registerTool(
+    'cancel_project_import',
+    {
+      description: 'Main agent: cancel a repository import that is currently cloning.',
+      inputSchema: { request_id: z.uuid() },
+    },
+    ({ request_id }) => dispatch({ kind: 'cancel_project_import', requestId: request_id })
   );
   server.registerTool(
     'get_task_status',
@@ -271,7 +296,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       description:
         'Main agent lifecycle: complete a finite workspace, pause or resume an ongoing workspace, or archive either. Completion is rejected while code tasks or work items remain active.',
       inputSchema: {
-        action: z.enum(['complete', 'pause', 'resume', 'archive']),
+        action: z.enum(['complete', 'pause', 'resume', 'archive', 'restore']),
         note: z.string().max(20_000).optional(),
       },
     },

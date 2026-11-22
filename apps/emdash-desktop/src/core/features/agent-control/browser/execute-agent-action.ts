@@ -142,6 +142,8 @@ export async function executeAgentAction(
     case 'list_projects':
     case 'get_main_agent_context':
     case 'import_project':
+    case 'retry_project_import':
+    case 'cancel_project_import':
     case 'get_task_status':
     case 'cancel_pending_task':
     case 'retry_task':

@@ -22,7 +22,6 @@ import {
 import { getSidebarStore } from '@core/features/workbench/contributions/browser/app-stores';
 import { openModal } from '@core/manifests/browser/modal-api';
 import { getNavigation } from '@core/primitives/navigation/browser/navigation-selectors';
-import type { CreateTaskParams } from '@core/primitives/tasks/api';
 import { getPullRequestsRuntimeClient } from '@core/services/pull-requests/api/client';
 
 /** Test renderer entry: normal typed clients and stores, with isolated paths supplied by the harness. */
@@ -131,8 +130,7 @@ export async function prepareCoordinator(input: {
   });
   if (!selected.success) throw new Error(JSON.stringify(selected.error));
   const client = await getCoordinationClient();
-  const record = (await client.list()).find((entry) => entry.projectId === project.id);
-  if (!record) throw new Error('Project main agent was not created.');
+  const record = await client.openProject({ projectId: project.id });
   await client.update({
     id: record.id,
     primary: { agent: 'opencode', connection: 'official', effort: null },
@@ -180,7 +178,11 @@ export async function prepareStandaloneCoordinator(input: {
 
 export async function seedMainAgentKnowledge(projectId: string) {
   const [requirements, memory] = await Promise.all([getRequirementsClient(), getMemoryClient()]);
-  await requirements.add({ projectId, title: '验证项目 TODO 聚合' });
+  await requirements.add({
+    projectId,
+    title: '验证项目 TODO 聚合',
+    detail: '完整上下文需要展示状态、详情、来源与更新时间。',
+  });
   await memory.add({
     scope: 'project',
     projectId,
@@ -194,6 +196,42 @@ export async function seedMainAgentKnowledge(projectId: string) {
   });
 }
 
+export async function createCompletedWorkspace() {
+  const client = await getCoordinationClient();
+  const record = await client.createCrossProject({
+    id: crypto.randomUUID(),
+    name: '完成报告验收',
+    purpose: '验证结构化完成报告',
+    lifecycle: { kind: 'finite', state: 'active' },
+    projectIds: [],
+  });
+  const requestId = crypto.randomUUID();
+  await client.addWorkItem({ id: record.id, requestId, title: '完成验收项' });
+  await client.updateWorkItem({ id: record.id, workItemId: requestId, state: 'done' });
+  const completed = await client.setLifecycleState({
+    id: record.id,
+    action: 'complete',
+    note: '结构化完成报告已生成',
+  });
+  return { id: completed.id, taskId: completed.taskId };
+}
+
+export async function verifyStandaloneMigration(projectId: string) {
+  const client = await getCoordinationClient();
+  const source = await client.openProject({ projectId });
+  const migrated = await client.migrateToStandalone({
+    id: source.id,
+    requestId: crypto.randomUUID(),
+  });
+  const rolledBack = await client.rollbackStandaloneMigration({ id: migrated.id });
+  return {
+    sourceId: source.id,
+    migratedId: migrated.id,
+    migratedProjectId: migrated.projectId,
+    rolledBackId: rolledBack.id,
+  };
+}
+
 export async function coordinatorSnapshot(taskId: string) {
   return (await getCoordinationClient()).getByTask({ taskId });
 }
@@ -204,45 +242,20 @@ export async function prepareLegacyCoordinatorFixture(input: {
   repository: string;
   worktreeRoot: string;
 }) {
-  const { project, manager } = await prepareProject({
+  const { project } = await prepareProject({
     ...input,
     name: 'Legacy management fixture',
   });
   const client = await getCoordinationClient();
-  const record = (await client.list()).find((entry) => entry.projectId === project.id);
-  if (!record) throw new Error('Missing legacy main identity');
-  await client.update({
-    id: record.id,
+  const identity = await client.createCrossProject({
+    id: crypto.randomUUID(),
+    name: 'Legacy main',
+    projectId: project.id,
+    projectIds: [project.id],
     primary: { agent: 'opencode', connection: 'official', effort: null },
   });
-  const params: CreateTaskParams = {
-    id: record.taskId,
-    projectId: project.id,
-    taskConfig: {
-      version: '1',
-      name: 'Main agent',
-      role: 'coordination',
-      initialConversation: {
-        id: record.conversationId,
-        provider: asAgentProviderId('opencode'),
-        type: 'acp',
-        title: 'Legacy main',
-        modelSource: null,
-        effort: null,
-      },
-    },
-    workspaceConfig: {
-      version: '2',
-      git: {
-        kind: 'create-branch',
-        branchName: `legacy-main-${record.taskId.slice(0, 8)}`,
-        fromBranch: { type: 'local', branch: 'main' },
-      },
-      workspace: { kind: 'new-worktree' },
-    },
-  };
-  await manager.createTask(params);
-  await manager.provisionTask(record.taskId);
+  const record = await client.open({ id: identity.id });
+  if (!record.params) throw new Error('Legacy main resources were not prepared');
   const task = getTaskStore(project.id, record.taskId);
   if (!task?.workspacePath) throw new Error('Legacy workspace was not provisioned');
   return {
@@ -250,7 +263,7 @@ export async function prepareLegacyCoordinatorFixture(input: {
     projectId: project.id,
     taskId: record.taskId,
     conversationId: record.conversationId,
-    params,
+    params: record.params,
     path: task.workspacePath,
   };
 }

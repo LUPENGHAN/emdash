@@ -728,6 +728,7 @@ export async function bootServices(
     background?: BackgroundAgentControl;
     pullRequests?: TaskPullRequestService;
   } = {};
+  const projectImportControllers = new Map<string, AbortController>();
   const taskDelegation: { service?: TaskDelegationService } = {};
   const assertActiveAgentCaller = async (caller: AgentCaller) => {
     const actual = await resolveAgentCaller(
@@ -828,6 +829,8 @@ export async function bootServices(
               lifecycle: main.lifecycle,
               workItems: Object.values(main.workItems),
               checkpoints: main.checkpoints,
+              completionReport: main.completionReport,
+              projectImports: Object.values(main.projectImports ?? {}),
             },
             projects: projects.map(({ project, requirements, decisions }, index) => ({
               id: projectIds[index],
@@ -839,26 +842,60 @@ export async function bootServices(
           }),
         };
       }
-      if (action.kind === 'import_project') {
+      if (action.kind === 'cancel_project_import') {
         await assertActiveAgentCaller(caller);
         const service = coordinationRuntime.service;
         if (!service) throw new Error('Main agent coordination is starting.');
         const main = await service.getByTask(caller.taskId);
+        if (!main) throw new Error('Only a main-agent conversation can cancel an import.');
+        projectImportControllers.get(`${main.id}:${action.requestId}`)?.abort();
+        const record = await service.updateProjectImport(main.id, action.requestId, {
+          state: 'cancelled',
+          error: '已由用户取消。',
+        });
+        return { text: JSON.stringify(record.projectImports?.[action.requestId]) };
+      }
+      if (action.kind === 'import_project' || action.kind === 'retry_project_import') {
+        await assertActiveAgentCaller(caller);
+        const service = coordinationRuntime.service;
+        if (!service) throw new Error('Main agent coordination is starting.');
+        let main = await service.getByTask(caller.taskId);
         if (!main) throw new Error('Only a main-agent conversation can import a project.');
+        const saved = main.projectImports?.[action.requestId];
+        const url = action.kind === 'import_project' ? action.repositoryUrl.trim() : saved?.repositoryUrl;
+        if (!url) throw new Error('The saved project import is unavailable.');
+        const inferredName =
+          url
+            .split(/[?#]/, 1)[0]
+            ?.replace(/\/+$/, '')
+            .split(/[/:]/)
+            .at(-1)
+            ?.replace(/\.git$/i, '') || 'repository';
+        const name = action.kind === 'import_project' ? action.name?.trim() || inferredName : saved!.name;
+        const defaultDirectory = `${name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'repository'}-${action.requestId.slice(0, 8)}`;
+        const directory = action.kind === 'import_project' ? action.directory ?? defaultDirectory : saved!.directory;
+        if (!/^[a-zA-Z0-9._-]+$/.test(directory))
+          throw new Error('Target directory may only contain letters, numbers, dot, underscore and dash.');
+        main = await service.prepareProjectImport(main.id, {
+          requestId: action.requestId,
+          repositoryUrl: url,
+          name,
+          directory,
+        });
+        const prepared = main.projectImports?.[action.requestId];
+        if (prepared?.state === 'ready' && prepared.projectId) {
+          const project = await getProjectById(db, prepared.projectId);
+          if (project) return { text: JSON.stringify(project) };
+        }
         let project = await getProjectById(db, action.requestId);
-        if (!project) {
-          const url = action.repositoryUrl.trim();
-          const inferredName =
-            url
-              .split(/[?#]/, 1)[0]
-              ?.replace(/\/+$/, '')
-              .split(/[/:]/)
-              .at(-1)
-              ?.replace(/\.git$/i, '') || 'repository';
-          const name = action.name?.trim() || inferredName;
-          const directory = `${name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'repository'}-${action.requestId.slice(0, 8)}`;
+        const controller = new AbortController();
+        const controllerKey = `${main.id}:${action.requestId}`;
+        projectImportControllers.set(controllerKey, controller);
+        try {
+          if (!project) {
           const root = join(app.getPath('userData'), 'agent-imported-repositories');
           await mkdir(root, { recursive: true });
+          let lastProgress = -1;
           const imported = await createProjectFromRemote(
             {
               db,
@@ -875,27 +912,61 @@ export async function bootServices(
             },
             {
               jobId: action.requestId,
-              signal: new AbortController().signal,
-              progress: () => {},
+              signal: controller.signal,
+              progress: (progress) => {
+                const percent = Math.max(0, Math.min(100, progress.percent ?? 0));
+                if (percent < 100 && Math.floor(percent / 5) === Math.floor(lastProgress / 5)) return;
+                lastProgress = percent;
+                void service
+                  .updateProjectImport(main.id, action.requestId, {
+                    state: progress.phase === 'cloning' ? 'cloning' : 'registering',
+                    progress: progress.phase === 'cloning' ? percent : Math.max(percent, 95),
+                  })
+                  .catch(() => {});
+              },
             },
-            () => {}
+            (_projectId, state) => {
+              if (state.phase !== 'cloning')
+                void service
+                  .updateProjectImport(main.id, action.requestId, {
+                    state: state.phase === 'error' ? 'failed' : state.phase === 'ready' ? 'ready' : 'registering',
+                    progress: state.phase === 'ready' ? 100 : 95,
+                    ...(state.phase === 'error' && { error: state.message }),
+                  })
+                  .catch(() => {});
+            }
           );
           if (!imported.success) throw new Error(imported.error.message);
           project = imported.data;
+          }
+          const projectIds = [...new Set([...main.projectIds, project.id])];
+          const projectAccess =
+            main.projectAccess?.mode === 'selected'
+              ? {
+                  mode: 'selected' as const,
+                  projectIds: [...new Set([...main.projectAccess.projectIds, project.id])],
+                }
+              : main.projectAccess;
+          await service.update(main.id, {
+            projectIds,
+            ...(projectAccess && { projectAccess }),
+          });
+          await service.updateProjectImport(main.id, action.requestId, {
+            state: 'ready',
+            progress: 100,
+            projectId: project.id,
+          });
+          return { text: JSON.stringify(project) };
+        } catch (error) {
+          const cancelled = controller.signal.aborted;
+          await service.updateProjectImport(main.id, action.requestId, {
+            state: cancelled ? 'cancelled' : 'failed',
+            error: cancelled ? '已由用户取消。' : String(error),
+          });
+          throw error;
+        } finally {
+          projectImportControllers.delete(controllerKey);
         }
-        const projectIds = [...new Set([...main.projectIds, project.id])];
-        const projectAccess =
-          main.projectAccess?.mode === 'selected'
-            ? {
-                mode: 'selected' as const,
-                projectIds: [...new Set([...main.projectAccess.projectIds, project.id])],
-              }
-            : main.projectAccess;
-        await service.update(main.id, {
-          projectIds,
-          ...(projectAccess && { projectAccess }),
-        });
-        return { text: JSON.stringify(project) };
       }
       if (
         [
@@ -1494,31 +1565,36 @@ export async function bootServices(
       const repositoryPath = join(app.getPath('userData'), 'main-agent-workspaces');
       const seedRepository = async () => {
         const git = getGitExecutable();
+        await mkdir(repositoryPath, { recursive: true });
+        try {
+          await runLocalCommand(git, ['-C', repositoryPath, 'rev-parse', '--git-dir']);
+        } catch {
+          await runLocalCommand(git, ['-C', repositoryPath, 'init', '-b', 'main']);
+        }
         try {
           await runLocalCommand(git, ['-C', repositoryPath, 'rev-parse', '--verify', 'HEAD']);
           return;
-        } catch {
-          const readme = join(repositoryPath, 'README.md');
-          await writeFile(
-            readme,
-            '# Emdash 主任务管理仓库\n\n此仓库由 Emdash 自动管理，用于隔离顶层主任务的工作树和管理文档。\n',
-            { flag: 'wx' }
-          ).catch((error: NodeJS.ErrnoException) => {
-            if (error.code !== 'EEXIST') throw error;
-          });
-          await runLocalCommand(git, ['-C', repositoryPath, 'add', 'README.md']);
-          await runLocalCommand(git, [
-            '-C',
-            repositoryPath,
-            '-c',
-            'user.name=Emdash',
-            '-c',
-            'user.email=emdash@local',
-            'commit',
-            '-m',
-            'chore: initialize main agent workspace',
-          ]);
-        }
+        } catch {}
+        const readme = join(repositoryPath, 'README.md');
+        await writeFile(
+          readme,
+          '# Emdash 主任务管理仓库\n\n此仓库由 Emdash 自动管理，用于隔离顶层主任务的工作树和管理文档。\n',
+          { flag: 'wx' }
+        ).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'EEXIST') throw error;
+        });
+        await runLocalCommand(git, ['-C', repositoryPath, 'add', 'README.md']);
+        await runLocalCommand(git, [
+          '-C',
+          repositoryPath,
+          '-c',
+          'user.name=Emdash',
+          '-c',
+          'user.email=emdash@local',
+          'commit',
+          '-m',
+          'chore: initialize main agent workspace',
+        ]);
       };
       const existing = await getProjectById(db, MAIN_AGENT_HOST_PROJECT_ID);
       if (existing) {
@@ -1844,25 +1920,10 @@ export async function bootServices(
     },
   });
 
-  appScope.add(
-    projectEvents.on('project:created', async (project) => {
-      if (project.id === MAIN_AGENT_HOST_PROJECT_ID) return;
-      await coordinatorService.ensureProject(project.id);
-    })
-  );
-  void getProjects(db)
-    .then(async (projects) => {
-      for (const project of projects) {
-        if (project.id === MAIN_AGENT_HOST_PROJECT_ID) continue;
-        await coordinatorService.ensureProject(project.id).catch((error) =>
-          log.warn('Could not restore project main agent', {
-            projectId: project.id,
-            error: String(error),
-          })
-        );
-      }
-      await coordinatorService.recover();
-    })
+  // A repository does not implicitly create a main workspace. Project-specific main
+  // workspaces are materialized only when the user explicitly opens one.
+  void coordinatorService
+    .recover()
     .catch((error) => log.warn('Could not restore main agents', { error: String(error) }));
   const delegationRecoveryTimer = setTimeout(scheduleDelegations, 1000);
   appScope.add(() => clearTimeout(delegationRecoveryTimer));
@@ -2257,6 +2318,8 @@ export async function bootServices(
   // the workspace removal verbs; nothing submits to the operations kernel.
   const projectDeletion: ProjectDeletionDependencies = {
     beforeDelete: async (projectId) => {
+      if (projectId === MAIN_AGENT_HOST_PROJECT_ID)
+        throw new Error('Emdash 内部主任务管理仓库不能删除；如有损坏，应用会自动修复。');
       const references = await coordinatorService.documentStorageReferences(projectId);
       const names: string[] = [];
       for (const reference of references) {

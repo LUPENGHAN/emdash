@@ -89,7 +89,15 @@ export type AgentControlAction =
     }
   | { kind: 'list_projects'; query?: string }
   | { kind: 'get_main_agent_context' }
-  | { kind: 'import_project'; requestId: string; repositoryUrl: string; name?: string }
+  | {
+      kind: 'import_project';
+      requestId: string;
+      repositoryUrl: string;
+      name?: string;
+      directory?: string;
+    }
+  | { kind: 'retry_project_import'; requestId: string }
+  | { kind: 'cancel_project_import'; requestId: string }
   | { kind: 'get_task_status'; taskId: string }
   | { kind: 'add_work_item'; requestId: string; title: string; detail?: string }
   | {
@@ -102,7 +110,7 @@ export type AgentControlAction =
   | { kind: 'create_checkpoint'; requestId: string; title: string }
   | {
       kind: 'set_main_agent_state';
-      action: 'complete' | 'pause' | 'resume' | 'archive';
+      action: 'complete' | 'pause' | 'resume' | 'archive' | 'restore';
       note?: string;
     }
   | { kind: 'list_conversations'; scope: 'task' | 'project'; projectId?: string; taskId?: string }

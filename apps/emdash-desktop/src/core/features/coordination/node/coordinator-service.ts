@@ -28,6 +28,7 @@ import {
   type DocumentStorage,
   type WorkspaceLifecycle,
   type WorkspaceWorkItem,
+  type WorkspaceProjectImport,
 } from '../api/types';
 import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordinator-access';
 import type { CoordinatorDocuments } from './coordinator-documents';
@@ -203,6 +204,153 @@ export class CoordinatorService {
         workItems: {},
         checkpoints: [],
         createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await this.save(record);
+      return record;
+    });
+  }
+  async migrateToStandalone(id: string, requestId: string): Promise<Coordinator> {
+    const destinationId = `cross:${requestId}`;
+    const hostProjectId = await this.deps.ensureMainAgentHostProject?.();
+    if (!hostProjectId) throw new Error('The main-agent management repository is unavailable.');
+    return this.underLocks(this.locks, [id, destinationId], async () => {
+      const source = await this.get(id);
+      if (source.projectId === hostProjectId) return source;
+      const existing = await this.deps.store.getOrThrow(destinationId);
+      if (existing) {
+        const parsed = this.parseRecord(existing);
+        if (parsed.migratedFromId !== source.id)
+          throw new Error('This migration request_id was already used for another workspace.');
+        return parsed;
+      }
+      const now = Date.now();
+      const destination: Coordinator = {
+        ...source,
+        id: destinationId,
+        kind: 'cross-project',
+        projectId: hostProjectId,
+        projectIds: [...new Set([...source.projectIds, source.projectId])],
+        taskId: randomUUID(),
+        conversationId: randomUUID(),
+        params: undefined,
+        tasks: {},
+        events: [],
+        creationFingerprint: createHash('sha256')
+          .update(JSON.stringify({ migratedFromId: source.id, requestId }))
+          .digest('hex'),
+        migratedFromId: source.id,
+        supersededById: undefined,
+        documentStorage: undefined,
+        documentMigration: undefined,
+        documentStorageHistory: source.documentStorage
+          ? [...(source.documentStorageHistory ?? []), source.documentStorage]
+          : source.documentStorageHistory,
+        createdAt: now,
+        updatedAt: now,
+      };
+      if (source.lifecycle.kind === 'finite') {
+        if (source.lifecycle.state !== 'archived') {
+          source.lifecycle.archivedFrom = source.lifecycle.state;
+          source.lifecycle.state = 'archived';
+        }
+      } else if (source.lifecycle.state !== 'archived') {
+        source.lifecycle.archivedFrom = source.lifecycle.state;
+        source.lifecycle.state = 'archived';
+      }
+      source.supersededById = destination.id;
+      source.updatedAt = now;
+      await this.deps.store.setManyOrThrow([
+        { key: source.id, value: coordinatorRecord.schema.parse(source) },
+        { key: destination.id, value: coordinatorRecord.schema.parse(destination) },
+      ]);
+      this.deps.emit({ coordinatorId: source.id, projectId: source.projectId, taskId: source.taskId });
+      this.deps.emit({
+        coordinatorId: destination.id,
+        projectId: destination.projectId,
+        taskId: destination.taskId,
+      });
+      return destination;
+    });
+  }
+  async rollbackStandaloneMigration(id: string): Promise<Coordinator> {
+    const destination = await this.get(id);
+    if (!destination.migratedFromId) throw new Error('This workspace was not created by migration.');
+    return this.underLocks(this.locks, [id, destination.migratedFromId], async () => {
+      const latest = await this.get(id);
+      const source = await this.get(latest.migratedFromId!);
+      if (source.supersededById !== latest.id)
+        throw new Error('The migration relationship changed and cannot be rolled back.');
+      const now = Date.now();
+      if (source.lifecycle.kind === 'finite') {
+        source.lifecycle.state = source.lifecycle.archivedFrom ?? 'active';
+        source.lifecycle.archivedFrom = undefined;
+      } else {
+        source.lifecycle.state = source.lifecycle.archivedFrom ?? 'active';
+        source.lifecycle.archivedFrom = undefined;
+      }
+      source.supersededById = undefined;
+      latest.lifecycle.archivedFrom = latest.lifecycle.state === 'archived' ? undefined : latest.lifecycle.state;
+      latest.lifecycle.state = 'archived';
+      source.updatedAt = now;
+      latest.updatedAt = now;
+      await this.deps.store.setManyOrThrow([
+        { key: source.id, value: coordinatorRecord.schema.parse(source) },
+        { key: latest.id, value: coordinatorRecord.schema.parse(latest) },
+      ]);
+      this.deps.emit({ coordinatorId: source.id, projectId: source.projectId, taskId: source.taskId });
+      this.deps.emit({ coordinatorId: latest.id, projectId: latest.projectId, taskId: latest.taskId });
+      return source;
+    });
+  }
+  async prepareProjectImport(
+    id: string,
+    input: Pick<WorkspaceProjectImport, 'requestId' | 'repositoryUrl' | 'name' | 'directory'>
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const existing = record.projectImports?.[input.requestId];
+      if (existing) {
+        if (
+          existing.repositoryUrl !== input.repositoryUrl ||
+          existing.name !== input.name ||
+          existing.directory !== input.directory
+        )
+          throw new Error('This import request_id was already used with different parameters.');
+        if (existing.state === 'ready') return record;
+      }
+      const now = Date.now();
+      record.projectImports ??= {};
+      record.projectImports[input.requestId] = {
+        ...input,
+        state: 'cloning',
+        progress: 0,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      await this.save(record);
+      return record;
+    });
+  }
+  async updateProjectImport(
+    id: string,
+    requestId: string,
+    patch: Pick<WorkspaceProjectImport, 'state'> &
+      Partial<Pick<WorkspaceProjectImport, 'progress' | 'projectId' | 'error'>>
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const current = record.projectImports?.[requestId];
+      if (!current) throw new Error('The project import no longer exists.');
+      if (
+        ['cancelled', 'ready'].includes(current.state) &&
+        ['cloning', 'registering'].includes(patch.state)
+      )
+        return record;
+      record.projectImports![requestId] = {
+        ...current,
+        ...patch,
+        error: patch.error,
         updatedAt: Date.now(),
       };
       await this.save(record);
@@ -850,7 +998,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
 
   async setLifecycleState(
     id: string,
-    action: 'complete' | 'pause' | 'resume' | 'archive',
+    action: 'complete' | 'pause' | 'resume' | 'archive' | 'restore',
     note?: string
   ): Promise<Coordinator> {
     return this.locks.runExclusive(id, async () => {
@@ -871,12 +1019,47 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         record.lifecycle.state = 'completed';
         record.lifecycle.completedAt = Date.now();
         record.lifecycle.completionNote = note?.trim() || undefined;
+        const workItems = Object.values(record.workItems);
+        record.completionReport = {
+          generatedAt: Date.now(),
+          summary: note?.trim() || record.purpose || `${record.name} 已按完成条件结束。`,
+          linkedProjectIds: [...record.projectIds],
+          workItems: {
+            total: workItems.length,
+            done: workItems.filter((item) => item.state === 'done').length,
+            deferred: workItems.filter((item) => item.state === 'deferred').length,
+            cancelled: workItems.filter((item) => item.state === 'cancelled').length,
+          },
+          tasks: Object.values(record.tasks).map((task) => ({
+            taskId: task.taskId,
+            name: task.name,
+            projectId: task.projectId,
+            state: task.state,
+            summary: task.result?.summary,
+            commits: task.result?.commits ?? [],
+            checks: task.result?.checks ?? [],
+            unresolved: task.result?.unresolved ?? [],
+            prUrls: task.result?.prUrls ?? [],
+          })),
+          checkpoints: [...record.checkpoints],
+        };
       } else if (action === 'pause' || action === 'resume') {
         if (record.lifecycle.kind !== 'ongoing')
           throw new Error('Only an ongoing main agent can be paused or resumed.');
         record.lifecycle.state = action === 'pause' ? 'paused' : 'active';
-      } else {
+      } else if (action === 'archive') {
+        if (record.lifecycle.state !== 'archived')
+          record.lifecycle.archivedFrom = record.lifecycle.state;
         record.lifecycle.state = 'archived';
+      } else {
+        if (record.lifecycle.state !== 'archived') return record;
+        if (record.lifecycle.kind === 'finite') {
+          record.lifecycle.state = record.lifecycle.archivedFrom ?? 'active';
+          record.lifecycle.archivedFrom = undefined;
+        } else {
+          record.lifecycle.state = record.lifecycle.archivedFrom ?? 'active';
+          record.lifecycle.archivedFrom = undefined;
+        }
       }
       await this.save(record);
       return record;
@@ -1476,8 +1659,13 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       try {
         await this.locks.runExclusive(record.id, async () => {
           const latest = await this.get(record.id);
-          for (const event of latest.events) if (event.state === 'queued') event.state = 'pending';
-          await this.save(latest);
+          let changed = false;
+          for (const event of latest.events)
+            if (event.state === 'queued') {
+              event.state = 'pending';
+              changed = true;
+            }
+          if (changed) await this.save(latest);
           for (const task of Object.values(latest.tasks)) {
             if (task.state === 'assigned' || task.state === 'blocked' || task.state === 'cancelled')
               continue;

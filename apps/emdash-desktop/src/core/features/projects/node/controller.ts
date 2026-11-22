@@ -8,6 +8,7 @@ import type {
   MigrateProjectConfigRequest,
   WriteProjectConfigRequest,
 } from '@core/primitives/project-settings/api';
+import { isProtectedSystemProject } from '@core/primitives/projects/api';
 import type { ProjectBaselineSyncService } from './baseline-sync-service';
 import {
   archiveProject,
@@ -89,8 +90,11 @@ export function createProjectOperations(dependencies: ProjectOperationDependenci
     deleteProjectFolder: (folderId: string) => deleteProjectFolder(db, folderId),
     moveProjectToFolder: (projectId: string, folderId: string | null) =>
       moveProjectToFolder(db, projectId, folderId),
-    archiveProject: (projectId: string) =>
-      archiveProject(db, dependencies.projectAutomations, projectId),
+    archiveProject: (projectId: string) => {
+      if (isProtectedSystemProject(projectId))
+        throw new Error('Emdash 内部主任务管理仓库不能归档。');
+      return archiveProject(db, dependencies.projectAutomations, projectId);
+    },
     restoreProject: (projectId: string) =>
       restoreProject(db, dependencies.projectAutomations, projectId),
   };

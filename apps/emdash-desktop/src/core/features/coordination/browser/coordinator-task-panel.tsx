@@ -19,7 +19,13 @@ import { useMemento } from '@core/primitives/mementos/react';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
 import { isMainAgentHostProject } from '../api/main-agent-host';
-import type { AssignedTask, Coordinator, ProjectAccess } from '../api/types';
+import type {
+  AssignedTask,
+  Coordinator,
+  ProjectAccess,
+  WorkspaceCompletionReport,
+  WorkspaceProjectImport,
+} from '../api/types';
 import { coordinatorViewMemento } from '../contributions/mementos';
 import { CoordinatorDocumentsPanel } from './coordinator-documents-panel';
 import { TakeOverTaskForm } from './take-over-task-form';
@@ -148,6 +154,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
           ) : tab === 'settings' ? (
             <div className="space-y-6">
               <ProjectAccessSettings record={record} />
+              <WorkspaceMigrationSettings record={record} />
               <MainConversationSettings record={record} />
             </div>
           ) : (
@@ -305,6 +312,51 @@ function taskStateLabel(state: AssignedTask['state']) {
   }[state];
 }
 
+function projectImportStateLabel(state: WorkspaceProjectImport['state']) {
+  return {
+    cloning: '正在克隆',
+    registering: '正在注册项目',
+    ready: '已导入并关联',
+    failed: '导入失败',
+    cancelled: '已取消',
+  }[state];
+}
+
+function CompletionReport({ report }: { report: WorkspaceCompletionReport }) {
+  return (
+    <details className="rounded-lg border border-border p-3" data-testid="completion-report">
+      <summary className="cursor-pointer font-medium">完成报告</summary>
+      <div className="mt-3 space-y-3 text-sm">
+        <p className="whitespace-pre-wrap">{report.summary}</p>
+        <p className="text-xs text-foreground-muted">
+          生成于 {new Date(report.generatedAt).toLocaleString()} · {report.linkedProjectIds.length}{' '}
+          个关联项目
+        </p>
+        <p>
+          工作事项：共 {report.workItems.total}，完成 {report.workItems.done}，推迟{' '}
+          {report.workItems.deferred}，取消 {report.workItems.cancelled}
+        </p>
+        {report.tasks.map((task) => (
+          <details key={task.taskId} className="rounded border border-border p-2">
+            <summary className="cursor-pointer">
+              {task.name} · {taskStateLabel(task.state as AssignedTask['state'])}
+            </summary>
+            <div className="mt-2 space-y-1">
+              {task.summary && <p className="whitespace-pre-wrap">{task.summary}</p>}
+              {!!task.commits.length && <p>提交：{task.commits.join(', ')}</p>}
+              {task.checks.map((check, index) => (
+                <p key={index}>{check.passed ? '通过' : '失败'}：{check.command}</p>
+              ))}
+              {task.prUrls.map((url) => <p key={url}>PR：{url}</p>)}
+              {task.unresolved.map((issue, index) => <p key={index}>未解决：{issue}</p>)}
+            </div>
+          </details>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function WorkspaceOverview({
   record,
   displayName,
@@ -429,6 +481,24 @@ function WorkspaceOverview({
               归档
             </Button>
           )}
+          {record.lifecycle.state === 'archived' && !record.supersededById && (
+            <Button
+              variant="secondary"
+              disabled={saving}
+              onClick={() =>
+                mutate(
+                  async () =>
+                    (await getCoordinationClient()).setLifecycleState({
+                      id: record.id,
+                      action: 'restore',
+                    }),
+                  '工作区已恢复'
+                )
+              }
+            >
+              恢复工作区
+            </Button>
+          )}
         </div>
       </header>
 
@@ -446,6 +516,38 @@ function WorkspaceOverview({
       </div>
 
       <WorkspaceKnowledgeSummary record={record} />
+
+      {!!Object.keys(record.projectImports ?? {}).length && (
+        <section className="space-y-2" aria-labelledby="project-imports-title">
+          <h3 id="project-imports-title" className="font-medium">仓库导入</h3>
+          {Object.values(record.projectImports ?? {}).map((item) => (
+            <article key={item.requestId} className="rounded-lg border border-border p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium">{item.name}</span>
+                <span>{projectImportStateLabel(item.state)}</span>
+              </div>
+              <p className="mt-1 break-all text-xs text-foreground-muted">{item.repositoryUrl}</p>
+              <p className="mt-1 text-xs text-foreground-muted">目标目录：{item.directory}</p>
+              {['cloning', 'registering'].includes(item.state) && (
+                <progress
+                  className="mt-2 w-full accent-current"
+                  max={100}
+                  value={item.progress}
+                  aria-label={`${item.name} 导入进度`}
+                />
+              )}
+              {item.error && <p role="status" className="mt-2 text-xs">{item.error}</p>}
+              {['failed', 'cancelled'].includes(item.state) && (
+                <p className="mt-2 text-xs text-foreground-muted">
+                  Main Agent 可使用相同 request_id 调用 retry_project_import；URL、名称和目录会保持不变。
+                </p>
+              )}
+            </article>
+          ))}
+        </section>
+      )}
+
+      {record.completionReport && <CompletionReport report={record.completionReport} />}
 
       <section className="space-y-2" aria-labelledby="work-items-title">
         <h3 id="work-items-title" className="font-medium">
@@ -673,6 +775,41 @@ function WorkspaceKnowledgeSummary({ record }: { record: Coordinator }) {
               {project.decisions[0] && (
                 <p className="mt-2 text-xs">最新决策：{project.decisions[0].title}</p>
               )}
+              <details className="mt-3 text-xs">
+                <summary className="cursor-pointer">查看完整上下文</summary>
+                <div className="mt-2 space-y-3">
+                  <div>
+                    <p className="font-medium">全部 TODO（{project.requirements.length}）</p>
+                    {!project.requirements.length && <p className="text-foreground-muted">暂无</p>}
+                    <ul className="mt-1 space-y-2">
+                      {project.requirements.map((item) => (
+                        <li key={item.id}>
+                          <p>{item.status === 'done' ? '已完成' : '待办'} · {item.title}</p>
+                          {item.detail && <p className="whitespace-pre-wrap text-foreground-muted">{item.detail}</p>}
+                          <p className="text-foreground-muted">
+                            来源：{memorySourceLabel(item.source)} · 更新于 {new Date(item.updatedAt).toLocaleString()}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="font-medium">全部项目决策（{project.decisions.length}）</p>
+                    {!project.decisions.length && <p className="text-foreground-muted">暂无</p>}
+                    <ul className="mt-1 space-y-2">
+                      {project.decisions.map((item) => (
+                        <li key={item.id}>
+                          <p>{item.title}</p>
+                          {item.detail && <p className="whitespace-pre-wrap text-foreground-muted">{item.detail}</p>}
+                          <p className="text-foreground-muted">
+                            来源：{memorySourceLabel(item.source)} · 更新于 {new Date(item.updatedAt).toLocaleString()}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </details>
             </article>
           );
         })}
@@ -684,10 +821,28 @@ function WorkspaceKnowledgeSummary({ record }: { record: Coordinator }) {
           {knowledge.data?.globalMemory[0] && (
             <p className="mt-2 text-xs">最新记录：{knowledge.data.globalMemory[0].title}</p>
           )}
+          <details className="mt-3 text-xs">
+            <summary className="cursor-pointer">查看完整全局记忆</summary>
+            <ul className="mt-2 space-y-2">
+              {knowledge.data?.globalMemory.map((item) => (
+                <li key={item.id}>
+                  <p>{item.title}</p>
+                  {item.detail && <p className="whitespace-pre-wrap text-foreground-muted">{item.detail}</p>}
+                  <p className="text-foreground-muted">
+                    来源：{memorySourceLabel(item.source)} · 更新于 {new Date(item.updatedAt).toLocaleString()}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </details>
         </article>
       </div>
     </section>
   );
+}
+
+function memorySourceLabel(source: { kind: string; providerId?: string }) {
+  return source.kind === 'user' ? '用户' : `Agent${source.providerId ? `（${source.providerId}）` : ''}`;
 }
 
 const ProjectAccessSettings = observer(function ProjectAccessSettings({
@@ -713,7 +868,9 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
         }
       >
         <Select.Trigger data-testid="coordinator-project-access">
-          <Select.Value />
+          <Select.Value>
+            {access.mode === 'all' ? '所有可访问的 Emdash 项目' : '仅所选项目'}
+          </Select.Value>
         </Select.Trigger>
         <Select.Content>
           <Select.Item data-testid="coordinator-access-all" value="all">
@@ -785,6 +942,57 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
   );
 });
 
+function WorkspaceMigrationSettings({ record }: { record: Coordinator }) {
+  const [saving, setSaving] = useState(false);
+  const standalone = isMainAgentHostProject(record.projectId);
+  if (standalone && !record.migratedFromId) return null;
+  return (
+    <section className="max-w-lg space-y-3" aria-labelledby="workspace-migration-title">
+      <h3 id="workspace-migration-title" className="text-sm font-medium">工作区存储位置</h3>
+      {!standalone ? (
+        <>
+          <p className="text-xs text-foreground-muted">
+            该旧工作区仍绑定业务仓库。迁移会在 Emdash 内部管理仓库创建一个独立工作区，复制目标、工作事项、检查点和项目关联；旧任务与对话保留在原工作区并归档，不会移动分支或删除历史。
+          </p>
+          <Button
+            disabled={saving || !!record.supersededById}
+            onClick={() => {
+              setSaving(true);
+              void getCoordinationClient()
+                .then((client) => client.migrateToStandalone({ id: record.id, requestId: crypto.randomUUID() }))
+                .then(() => toast.success('迁移已完成，请从顶部列表打开新的独立工作区'))
+                .catch((error) => toast.error('无法迁移工作区', { description: String(error) }))
+                .finally(() => setSaving(false));
+            }}
+          >
+            {record.supersededById ? '已迁移到独立工作区' : '迁移到独立主任务仓库'}
+          </Button>
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-foreground-muted">
+            此工作区由旧的项目绑定工作区迁移而来。回滚会恢复旧工作区，并将当前工作区归档；当前工作区中新增的数据仍保留在归档记录中。
+          </p>
+          <Button
+            variant="secondary"
+            disabled={saving}
+            onClick={() => {
+              setSaving(true);
+              void getCoordinationClient()
+                .then((client) => client.rollbackStandaloneMigration({ id: record.id }))
+                .then(() => toast.success('迁移已回滚，旧工作区已恢复'))
+                .catch((error) => toast.error('无法回滚迁移', { description: String(error) }))
+                .finally(() => setSaving(false));
+            }}
+          >
+            回滚迁移
+          </Button>
+        </>
+      )}
+    </section>
+  );
+}
+
 const MainConversationSettings = observer(function MainConversationSettings({
   record,
 }: {
@@ -811,7 +1019,10 @@ const MainConversationSettings = observer(function MainConversationSettings({
         }}
       >
         <Select.Trigger data-testid="coordinator-main-conversation">
-          <Select.Value />
+          <Select.Value>
+            {conversations.find((conversation) => conversation.data.id === selected)?.data.title ??
+              '当前通知会话不可用'}
+          </Select.Value>
         </Select.Trigger>
         <Select.Content>
           {!conversations.some(

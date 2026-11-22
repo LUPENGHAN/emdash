@@ -12,9 +12,31 @@ import { getCoordinationClient } from '../api/browser/client';
 import { useCoordinators } from '../api/browser/use-coordinators';
 import { isMainAgentHostProject } from '../api/main-agent-host';
 
+const workspaceFilterLabels = {
+  current: '当前工作区',
+  finite: '一次性任务',
+  ongoing: '长期工作区',
+  project: '项目专用',
+  completed: '已完成',
+  archived: '已归档',
+  all: '全部',
+} as const;
+
 export function CrossProjectMainAgents() {
   const query = useCoordinators();
-  const records = query.data?.filter((record) => record.lifecycle.state !== 'archived') ?? [];
+  const [filter, setFilter] = useState<
+    'current' | 'finite' | 'ongoing' | 'project' | 'completed' | 'archived' | 'all'
+  >('current');
+  const records =
+    query.data?.filter((record) => {
+      if (filter === 'all') return true;
+      if (filter === 'current') return record.lifecycle.state !== 'archived';
+      if (filter === 'finite') return record.lifecycle.kind === 'finite';
+      if (filter === 'ongoing') return record.lifecycle.kind === 'ongoing';
+      if (filter === 'project') return record.kind === 'project';
+      if (filter === 'completed') return record.lifecycle.state === 'completed';
+      return record.lifecycle.state === 'archived';
+    }) ?? [];
   const { navigate } = useNavigate();
   const active = useViewParams(taskViewDef);
   const [opening, setOpening] = useState<string>();
@@ -33,6 +55,25 @@ export function CrossProjectMainAgents() {
         </Button>
       </div>
       {creating && <CreateCrossProjectMainAgent onCreated={() => setCreating(false)} />}
+      <div className="px-2 pb-1">
+        <label htmlFor="main-workspace-filter" className="mb-1 block text-xs text-foreground-muted">
+          显示范围
+        </label>
+        <Select.Root value={filter} onValueChange={(value) => value && setFilter(value as typeof filter)}>
+          <Select.Trigger id="main-workspace-filter" data-testid="main-workspace-filter">
+            <Select.Value>{workspaceFilterLabels[filter]}</Select.Value>
+          </Select.Trigger>
+          <Select.Content>
+            <Select.Item value="current">当前工作区</Select.Item>
+            <Select.Item value="finite">一次性任务</Select.Item>
+            <Select.Item value="ongoing">长期工作区</Select.Item>
+            <Select.Item value="project">项目专用</Select.Item>
+            <Select.Item value="completed">已完成</Select.Item>
+            <Select.Item value="archived">已归档</Select.Item>
+            <Select.Item value="all">全部</Select.Item>
+          </Select.Content>
+        </Select.Root>
+      </div>
       {query.isPending && <p className="px-2 py-2 text-xs text-foreground-muted">正在加载…</p>}
       {query.isError && (
         <p role="alert" className="text-destructive px-2 py-2 text-xs">
@@ -40,7 +81,7 @@ export function CrossProjectMainAgents() {
         </p>
       )}
       {!query.isPending && !records.length && !creating && (
-        <p className="px-2 py-2 text-xs text-foreground-muted">还没有主任务工作区</p>
+        <p className="px-2 py-2 text-xs text-foreground-muted">此范围内还没有主任务工作区</p>
       )}
       {records.map((record) => {
         const projectName = getProjectManagerStore().projects.get(record.projectId)?.name;
@@ -83,7 +124,9 @@ export function CrossProjectMainAgents() {
                     ? '已暂停'
                     : record.lifecycle.state === 'completed'
                       ? '已完成'
-                      : '待处理'}
+                      : record.lifecycle.state === 'archived'
+                        ? '已归档'
+                        : '待处理'}
               </span>
             </span>
             {Object.values(record.tasks).filter((task) =>
@@ -150,42 +193,53 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
       }}
     >
       <p className="text-sm font-medium">新建主任务工作区</p>
+      <label htmlFor="cross-project-agent-name" className="block text-xs text-foreground-muted">
+        工作区名称
+      </label>
       <Input
-        aria-label="工作区名称"
+        id="cross-project-agent-name"
         data-testid="cross-project-agent-name"
         value={name}
         placeholder="工作区名称"
         onChange={(event) => setName(event.target.value)}
       />
+      <label htmlFor="cross-project-agent-purpose" className="block text-xs text-foreground-muted">
+        工作目标
+      </label>
       <Input
-        aria-label="工作目标"
+        id="cross-project-agent-purpose"
         value={purpose}
         placeholder="这项工作要实现什么？"
         onChange={(event) => setPurpose(event.target.value)}
       />
+      <label htmlFor="cross-project-agent-lifecycle" className="block text-xs text-foreground-muted">
+        工作区生命周期
+      </label>
       <Select.Root
         value={lifecycleKind}
         onValueChange={(value) => {
           if (value === 'finite' || value === 'ongoing') setLifecycleKind(value);
         }}
       >
-        <Select.Trigger aria-label="工作区生命周期">
-          <Select.Value />
+        <Select.Trigger id="cross-project-agent-lifecycle">
+          <Select.Value>{lifecycleKind === 'finite' ? '一次性任务' : '长期工作区'}</Select.Value>
         </Select.Trigger>
         <Select.Content>
           <Select.Item value="finite">一次性任务</Select.Item>
           <Select.Item value="ongoing">长期工作区</Select.Item>
         </Select.Content>
       </Select.Root>
-      <p className="text-xs text-foreground-muted">主任务 Agent</p>
+      <label htmlFor="cross-project-agent-type" className="block text-xs text-foreground-muted">
+        主任务 Agent
+      </label>
       <Select.Root
         value={agent}
         onValueChange={(value) => {
           if (value) setAgent(value);
         }}
       >
-        <Select.Trigger data-testid="cross-project-agent-type">
-          <Select.Value />
+        <Select.Trigger id="cross-project-agent-type" data-testid="cross-project-agent-type">
+          <Select.Value>{agent === 'inherit' ? '跟随应用设置' : agent}</Select.Value>
         </Select.Trigger>
         <Select.Content>
           <Select.Item value="inherit">跟随应用设置</Select.Item>

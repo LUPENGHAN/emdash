@@ -564,6 +564,58 @@ describe('main agent coordination', () => {
     expect(test.deps.assertProjectAvailable).toHaveBeenCalledWith('main-agent-host');
   });
 
+  it('migrates a legacy project workspace to the management repository and can roll it back', async () => {
+    const test = setup();
+    const service = new CoordinatorService({
+      ...test.deps,
+      ensureMainAgentHostProject: async () => 'main-agent-host',
+    });
+    const source = await service.ensureProject('project');
+    await service.addWorkItem(source.id, {
+      requestId: '650d464b-b47a-4faf-b56e-40c8f9ce1644',
+      title: '保留的工作事项',
+    });
+    const migrated = await service.migrateToStandalone(
+      source.id,
+      '2cba810a-819e-4826-95d5-63e92c45cb84'
+    );
+    expect(migrated).toMatchObject({
+      projectId: 'main-agent-host',
+      migratedFromId: source.id,
+      tasks: {},
+    });
+    expect(migrated.projectIds).toContain('project');
+    expect((await service.getByTask(source.taskId))?.lifecycle.state).toBe('archived');
+    const restored = await service.rollbackStandaloneMigration(migrated.id);
+    expect(restored.id).toBe(source.id);
+    expect(restored.lifecycle.state).toBe('active');
+    expect((await service.getByTask(migrated.taskId))?.lifecycle.state).toBe('archived');
+  });
+
+  it('freezes project import parameters and keeps retry progress in workspace state', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    const input = {
+      requestId: '095c3ab9-390a-487a-a315-d8d92ef89c39',
+      repositoryUrl: 'https://example.test/org/repo.git',
+      name: 'repo',
+      directory: 'repo-095c3ab9',
+    };
+    const prepared = await test.service.prepareProjectImport(record.id, input);
+    expect(prepared.projectImports?.[input.requestId]).toMatchObject({ state: 'cloning', progress: 0 });
+    const failed = await test.service.updateProjectImport(record.id, input.requestId, {
+      state: 'failed',
+      progress: 35,
+      error: 'network',
+    });
+    expect(failed.projectImports?.[input.requestId]).toMatchObject({ state: 'failed', progress: 35 });
+    await expect(
+      test.service.prepareProjectImport(record.id, { ...input, repositoryUrl: 'https://changed.test/repo.git' })
+    ).rejects.toThrow('different parameters');
+    expect((await test.service.prepareProjectImport(record.id, input)).projectImports?.[input.requestId])
+      .toMatchObject({ state: 'cloning', progress: 0 });
+  });
+
   it('persists idempotent workspace work items separately from task results', async () => {
     const test = setup();
     const record = await test.service.createCrossProject({
@@ -591,11 +643,18 @@ describe('main agent coordination', () => {
       state: 'done',
       resolvedAt: expect.any(Number),
     });
-    expect((await test.service.setLifecycleState(record.id, 'complete')).lifecycle).toMatchObject({
+    const completed = await test.service.setLifecycleState(record.id, 'complete', '验收完成');
+    expect(completed.lifecycle).toMatchObject({
       kind: 'finite',
       state: 'completed',
       completedAt: expect.any(Number),
     });
+    expect(completed.completionReport).toMatchObject({
+      summary: '验收完成',
+      workItems: { total: 1, done: 1, deferred: 0, cancelled: 0 },
+    });
+    expect((await test.service.setLifecycleState(record.id, 'archive')).lifecycle.state).toBe('archived');
+    expect((await test.service.setLifecycleState(record.id, 'restore')).lifecycle.state).toBe('completed');
   });
 
   it('checkpoints and pauses ongoing work without completing it', async () => {

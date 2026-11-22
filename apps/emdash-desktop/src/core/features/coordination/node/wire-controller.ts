@@ -29,6 +29,11 @@ export function createCoordinationWireController(service: CoordinatorService) {
     takeOverTask: ({ id, taskId, expectedOwner }) =>
       service.takeOverTask(id, taskId, expectedOwner),
     createCrossProject: (input) => service.createCrossProject(input),
+    migrateToStandalone: ({ id, requestId }) => service.migrateToStandalone(id, requestId),
+    rollbackStandaloneMigration: ({ id }) => service.rollbackStandaloneMigration(id),
+    prepareProjectImport: ({ id, ...input }) => service.prepareProjectImport(id, input),
+    updateProjectImport: ({ id, requestId, ...patch }) =>
+      service.updateProjectImport(id, requestId, patch),
     open: ({ id }) => service.open(id),
     bindConversation: ({ id, conversationId }) => service.bindConversation(id, conversationId),
     selectionOptions: ({ id, selection }) => service.selectionOptions(id, selection),
