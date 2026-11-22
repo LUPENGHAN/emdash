@@ -276,6 +276,166 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
   );
 
   server.registerTool(
+    'create_optimization_run',
+    {
+      description:
+        'Main agent: capture one user-triggered experience improvement. This creates a workspace work item and a durable optimization run; it does not grant push, merge, deploy, data deletion or permission changes. Reuse request_id for retries.',
+      inputSchema: {
+        request_id: z.uuid(),
+        conversation_id: z.string().min(1),
+        suggestion_id: z.uuid().optional(),
+        execution_mode: z.enum(['automatic', 'proposal-first']),
+        experience_confirmation: z.enum(['user', 'acceptance-criteria']),
+        objective: z.string().trim().min(1).max(20_000),
+        observed_problem: z.string().trim().min(1).max(20_000),
+        surface: z.string().max(500).optional(),
+        route: z.string().max(2_000).optional(),
+        selected_entity_refs: z.array(z.string().max(1_000)).max(50).default([]),
+        screenshot_ref: z.string().max(2_000).optional(),
+        log_refs: z.array(z.string().max(2_000)).max(20).default([]),
+        live_revision: z.string().optional(),
+        app_version: z.string(),
+        risk_level: z.enum(['low', 'medium', 'high']),
+        risk_reasons: z.array(z.string().trim().min(1)).default([]),
+        requires_user_confirmation: z.boolean(),
+      },
+    },
+    ({
+      request_id,
+      conversation_id,
+      suggestion_id,
+      execution_mode,
+      experience_confirmation,
+      objective,
+      observed_problem,
+      surface,
+      route,
+      selected_entity_refs,
+      screenshot_ref,
+      log_refs,
+      live_revision,
+      app_version,
+      risk_level,
+      risk_reasons,
+      requires_user_confirmation,
+    }) =>
+      dispatch({
+        kind: 'create_optimization_run',
+        requestId: request_id,
+        conversationId: conversation_id,
+        ...(suggestion_id && { suggestionId: suggestion_id }),
+        executionMode: execution_mode,
+        experienceConfirmation: experience_confirmation,
+        objective,
+        observedProblem: observed_problem,
+        ...(surface && { surface }),
+        ...(route && { route }),
+        selectedEntityRefs: selected_entity_refs,
+        ...(screenshot_ref && { screenshotRef: screenshot_ref }),
+        logRefs: log_refs,
+        ...(live_revision && { liveRevision: live_revision }),
+        appVersion: app_version,
+        risk: {
+          level: risk_level,
+          reasons: risk_reasons,
+          requiresUserConfirmation: requires_user_confirmation,
+        },
+      })
+  );
+
+  server.registerTool(
+    'transition_optimization_run',
+    {
+      description:
+        'Main agent: move an optimization through its validated state machine. Invalid jumps, unvalidated application and unapproved high-risk work are rejected.',
+      inputSchema: {
+        run_id: z.uuid(),
+        state: z.enum([
+          'captured',
+          'investigating',
+          'planning',
+          'waiting_for_approval',
+          'implementing',
+          'validating',
+          'ready_to_apply',
+          'applying',
+          'observing',
+          'accepted',
+          'blocked',
+          'failed',
+          'rolled_back',
+        ]),
+        reason: z.string().max(20_000).optional(),
+        technical_validation_passed: z.boolean().optional(),
+        user_decision: z.enum(['pending', 'accepted', 'continue', 'rollback']).optional(),
+        note: z.string().max(20_000).optional(),
+      },
+    },
+    ({ run_id, state, reason, technical_validation_passed, user_decision, note }) =>
+      dispatch({
+        kind: 'transition_optimization_run',
+        runId: run_id,
+        state,
+        ...(reason && { reason }),
+        ...(technical_validation_passed !== undefined && {
+          technicalValidationPassed: technical_validation_passed,
+        }),
+        ...(user_decision && { userDecision: user_decision }),
+        ...(note && { note }),
+      })
+  );
+
+  server.registerTool(
+    'add_optimization_suggestion',
+    {
+      description:
+        'Main agent: add a local, evidence-backed improvement suggestion. A suggestion is not a Project TODO and never executes until the user accepts it.',
+      inputSchema: {
+        request_id: z.uuid(),
+        fingerprint: z.string().min(1),
+        title: z.string().trim().min(1).max(200),
+        observed_pattern: z.string().trim().min(1).max(20_000),
+        proposed_outcome: z.string().trim().min(1).max(20_000),
+        evidence_refs: z.array(z.string().max(2_000)).max(50).default([]),
+        confidence: z.enum(['low', 'medium', 'high']),
+      },
+    },
+    ({
+      request_id,
+      fingerprint,
+      title,
+      observed_pattern,
+      proposed_outcome,
+      evidence_refs,
+      confidence,
+    }) =>
+      dispatch({
+        kind: 'add_optimization_suggestion',
+        requestId: request_id,
+        fingerprint,
+        title,
+        observedPattern: observed_pattern,
+        proposedOutcome: proposed_outcome,
+        evidenceRefs: evidence_refs,
+        confidence,
+      })
+  );
+
+  server.registerTool(
+    'update_optimization_suggestion',
+    {
+      description:
+        'Main agent: dismiss or expire an optimization suggestion without changing TODOs.',
+      inputSchema: {
+        suggestion_id: z.uuid(),
+        state: z.enum(['dismissed', 'expired']),
+      },
+    },
+    ({ suggestion_id, state }) =>
+      dispatch({ kind: 'update_optimization_suggestion', suggestionId: suggestion_id, state })
+  );
+
+  server.registerTool(
     'create_checkpoint',
     {
       description:
@@ -428,6 +588,11 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
           .optional()
           .describe('Stable request ID; reuse exactly when retrying the same task'),
         name: z.string().min(1).max(80).describe('Task name, e.g. "fix-login-timeout"'),
+        optimization_run_id: z
+          .string()
+          .uuid()
+          .optional()
+          .describe('Optimization run this code task implements, when applicable'),
         document_refs: z
           .array(
             z.object({
@@ -477,6 +642,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       depends_on,
       document_refs,
       request_id,
+      optimization_run_id,
       base_branch,
       prompt,
       agent,
@@ -500,6 +666,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
           })),
         }),
         ...(request_id && { requestId: request_id }),
+        ...(optimization_run_id && { optimizationRunId: optimization_run_id }),
         ...(base_branch && { baseBranch: base_branch }),
         ...(prompt && { prompt, ...(agent && { providerId: agent }) }),
         ...(model && { model }),

@@ -3,6 +3,14 @@ import { pushTargetSchema, type PushTarget } from '@emdash/core/runtimes/git/api
 import { z } from 'zod';
 import type { CreateTaskParams } from '@core/primitives/tasks/api';
 import { managementDocumentSchema, type ManagementDocument } from './documents';
+import {
+  livePromotionSchema,
+  optimizationRunSchema,
+  optimizationSuggestionSchema,
+  type LivePromotion,
+  type OptimizationRun,
+  type OptimizationSuggestion,
+} from './optimization';
 
 export const agentSelectionSchema = z.object({
   agent: z.string().optional(),
@@ -78,6 +86,17 @@ export type WorkspaceLifecycle = z.infer<typeof workspaceLifecycleSchema>;
 
 export const workspaceWorkItemSchema = z.object({
   id: z.string(),
+  kind: z
+    .enum(['delivery', 'analysis', 'coordination', 'experience-improvement'])
+    .default('delivery'),
+  origin: z
+    .discriminatedUnion('kind', [
+      z.object({ kind: z.literal('user') }),
+      z.object({ kind: z.literal('agent'), conversationId: z.string().min(1) }),
+      z.object({ kind: z.literal('page-feedback'), surface: z.string().min(1) }),
+      z.object({ kind: z.literal('accepted-suggestion'), suggestionId: z.string().uuid() }),
+    ])
+    .default({ kind: 'user' }),
   title: z.string().trim().min(1).max(200),
   detail: z.string().max(20_000).optional(),
   state: z.enum(['open', 'in_progress', 'waiting', 'review', 'done', 'deferred', 'cancelled']),
@@ -114,7 +133,12 @@ export const workspaceCompletionReportSchema = z.object({
   generatedAt: z.number(),
   summary: z.string(),
   linkedProjectIds: z.array(z.string()),
-  workItems: z.object({ total: z.number(), done: z.number(), deferred: z.number(), cancelled: z.number() }),
+  workItems: z.object({
+    total: z.number(),
+    done: z.number(),
+    deferred: z.number(),
+    cancelled: z.number(),
+  }),
   tasks: z.array(
     z.object({
       taskId: z.string(),
@@ -123,7 +147,9 @@ export const workspaceCompletionReportSchema = z.object({
       state: z.string(),
       summary: z.string().optional(),
       commits: z.array(z.string()),
-      checks: z.array(z.object({ command: z.string(), passed: z.boolean(), output: z.string().optional() })),
+      checks: z.array(
+        z.object({ command: z.string(), passed: z.boolean(), output: z.string().optional() })
+      ),
       unresolved: z.array(z.string()),
       prUrls: z.array(z.string()),
     })
@@ -133,7 +159,7 @@ export const workspaceCompletionReportSchema = z.object({
 export type WorkspaceCompletionReport = z.infer<typeof workspaceCompletionReportSchema>;
 
 export type Coordinator = {
-  version: '10';
+  version: '11';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -158,6 +184,9 @@ export type Coordinator = {
   checkpoints: WorkspaceCheckpoint[];
   completionReport?: WorkspaceCompletionReport;
   projectImports?: Record<string, WorkspaceProjectImport>;
+  optimizationRuns: Record<string, OptimizationRun>;
+  optimizationSuggestions: Record<string, OptimizationSuggestion>;
+  livePromotions: Record<string, LivePromotion>;
   migratedFromId?: string;
   supersededById?: string;
   createdAt: number;
@@ -367,6 +396,45 @@ export const coordinatorRecord = defineVersionedSchema()
       checkpoints: [],
       createdAt: 0,
       updatedAt: 0,
+    })
+  )
+  .version(
+    '11',
+    coordinatorV8.extend({
+      version: z.literal('11'),
+      documentMigration: z
+        .object({
+          id: z.string(),
+          fingerprint: z.string(),
+          source: documentStorageSchema,
+          target: documentStorageSchema,
+          files: z.array(managementDocumentSchema),
+          copied: z.array(z.object({ path: z.string(), revision: z.string() })),
+          phase: z.enum(['prepared', 'copying', 'verified', 'complete', 'cancelled']),
+          error: z.string().optional(),
+        })
+        .optional(),
+      documentStorageHistory: z.array(documentStorageSchema).optional(),
+      purpose: z.string().max(20_000),
+      lifecycle: workspaceLifecycleSchema,
+      workItems: z.record(z.string(), workspaceWorkItemSchema),
+      checkpoints: z.array(workspaceCheckpointSchema),
+      completionReport: workspaceCompletionReportSchema.optional(),
+      projectImports: z.record(z.string(), workspaceProjectImportSchema).optional(),
+      optimizationRuns: z.record(z.string(), optimizationRunSchema),
+      optimizationSuggestions: z.record(z.string(), optimizationSuggestionSchema),
+      livePromotions: z.record(z.string(), livePromotionSchema),
+      migratedFromId: z.string().optional(),
+      supersededById: z.string().optional(),
+      createdAt: z.number(),
+      updatedAt: z.number(),
+    }),
+    (record) => ({
+      ...record,
+      version: '11' as const,
+      optimizationRuns: {},
+      optimizationSuggestions: {},
+      livePromotions: {},
     })
   )
   .build();

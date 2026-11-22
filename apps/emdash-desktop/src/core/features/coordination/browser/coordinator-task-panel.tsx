@@ -1,8 +1,17 @@
-import { Button, Input, Select, toast } from '@emdash/ui/react/primitives';
+import {
+  Button,
+  Checkbox,
+  Input,
+  Select,
+  Sheet,
+  Textarea,
+  toast,
+} from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
+import { sendToConversation } from '@core/features/conversations/api/browser/send-to-conversation';
 import { openFileInTaskEditor } from '@core/features/editor/api/browser/open-file-in-file-editor';
 import { getMemoryClient } from '@core/features/memory/api/browser/client';
 import {
@@ -14,11 +23,14 @@ import { TaskPullRequestStatus } from '@core/features/source-control/contributio
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
+import { getUpdateStore } from '@core/features/updates/contributions/app-stores';
 import { useTaskComposition } from '@core/features/workbench/api/browser/task-composition-context';
+import { getHostClient } from '@core/primitives/desktop-host/browser/host-client';
 import { useMemento } from '@core/primitives/mementos/react';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
 import { isMainAgentHostProject } from '../api/main-agent-host';
+import type { OptimizationRun, OptimizationRunState } from '../api/optimization';
 import type {
   AssignedTask,
   Coordinator,
@@ -345,10 +357,16 @@ function CompletionReport({ report }: { report: WorkspaceCompletionReport }) {
               {task.summary && <p className="whitespace-pre-wrap">{task.summary}</p>}
               {!!task.commits.length && <p>提交：{task.commits.join(', ')}</p>}
               {task.checks.map((check, index) => (
-                <p key={index}>{check.passed ? '通过' : '失败'}：{check.command}</p>
+                <p key={index}>
+                  {check.passed ? '通过' : '失败'}：{check.command}
+                </p>
               ))}
-              {task.prUrls.map((url) => <p key={url}>PR：{url}</p>)}
-              {task.unresolved.map((issue, index) => <p key={index}>未解决：{issue}</p>)}
+              {task.prUrls.map((url) => (
+                <p key={url}>PR：{url}</p>
+              ))}
+              {task.unresolved.map((issue, index) => (
+                <p key={index}>未解决：{issue}</p>
+              ))}
             </div>
           </details>
         ))}
@@ -405,6 +423,7 @@ function WorkspaceOverview({
                     ? '已完成'
                     : '已归档'}
             </span>
+            <LiveBuildBadge />
           </div>
           <p className="mt-1 max-w-3xl text-sm text-foreground-muted">
             {record.purpose || '尚未填写工作目标。可以在对话中继续细化。'}
@@ -519,14 +538,16 @@ function WorkspaceOverview({
 
       {!!Object.keys(record.projectImports ?? {}).length && (
         <section className="space-y-2" aria-labelledby="project-imports-title">
-          <h3 id="project-imports-title" className="font-medium">仓库导入</h3>
+          <h3 id="project-imports-title" className="font-medium">
+            仓库导入
+          </h3>
           {Object.values(record.projectImports ?? {}).map((item) => (
             <article key={item.requestId} className="rounded-lg border border-border p-3 text-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-medium">{item.name}</span>
                 <span>{projectImportStateLabel(item.state)}</span>
               </div>
-              <p className="mt-1 break-all text-xs text-foreground-muted">{item.repositoryUrl}</p>
+              <p className="mt-1 text-xs break-all text-foreground-muted">{item.repositoryUrl}</p>
               <p className="mt-1 text-xs text-foreground-muted">目标目录：{item.directory}</p>
               {['cloning', 'registering'].includes(item.state) && (
                 <progress
@@ -536,10 +557,15 @@ function WorkspaceOverview({
                   aria-label={`${item.name} 导入进度`}
                 />
               )}
-              {item.error && <p role="status" className="mt-2 text-xs">{item.error}</p>}
+              {item.error && (
+                <p role="status" className="mt-2 text-xs">
+                  {item.error}
+                </p>
+              )}
               {['failed', 'cancelled'].includes(item.state) && (
                 <p className="mt-2 text-xs text-foreground-muted">
-                  Main Agent 可使用相同 request_id 调用 retry_project_import；URL、名称和目录会保持不变。
+                  Main Agent 可使用相同 request_id 调用
+                  retry_project_import；URL、名称和目录会保持不变。
                 </p>
               )}
             </article>
@@ -548,6 +574,8 @@ function WorkspaceOverview({
       )}
 
       {record.completionReport && <CompletionReport report={record.completionReport} />}
+
+      <WorkspaceOptimizations record={record} onChanged={onChanged} />
 
       <section className="space-y-2" aria-labelledby="work-items-title">
         <h3 id="work-items-title" className="font-medium">
@@ -669,6 +697,526 @@ function WorkspaceOverview({
   );
 }
 
+function LiveBuildBadge() {
+  const live = (
+    import.meta as ImportMeta & {
+      env?: {
+        VITE_BUILD?: string;
+        VITE_LIVE_REVISION?: string;
+        VITE_LIVE_BRANCH?: string;
+        VITE_LIVE_DIRTY?: string;
+      };
+    }
+  ).env;
+  if (live?.VITE_BUILD !== 'live') return null;
+  return <LiveRuntimeStatus fallback={live} />;
+}
+
+function LiveRuntimeStatus({
+  fallback,
+}: {
+  fallback: {
+    VITE_LIVE_REVISION?: string;
+    VITE_LIVE_BRANCH?: string;
+    VITE_LIVE_DIRTY?: string;
+  };
+}) {
+  const runtime = useQuery({
+    queryKey: ['live-runtime-state'],
+    queryFn: async () => (await getHostClient()).getLiveRuntimeState(undefined),
+    refetchInterval: 2_000,
+  });
+  const state = runtime.data?.state;
+  const [controlling, setControlling] = useState(false);
+  const control = (action: 'restart' | 'mark-good') => {
+    setControlling(true);
+    void getHostClient()
+      .then((client) => client.controlLiveRuntime({ action }))
+      .then((result) => {
+        if (!result.success) throw new Error(result.error);
+        toast.success(action === 'restart' ? '已请求受控重启' : '已标记为可用版本');
+        return runtime.refetch();
+      })
+      .catch((error) => toast.error('实时开发版操作失败', { description: String(error) }))
+      .finally(() => setControlling(false));
+  };
+  const status = state?.status;
+  const statusLabel = status
+    ? {
+        starting: '启动中',
+        running: '运行中',
+        waiting_for_idle: '等待空闲后重启',
+        restarting: '重启中',
+        stopping: '停止中',
+        stopped: '已停止',
+        failed: '运行失败',
+      }[status]
+    : '状态读取中';
+  return (
+    <details className="relative text-xs">
+      <summary className="bg-success/15 text-success cursor-pointer list-none rounded-full px-2 py-0.5">
+        实时开发版 · {statusLabel} · {state?.branch || fallback.VITE_LIVE_BRANCH || '未知分支'} ·{' '}
+        {(state?.runningCommit || fallback.VITE_LIVE_REVISION || '未知提交').slice(0, 12)}
+        {(state?.dirty ?? fallback.VITE_LIVE_DIRTY === '1') ? ' · 有未提交修改' : ' · 已同步'}
+      </summary>
+      <div className="absolute top-full right-0 z-20 mt-2 w-80 space-y-2 rounded-lg border border-border bg-background p-3 shadow-lg">
+        <p>源码：{state?.sourcePath || '正在读取'}</p>
+        {state?.pendingCommit && <p>待应用：{state.pendingCommit.slice(0, 12)}</p>}
+        {state?.lastKnownGoodCommit && (
+          <p>上个可用版本：{state.lastKnownGoodCommit.slice(0, 12)}</p>
+        )}
+        {state?.error && (
+          <p role="alert" className="text-foreground-destructive">
+            {state.error}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={controlling || !state}
+            onClick={() => control('restart')}
+          >
+            受控重启
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={controlling || !state || state.dirty || state.status !== 'running'}
+            onClick={() => control('mark-good')}
+          >
+            标记为可用版本
+          </Button>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+const optimizationStateLabels: Record<OptimizationRunState, string> = {
+  captured: '已记录',
+  investigating: '调查中',
+  planning: '制定方案',
+  waiting_for_approval: '等待确认',
+  implementing: '实施中',
+  validating: '自动验证',
+  ready_to_apply: '等待应用',
+  applying: '正在应用',
+  observing: '等待体验确认',
+  accepted: '符合预期',
+  blocked: '受阻',
+  failed: '验证失败',
+  rolled_back: '已回退',
+};
+
+function WorkspaceOptimizations({
+  record,
+  onChanged,
+}: {
+  record: Coordinator;
+  onChanged(): Promise<unknown>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [problem, setProblem] = useState('');
+  const [executionMode, setExecutionMode] = useState<'automatic' | 'proposal-first'>('automatic');
+  const [experienceConfirmation, setExperienceConfirmation] = useState<
+    'user' | 'acceptance-criteria'
+  >('user');
+  const [includeScreenshot, setIncludeScreenshot] = useState(false);
+  const [includeLogs, setIncludeLogs] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const runs = Object.values(record.optimizationRuns).sort((a, b) => b.updatedAt - a.updatedAt);
+  const suggestions = Object.values(record.optimizationSuggestions)
+    .filter((suggestion) => suggestion.state === 'new')
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const appVersion = getUpdateStore().currentVersion;
+  const liveEnv = (
+    import.meta as ImportMeta & {
+      env?: { VITE_BUILD?: string; VITE_LIVE_REVISION?: string };
+    }
+  ).env;
+  const liveRevision = liveEnv?.VITE_BUILD === 'live' ? liveEnv.VITE_LIVE_REVISION : undefined;
+
+  const refresh = async () => {
+    await onChanged();
+  };
+  const mutate = (action: () => Promise<unknown>, success: string) => {
+    setSaving(true);
+    void action()
+      .then(refresh)
+      .then(() => toast.success(success))
+      .catch((error) => toast.error('操作失败', { description: String(error) }))
+      .finally(() => setSaving(false));
+  };
+  const createRun = (suggestionId?: string, suggestionProblem?: string) => {
+    const observedProblem = (suggestionProblem ?? problem).trim();
+    if (!observedProblem) return;
+    const requestId = crypto.randomUUID();
+    mutate(
+      async () => {
+        const host = await getHostClient();
+        const [screenshot, diagnostics] = await Promise.all([
+          includeScreenshot ? host.captureCurrentWindow(undefined) : undefined,
+          includeLogs ? host.getDiagnosticLogAttachment(undefined) : undefined,
+        ]);
+        if (screenshot && !screenshot.success) throw new Error(screenshot.error);
+        let diagnosticRef: string | undefined;
+        if (diagnostics) {
+          const saved = await host.persistDroppedBlob({
+            bytes: new TextEncoder().encode(diagnostics.content),
+            name: diagnostics.filename,
+            mimeType: diagnostics.mimeType,
+          });
+          if (!saved.success) throw new Error(saved.error);
+          diagnosticRef = saved.path;
+        }
+        await (
+          await getCoordinationClient()
+        ).createOptimizationRun({
+          id: record.id,
+          requestId,
+          conversationId: record.conversationId,
+          ...(suggestionId && { suggestionId }),
+          executionMode,
+          experienceConfirmation,
+          objective: observedProblem.split('\n', 1)[0]!.slice(0, 200),
+          observedProblem,
+          capturedContext: {
+            surface: 'main-agent-overview',
+            route: globalThis.location?.hash || globalThis.location?.pathname || undefined,
+            selectedEntityRefs: [`main-agent:${record.id}`],
+            ...(screenshot?.success && { screenshotRef: screenshot.path }),
+            logRefs: diagnosticRef ? [diagnosticRef] : [],
+          },
+          baseline: {
+            ...(liveRevision && { liveRevision }),
+            appVersion,
+          },
+          risk: { level: 'low', reasons: [], requiresUserConfirmation: false },
+        });
+        const manager = getConversationsForTask(record.taskId);
+        const conversation = manager?.conversations.get(record.conversationId)?.data;
+        if (!manager || !conversation) {
+          toast.info('优化已保存，打开 Main Agent 对话后即可继续。');
+          return;
+        }
+        await sendToConversation(
+          manager,
+          conversation,
+          [
+            `用户刚刚手动触发体验优化（run_id: ${requestId}）。`,
+            `问题：${observedProblem}`,
+            executionMode === 'proposal-first'
+              ? '请先调查并给出方案，等待用户确认后再实施。'
+              : '请自行调查、实施和验证；高风险操作仍必须先征得用户确认。',
+            '请通过 Emdash 优化状态工具持续更新进度，代码工作必须创建独立 Task/worktree。',
+          ].join('\n')
+        );
+      },
+      suggestionId ? '优化建议已交给 Main Agent' : '体验优化已创建'
+    );
+    setProblem('');
+    setOpen(false);
+  };
+
+  return (
+    <section className="space-y-3" aria-labelledby="workspace-optimizations-title">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 id="workspace-optimizations-title" className="font-medium">
+            体验优化
+          </h3>
+          <p className="text-xs text-foreground-muted">
+            由你手动触发，Main Agent 调查、实施、验证并应用到实时开发版。
+          </p>
+        </div>
+        <Button variant="secondary" onClick={() => setOpen(true)}>
+          让 Main Agent 优化此处
+        </Button>
+      </div>
+
+      {runs.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-border p-3 text-sm text-foreground-muted">
+          还没有体验优化。发现不好用的地方时，可以直接交给 Main Agent 处理。
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {runs.map((run) => (
+            <OptimizationRunCard
+              key={run.id}
+              recordId={record.id}
+              run={run}
+              saving={saving}
+              mutate={mutate}
+            />
+          ))}
+        </div>
+      )}
+
+      {suggestions.length > 0 && (
+        <section
+          className="space-y-2 rounded-lg border border-border p-3"
+          aria-labelledby="optimization-suggestions-title"
+        >
+          <h4 id="optimization-suggestions-title" className="text-sm font-medium">
+            优化建议
+          </h4>
+          <p className="text-xs text-foreground-muted">
+            建议只记录本地可解释证据；接受前不会创建 TODO 或执行修改。
+          </p>
+          {suggestions.map((suggestion) => (
+            <article key={suggestion.id} className="rounded-md bg-background-tertiary-2 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <h5 className="text-sm font-medium">{suggestion.title}</h5>
+                  <p className="mt-1 text-xs text-foreground-muted">{suggestion.observedPattern}</p>
+                  <p className="mt-1 text-xs">期望结果：{suggestion.proposedOutcome}</p>
+                </div>
+                <span className="text-xs text-foreground-muted">
+                  置信度：
+                  {suggestion.confidence === 'high'
+                    ? '高'
+                    : suggestion.confidence === 'medium'
+                      ? '中'
+                      : '低'}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  disabled={saving}
+                  onClick={() => createRun(suggestion.id, suggestion.proposedOutcome)}
+                >
+                  让 Main Agent 处理
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={saving}
+                  onClick={() =>
+                    mutate(
+                      async () =>
+                        (await getCoordinationClient()).updateOptimizationSuggestion({
+                          id: record.id,
+                          suggestionId: suggestion.id,
+                          state: 'dismissed',
+                        }),
+                      '建议已关闭'
+                    )
+                  }
+                >
+                  不再处理
+                </Button>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+
+      <Sheet.Root open={open} onOpenChange={setOpen}>
+        <Sheet.Content side="right" className="gap-0 p-0">
+          <Sheet.Header showCloseButton={false}>
+            <div>
+              <Sheet.Title>让 Main Agent 优化此处</Sheet.Title>
+              <p className="mt-1 text-xs text-foreground-muted">
+                描述哪里不好用，或者希望达到什么结果。
+              </p>
+            </div>
+            <Sheet.Close render={<Button variant="ghost" size="sm" />}>关闭</Sheet.Close>
+          </Sheet.Header>
+          <Sheet.Body className="space-y-5">
+            <label className="block space-y-2 text-sm">
+              <span className="font-medium">体验问题</span>
+              <Textarea
+                autoFocus
+                required
+                value={problem}
+                onChange={(event) => setProblem(event.target.value)}
+                placeholder="例如：任务页面分不清主任务和执行任务，请自己分析并改好。"
+                rows={6}
+              />
+            </label>
+
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">执行方式</legend>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant={executionMode === 'automatic' ? 'secondary' : 'ghost'}
+                  aria-pressed={executionMode === 'automatic'}
+                  onClick={() => setExecutionMode('automatic')}
+                >
+                  自动完成
+                </Button>
+                <Button
+                  type="button"
+                  variant={executionMode === 'proposal-first' ? 'secondary' : 'ghost'}
+                  aria-pressed={executionMode === 'proposal-first'}
+                  onClick={() => setExecutionMode('proposal-first')}
+                >
+                  先给我方案
+                </Button>
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">最终确认</legend>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant={experienceConfirmation === 'user' ? 'secondary' : 'ghost'}
+                  aria-pressed={experienceConfirmation === 'user'}
+                  onClick={() => setExperienceConfirmation('user')}
+                >
+                  我体验后确认
+                </Button>
+                <Button
+                  type="button"
+                  variant={experienceConfirmation === 'acceptance-criteria' ? 'secondary' : 'ghost'}
+                  aria-pressed={experienceConfirmation === 'acceptance-criteria'}
+                  onClick={() => setExperienceConfirmation('acceptance-criteria')}
+                >
+                  满足验收标准后自动确认
+                </Button>
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">附加信息</legend>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={includeScreenshot} onCheckedChange={setIncludeScreenshot} />
+                当前页面截图
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={includeLogs} onCheckedChange={setIncludeLogs} />
+                最近相关日志
+              </label>
+              <p className="text-xs text-foreground-muted">
+                不会自动附加完整聊天、密钥、剪贴板、全量日志或无关项目内容。
+              </p>
+            </fieldset>
+          </Sheet.Body>
+          <Sheet.Footer>
+            <Sheet.Close render={<Button variant="secondary" />}>取消</Sheet.Close>
+            <Button disabled={saving || !problem.trim()} onClick={() => createRun()}>
+              交给 Main Agent
+            </Button>
+          </Sheet.Footer>
+        </Sheet.Content>
+      </Sheet.Root>
+    </section>
+  );
+}
+
+function OptimizationRunCard({
+  recordId,
+  run,
+  saving,
+  mutate,
+}: {
+  recordId: string;
+  run: OptimizationRun;
+  saving: boolean;
+  mutate(action: () => Promise<unknown>, success: string): void;
+}) {
+  const transition = (
+    state: OptimizationRunState,
+    success: string,
+    extra?: {
+      technicalValidationPassed?: boolean;
+      userDecision?: 'pending' | 'accepted' | 'continue' | 'rollback';
+    }
+  ) =>
+    mutate(
+      async () =>
+        (await getCoordinationClient()).transitionOptimizationRun({
+          id: recordId,
+          runId: run.id,
+          state,
+          ...extra,
+        }),
+      success
+    );
+  return (
+    <article className="rounded-lg border border-border p-3" data-optimization-run-id={run.id}>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <h4 className="text-sm font-medium">{run.objective}</h4>
+          <p className="mt-1 text-xs text-foreground-muted">{run.observedProblem}</p>
+        </div>
+        <span className="rounded-full bg-background-tertiary-2 px-2 py-1 text-xs">
+          {optimizationStateLabels[run.state]}
+        </span>
+      </div>
+      <div className="mt-3 grid gap-2 text-xs text-foreground-muted @md:grid-cols-3">
+        <span>
+          风险：{run.risk.level === 'high' ? '高' : run.risk.level === 'medium' ? '中' : '低'}
+        </span>
+        <span>任务：{run.taskIds.length}</span>
+        <span>基线：{run.baseline.liveRevision ?? run.baseline.appVersion}</span>
+      </div>
+      <ol className="mt-3 flex flex-wrap gap-1 text-xs" aria-label="优化进度">
+        {run.stateHistory.map((entry, index) => (
+          <li key={`${entry.at}-${index}`} className="rounded bg-background-tertiary-2 px-2 py-1">
+            {optimizationStateLabels[entry.state]}
+          </li>
+        ))}
+      </ol>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {run.state === 'captured' && (
+          <Button
+            size="sm"
+            disabled={saving}
+            onClick={() => transition('investigating', '已开始调查')}
+          >
+            开始调查
+          </Button>
+        )}
+        {run.state === 'waiting_for_approval' && (
+          <Button
+            size="sm"
+            disabled={saving}
+            onClick={() => transition('implementing', '已确认实施')}
+          >
+            确认实施
+          </Button>
+        )}
+        {run.state === 'observing' && (
+          <>
+            <Button
+              size="sm"
+              disabled={saving}
+              onClick={() => transition('accepted', '体验优化已完成', { userDecision: 'accepted' })}
+            >
+              符合预期
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={saving}
+              onClick={() =>
+                transition('implementing', '继续原任务调整', { userDecision: 'continue' })
+              }
+            >
+              继续调整
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={saving}
+              onClick={() =>
+                transition('rolled_back', '已回退到上一个可用版本', { userDecision: 'rollback' })
+              }
+            >
+              立即回退
+            </Button>
+          </>
+        )}
+      </div>
+    </article>
+  );
+}
+
 function WorkspaceKnowledgeSummary({ record }: { record: Coordinator }) {
   const queryClient = useQueryClient();
   const linkedProjectIds = useMemo(
@@ -784,10 +1332,17 @@ function WorkspaceKnowledgeSummary({ record }: { record: Coordinator }) {
                     <ul className="mt-1 space-y-2">
                       {project.requirements.map((item) => (
                         <li key={item.id}>
-                          <p>{item.status === 'done' ? '已完成' : '待办'} · {item.title}</p>
-                          {item.detail && <p className="whitespace-pre-wrap text-foreground-muted">{item.detail}</p>}
+                          <p>
+                            {item.status === 'done' ? '已完成' : '待办'} · {item.title}
+                          </p>
+                          {item.detail && (
+                            <p className="whitespace-pre-wrap text-foreground-muted">
+                              {item.detail}
+                            </p>
+                          )}
                           <p className="text-foreground-muted">
-                            来源：{memorySourceLabel(item.source)} · 更新于 {new Date(item.updatedAt).toLocaleString()}
+                            来源：{memorySourceLabel(item.source)} · 更新于{' '}
+                            {new Date(item.updatedAt).toLocaleString()}
                           </p>
                         </li>
                       ))}
@@ -800,9 +1355,14 @@ function WorkspaceKnowledgeSummary({ record }: { record: Coordinator }) {
                       {project.decisions.map((item) => (
                         <li key={item.id}>
                           <p>{item.title}</p>
-                          {item.detail && <p className="whitespace-pre-wrap text-foreground-muted">{item.detail}</p>}
+                          {item.detail && (
+                            <p className="whitespace-pre-wrap text-foreground-muted">
+                              {item.detail}
+                            </p>
+                          )}
                           <p className="text-foreground-muted">
-                            来源：{memorySourceLabel(item.source)} · 更新于 {new Date(item.updatedAt).toLocaleString()}
+                            来源：{memorySourceLabel(item.source)} · 更新于{' '}
+                            {new Date(item.updatedAt).toLocaleString()}
                           </p>
                         </li>
                       ))}
@@ -827,9 +1387,12 @@ function WorkspaceKnowledgeSummary({ record }: { record: Coordinator }) {
               {knowledge.data?.globalMemory.map((item) => (
                 <li key={item.id}>
                   <p>{item.title}</p>
-                  {item.detail && <p className="whitespace-pre-wrap text-foreground-muted">{item.detail}</p>}
+                  {item.detail && (
+                    <p className="whitespace-pre-wrap text-foreground-muted">{item.detail}</p>
+                  )}
                   <p className="text-foreground-muted">
-                    来源：{memorySourceLabel(item.source)} · 更新于 {new Date(item.updatedAt).toLocaleString()}
+                    来源：{memorySourceLabel(item.source)} · 更新于{' '}
+                    {new Date(item.updatedAt).toLocaleString()}
                   </p>
                 </li>
               ))}
@@ -842,7 +1405,9 @@ function WorkspaceKnowledgeSummary({ record }: { record: Coordinator }) {
 }
 
 function memorySourceLabel(source: { kind: string; providerId?: string }) {
-  return source.kind === 'user' ? '用户' : `Agent${source.providerId ? `（${source.providerId}）` : ''}`;
+  return source.kind === 'user'
+    ? '用户'
+    : `Agent${source.providerId ? `（${source.providerId}）` : ''}`;
 }
 
 const ProjectAccessSettings = observer(function ProjectAccessSettings({
@@ -948,18 +1513,23 @@ function WorkspaceMigrationSettings({ record }: { record: Coordinator }) {
   if (standalone && !record.migratedFromId) return null;
   return (
     <section className="max-w-lg space-y-3" aria-labelledby="workspace-migration-title">
-      <h3 id="workspace-migration-title" className="text-sm font-medium">工作区存储位置</h3>
+      <h3 id="workspace-migration-title" className="text-sm font-medium">
+        工作区存储位置
+      </h3>
       {!standalone ? (
         <>
           <p className="text-xs text-foreground-muted">
-            该旧工作区仍绑定业务仓库。迁移会在 Emdash 内部管理仓库创建一个独立工作区，复制目标、工作事项、检查点和项目关联；旧任务与对话保留在原工作区并归档，不会移动分支或删除历史。
+            该旧工作区仍绑定业务仓库。迁移会在 Emdash
+            内部管理仓库创建一个独立工作区，复制目标、工作事项、检查点和项目关联；旧任务与对话保留在原工作区并归档，不会移动分支或删除历史。
           </p>
           <Button
             disabled={saving || !!record.supersededById}
             onClick={() => {
               setSaving(true);
               void getCoordinationClient()
-                .then((client) => client.migrateToStandalone({ id: record.id, requestId: crypto.randomUUID() }))
+                .then((client) =>
+                  client.migrateToStandalone({ id: record.id, requestId: crypto.randomUUID() })
+                )
                 .then(() => toast.success('迁移已完成，请从顶部列表打开新的独立工作区'))
                 .catch((error) => toast.error('无法迁移工作区', { description: String(error) }))
                 .finally(() => setSaving(false));

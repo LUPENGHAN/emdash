@@ -13,6 +13,13 @@ import {
   managementDocumentSchema,
 } from './documents';
 import {
+  livePromotionSchema,
+  optimizationRiskSchema,
+  optimizationRunSchema,
+  optimizationRunStateSchema,
+  optimizationSuggestionSchema,
+} from './optimization';
+import {
   agentSelectionSchema,
   projectAccessSchema,
   workspaceLifecycleSchema,
@@ -188,6 +195,8 @@ export const coordinationContract = defineContract({
       requestId: z.uuid(),
       title: z.string().trim().min(1).max(200),
       detail: z.string().max(20_000).optional(),
+      kind: workspaceWorkItemSchema.shape.kind.optional(),
+      origin: workspaceWorkItemSchema.shape.origin.optional(),
     }),
     output: z.custom<Coordinator>(),
   }),
@@ -198,6 +207,62 @@ export const coordinationContract = defineContract({
       title: z.string().trim().min(1).max(200).optional(),
       detail: z.string().max(20_000).optional(),
       state: workspaceWorkItemSchema.shape.state,
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  createOptimizationRun: procedure({
+    input: z.object({
+      id: z.string(),
+      requestId: z.uuid(),
+      conversationId: z.string().min(1),
+      suggestionId: z.uuid().optional(),
+      executionMode: optimizationRunSchema.shape.executionMode,
+      experienceConfirmation: optimizationRunSchema.shape.experienceConfirmation,
+      objective: optimizationRunSchema.shape.objective,
+      observedProblem: optimizationRunSchema.shape.observedProblem,
+      capturedContext: optimizationRunSchema.shape.capturedContext,
+      baseline: optimizationRunSchema.shape.baseline,
+      risk: optimizationRiskSchema,
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  transitionOptimizationRun: procedure({
+    input: z.object({
+      id: z.string(),
+      runId: z.uuid(),
+      state: optimizationRunStateSchema,
+      reason: z.string().max(20_000).optional(),
+      risk: optimizationRiskSchema.optional(),
+      technicalValidationPassed: z.boolean().optional(),
+      userDecision: z.enum(['pending', 'accepted', 'continue', 'rollback']).optional(),
+      note: z.string().max(20_000).optional(),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  addOptimizationSuggestion: procedure({
+    input: z.object({
+      id: z.string(),
+      requestId: z.uuid(),
+      fingerprint: optimizationSuggestionSchema.shape.fingerprint,
+      title: optimizationSuggestionSchema.shape.title,
+      observedPattern: optimizationSuggestionSchema.shape.observedPattern,
+      proposedOutcome: optimizationSuggestionSchema.shape.proposedOutcome,
+      evidenceRefs: optimizationSuggestionSchema.shape.evidenceRefs,
+      confidence: optimizationSuggestionSchema.shape.confidence,
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  updateOptimizationSuggestion: procedure({
+    input: z.object({
+      id: z.string(),
+      suggestionId: z.uuid(),
+      state: z.enum(['dismissed', 'expired']),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  recordLivePromotion: procedure({
+    input: livePromotionSchema.omit({ createdAt: true, updatedAt: true }).extend({
+      coordinatorId: z.string(),
     }),
     output: z.custom<Coordinator>(),
   }),

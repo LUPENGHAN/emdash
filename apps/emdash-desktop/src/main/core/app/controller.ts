@@ -15,6 +15,7 @@ import {
 } from '@main/core/app/persist-terminal-attachment';
 import { submitFeedbackToRelay, type FeedbackAttachment } from '@main/core/app/submit-feedback';
 import { getDiagnosticLogAttachment } from '@main/host/file-logger';
+import { controlLiveRuntime, getLiveRuntimeState } from '@main/host/live-runtime';
 import { setApplicationMenuKeybindings } from '@main/host/menu';
 import { log } from '@main/lib/logger';
 import { telemetryService } from '@main/lib/telemetry';
@@ -113,6 +114,16 @@ export const appOperations = {
       };
     }
   },
+  captureCurrentWindow: async () => {
+    try {
+      return { success: true as const, path: await appService.captureCurrentWindow() };
+    } catch (error) {
+      return {
+        success: false as const,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  },
   showTerminalContextMenu: async (args: {
     requestId: string;
     selectionText?: string | null;
@@ -201,6 +212,8 @@ export const appOperations = {
   getPlatform: () => process.platform,
   getPlatformDisplayName,
   getDiagnosticLogAttachment,
+  getLiveRuntimeState,
+  controlLiveRuntime,
   submitFeedback: async (args: { content: string; files: FeedbackAttachment[] }) => {
     try {
       await submitFeedbackToRelay(args);

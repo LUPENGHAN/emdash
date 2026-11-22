@@ -509,11 +509,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('10');
+    expect((await test.service.ensureProject('project')).version).toBe('11');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('10');
+    expect(test.records.get(record.id)?.version).toBe('11');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -602,18 +602,28 @@ describe('main agent coordination', () => {
       directory: 'repo-095c3ab9',
     };
     const prepared = await test.service.prepareProjectImport(record.id, input);
-    expect(prepared.projectImports?.[input.requestId]).toMatchObject({ state: 'cloning', progress: 0 });
+    expect(prepared.projectImports?.[input.requestId]).toMatchObject({
+      state: 'cloning',
+      progress: 0,
+    });
     const failed = await test.service.updateProjectImport(record.id, input.requestId, {
       state: 'failed',
       progress: 35,
       error: 'network',
     });
-    expect(failed.projectImports?.[input.requestId]).toMatchObject({ state: 'failed', progress: 35 });
+    expect(failed.projectImports?.[input.requestId]).toMatchObject({
+      state: 'failed',
+      progress: 35,
+    });
     await expect(
-      test.service.prepareProjectImport(record.id, { ...input, repositoryUrl: 'https://changed.test/repo.git' })
+      test.service.prepareProjectImport(record.id, {
+        ...input,
+        repositoryUrl: 'https://changed.test/repo.git',
+      })
     ).rejects.toThrow('different parameters');
-    expect((await test.service.prepareProjectImport(record.id, input)).projectImports?.[input.requestId])
-      .toMatchObject({ state: 'cloning', progress: 0 });
+    expect(
+      (await test.service.prepareProjectImport(record.id, input)).projectImports?.[input.requestId]
+    ).toMatchObject({ state: 'cloning', progress: 0 });
   });
 
   it('persists idempotent workspace work items separately from task results', async () => {
@@ -653,8 +663,199 @@ describe('main agent coordination', () => {
       summary: '验收完成',
       workItems: { total: 1, done: 1, deferred: 0, cancelled: 0 },
     });
-    expect((await test.service.setLifecycleState(record.id, 'archive')).lifecycle.state).toBe('archived');
-    expect((await test.service.setLifecycleState(record.id, 'restore')).lifecycle.state).toBe('completed');
+    expect((await test.service.setLifecycleState(record.id, 'archive')).lifecycle.state).toBe(
+      'archived'
+    );
+    expect((await test.service.setLifecycleState(record.id, 'restore')).lifecycle.state).toBe(
+      'completed'
+    );
+  });
+
+  it('runs a user-triggered experience optimization through validation and experience review', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    const runId = 'e9c95a1f-2663-4ca0-a15f-c23058d64f98';
+    const created = await test.service.createOptimizationRun(record.id, {
+      requestId: runId,
+      conversationId: record.conversationId,
+      executionMode: 'automatic',
+      experienceConfirmation: 'user',
+      objective: '让任务身份更清楚',
+      observedProblem: '主任务和执行任务难以区分',
+      capturedContext: {
+        surface: 'task-overview',
+        selectedEntityRefs: ['task:one'],
+        logRefs: [],
+      },
+      baseline: { appVersion: '1.2.11', liveRevision: 'abc1234' },
+      risk: { level: 'low', reasons: [], requiresUserConfirmation: false },
+    });
+    const run = created.optimizationRuns[runId];
+    expect(run.state).toBe('captured');
+    expect(created.workItems[run.workItemId]).toMatchObject({
+      kind: 'experience-improvement',
+      state: 'open',
+    });
+    expect(
+      (
+        await test.service.createOptimizationRun(record.id, {
+          requestId: runId,
+          conversationId: record.conversationId,
+          executionMode: 'automatic',
+          experienceConfirmation: 'user',
+          objective: '让任务身份更清楚',
+          observedProblem: '主任务和执行任务难以区分',
+          capturedContext: { selectedEntityRefs: [], logRefs: [] },
+          baseline: { appVersion: '1.2.11' },
+          risk: { level: 'low', reasons: [], requiresUserConfirmation: false },
+        })
+      ).optimizationRuns[runId].id
+    ).toBe(runId);
+    await test.service.transitionOptimizationRun(record.id, runId, { state: 'investigating' });
+    await test.service.transitionOptimizationRun(record.id, runId, { state: 'planning' });
+    await test.service.transitionOptimizationRun(record.id, runId, { state: 'implementing' });
+    await test.service.registerDelegation(
+      caller(record),
+      {
+        id: 'optimization-task',
+        projectId: 'project',
+        taskConfig: { version: '1', name: '优化任务' },
+        workspaceConfig: {
+          version: '2',
+          git: { kind: 'none' },
+          workspace: { kind: 'new-worktree' },
+        },
+      },
+      [],
+      [],
+      [],
+      runId
+    );
+    await test.service.markTaskCreated('optimization-task');
+    await test.service.submit(
+      caller(record, 'optimization-task'),
+      'optimization-task',
+      'result-1',
+      result
+    );
+    const validated = await test.service.review(
+      record.id,
+      'optimization-task',
+      true,
+      '已检查实现和测试',
+      1
+    );
+    expect(validated.optimizationRuns[runId]).toMatchObject({
+      state: 'validating',
+      taskIds: ['optimization-task'],
+      acceptedResultVersions: [{ taskId: 'optimization-task', version: 1 }],
+    });
+    expect(validated.workItems[run.workItemId].taskIds).toEqual(['optimization-task']);
+    await expect(
+      test.service.transitionOptimizationRun(record.id, runId, { state: 'ready_to_apply' })
+    ).rejects.toThrow('Technical validation');
+    await test.service.transitionOptimizationRun(record.id, runId, {
+      state: 'ready_to_apply',
+      technicalValidationPassed: true,
+    });
+    await test.service.transitionOptimizationRun(record.id, runId, { state: 'applying' });
+    await test.service.transitionOptimizationRun(record.id, runId, {
+      state: 'observing',
+      technicalValidationPassed: true,
+      userDecision: 'pending',
+    });
+    const accepted = await test.service.transitionOptimizationRun(record.id, runId, {
+      state: 'accepted',
+      userDecision: 'accepted',
+    });
+    expect(accepted.workItems[run.workItemId]).toMatchObject({
+      state: 'done',
+      resolvedAt: expect.any(Number),
+    });
+  });
+
+  it('requires approval for high-risk optimization and a backup for data promotions', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    const runId = '877e303c-a9e0-4df5-a423-835152425692';
+    await test.service.createOptimizationRun(record.id, {
+      requestId: runId,
+      conversationId: record.conversationId,
+      executionMode: 'automatic',
+      experienceConfirmation: 'user',
+      objective: '迁移数据',
+      observedProblem: '旧结构需要更新',
+      capturedContext: { selectedEntityRefs: [], logRefs: [] },
+      baseline: { appVersion: '1.2.11' },
+      risk: {
+        level: 'high',
+        reasons: ['数据库结构变化'],
+        requiresUserConfirmation: true,
+      },
+    });
+    await test.service.transitionOptimizationRun(record.id, runId, { state: 'investigating' });
+    await test.service.transitionOptimizationRun(record.id, runId, { state: 'planning' });
+    await expect(
+      test.service.transitionOptimizationRun(record.id, runId, { state: 'implementing' })
+    ).rejects.toThrow('requires explicit approval');
+    await test.service.transitionOptimizationRun(record.id, runId, {
+      state: 'waiting_for_approval',
+    });
+    await test.service.transitionOptimizationRun(record.id, runId, { state: 'implementing' });
+    await expect(
+      test.service.recordLivePromotion(record.id, {
+        id: '730196c5-11b2-4c21-af61-b766d85da977',
+        optimizationRunId: runId,
+        fromRevision: 'abc1234',
+        toRevision: 'def5678',
+        commits: [{ projectId: 'project', taskId: 'task', hash: 'def5678' }],
+        changeClass: 'data-migration',
+        checks: [{ command: 'pnpm test:migrations', passed: true }],
+        state: 'prepared',
+      })
+    ).rejects.toThrow('backup set');
+  });
+
+  it('deduplicates local suggestions and accepts them only through an optimization run', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    const firstId = 'd6dabd82-c4b2-413b-85e9-ed76999ba1c8';
+    const secondId = '47769d41-ad9e-49b0-8302-cce659fc9a5e';
+    const suggestion = {
+      fingerprint: 'repeat:task-recovery',
+      title: '补充失败恢复入口',
+      observedPattern: '同一任务连续失败后需要重复寻找恢复按钮',
+      proposedOutcome: '在失败状态直接显示恢复动作',
+      evidenceRefs: ['event:failure-one'],
+      confidence: 'high' as const,
+    };
+    await test.service.addOptimizationSuggestion(record.id, {
+      requestId: firstId,
+      ...suggestion,
+    });
+    const deduplicated = await test.service.addOptimizationSuggestion(record.id, {
+      requestId: secondId,
+      ...suggestion,
+    });
+    expect(Object.keys(deduplicated.optimizationSuggestions)).toEqual([firstId]);
+    const runId = 'bd43a6c1-82dc-4487-9a9b-63d458029783';
+    const accepted = await test.service.createOptimizationRun(record.id, {
+      requestId: runId,
+      conversationId: record.conversationId,
+      suggestionId: firstId,
+      executionMode: 'automatic',
+      experienceConfirmation: 'user',
+      objective: suggestion.proposedOutcome,
+      observedProblem: suggestion.observedPattern,
+      capturedContext: { selectedEntityRefs: [], logRefs: [] },
+      baseline: { appVersion: '1.2.11' },
+      risk: { level: 'low', reasons: [], requiresUserConfirmation: false },
+    });
+    expect(accepted.optimizationSuggestions[firstId]).toMatchObject({
+      state: 'accepted',
+      runId,
+      workItemId: expect.any(String),
+    });
   });
 
   it('checkpoints and pauses ongoing work without completing it', async () => {
@@ -1089,7 +1290,7 @@ it('preserves a legacy main checkout until its separate document migration runs'
   vi.mocked(test.resources.prepare).mockClear();
   vi.mocked(test.resources.create).mockClear();
   const reopened = await new CoordinatorService(test.deps).open(first.id);
-  expect(reopened.version).toBe('10');
+  expect(reopened.version).toBe('11');
   expect(reopened.params?.workspaceConfig.git).toEqual(saved.params.workspaceConfig.git);
   expect(reopened.taskId).toBe(first.taskId);
   expect(reopened.conversationId).toBe(first.conversationId);

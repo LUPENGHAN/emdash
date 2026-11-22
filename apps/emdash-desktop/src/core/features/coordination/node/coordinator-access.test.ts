@@ -5,7 +5,7 @@ import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordin
 
 function main(id = 'a'): Coordinator {
   return {
-    version: '10',
+    version: '11',
     id,
     kind: 'project',
     name: 'Main',
@@ -21,6 +21,9 @@ function main(id = 'a'): Coordinator {
     lifecycle: { kind: 'ongoing', state: 'active' },
     workItems: {},
     checkpoints: [],
+    optimizationRuns: {},
+    optimizationSuggestions: {},
+    livePromotions: {},
     createdAt: 0,
     updatedAt: 0,
   };

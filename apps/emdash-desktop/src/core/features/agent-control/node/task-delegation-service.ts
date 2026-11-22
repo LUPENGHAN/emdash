@@ -119,6 +119,7 @@ function requestFingerprint(request: CreateDelegatedTask, projectId: string): st
         request.connection,
         request.effort,
         request.ui,
+        ...(request.optimizationRunId ? [{ optimizationRunId: request.optimizationRunId }] : []),
         ...(request.projectGrants?.length ? [[...new Set(request.projectGrants)].sort()] : []),
         ...(request.dependsOn?.length
           ? [{ dependsOn: [...new Set(request.dependsOn)].sort() }]

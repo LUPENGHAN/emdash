@@ -298,6 +298,31 @@ try {
     connection: 'official',
     request_id: 'coordinated-request',
   };
+  const optimizationRunId = 'd730fce3-8765-465f-93c7-9c0368e289c1';
+  const optimization = JSON.parse(
+    await call(client, 'create_optimization_run', {
+      request_id: optimizationRunId,
+      conversation_id: coordinator.conversationId,
+      execution_mode: 'automatic',
+      experience_confirmation: 'user',
+      objective: '让实时优化流程可见并可验收',
+      observed_problem: '需要验证从体验问题到独立代码任务的完整关联',
+      surface: 'main-agent-overview',
+      selected_entity_refs: [`main-agent:${coordinator.id}`],
+      log_refs: [],
+      live_revision: baseline,
+      app_version: '1.2.11',
+      risk_level: 'low',
+      risk_reasons: [],
+      requires_user_confirmation: false,
+    })
+  );
+  assert.equal(optimization.optimizationRuns[optimizationRunId].state, 'captured');
+  for (const state of ['investigating', 'planning', 'implementing'])
+    await call(client, 'transition_optimization_run', {
+      run_id: optimizationRunId,
+      state,
+    });
   const workItem = JSON.parse(
     await call(client, 'add_work_item', {
       request_id: 'ffac8d81-c23c-478d-9a24-c624b409517b',
@@ -319,8 +344,9 @@ try {
   assert.equal(paused.lifecycle.state, 'paused');
   const resumed = JSON.parse(await call(client, 'set_main_agent_state', { action: 'resume' }));
   assert.equal(resumed.lifecycle.state, 'active');
-  const created = JSON.parse(await call(client, 'create_task', args));
-  const duplicate = JSON.parse(await call(client, 'create_task', args));
+  const optimizedTask = { ...args, optimization_run_id: optimizationRunId };
+  const created = JSON.parse(await call(client, 'create_task', optimizedTask));
+  const duplicate = JSON.parse(await call(client, 'create_task', optimizedTask));
   assert.equal(created.task_id, duplicate.task_id);
   const mainContext = JSON.parse(await call(client, 'get_main_agent_context', {}));
   assert.equal(mainContext.projects[0].id, coordinator.targetProjectId);
@@ -400,11 +426,17 @@ try {
   await page.getByText('最新决策：验证项目决策聚合', { exact: true }).waitFor();
   await page.getByText('最新记录：验证全局记忆聚合', { exact: true }).waitFor();
   await page.getByText('已导入并关联', { exact: true }).waitFor();
+  await page.getByText('体验优化', { exact: true }).waitFor();
+  await page.getByRole('heading', { name: '让实时优化流程可见并可验收', exact: true }).waitFor();
+  await page.getByRole('button', { name: '让 Main Agent 优化此处', exact: true }).click();
+  await page.getByText('描述哪里不好用，或者希望达到什么结果。', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByText('查看完整上下文', { exact: true }).first().click();
+  await page.getByText('完整上下文需要展示状态、详情、来源与更新时间。', { exact: true }).waitFor();
   await page
-    .getByText('完整上下文需要展示状态、详情、来源与更新时间。', { exact: true })
+    .getByText(/来源：用户 · 更新于/)
+    .first()
     .waitFor();
-  await page.getByText(/来源：用户 · 更新于/).first().waitFor();
   await page.getByText('查看完整全局记忆', { exact: true }).click();
   await page.getByText('所有主任务都应读取这条记忆。', { exact: true }).waitFor();
   await page.getByText('Simulated task result', { exact: true }).waitFor();
@@ -442,6 +474,8 @@ try {
   });
   const final = await page.evaluate((id) => window.coordinatorSnapshot(id), coordinator.taskId);
   assert.equal(final.tasks[created.task_id].state, 'done');
+  assert.equal(final.optimizationRuns[optimizationRunId].state, 'validating');
+  assert.deepEqual(final.optimizationRuns[optimizationRunId].taskIds, [created.task_id]);
   assert.equal(final.events[0].state, 'acknowledged');
   assert.equal(final.events.length, 2);
   const replacement = await page.evaluate((input) => window.createReplacementMain(input), {
@@ -494,7 +528,9 @@ try {
     .first()
     .click();
   await page.waitForFunction(
-    (taskId) => document.querySelector('[data-testid="coordinator-panel"]')?.getAttribute('data-task-id') === taskId,
+    (taskId) =>
+      document.querySelector('[data-testid="coordinator-panel"]')?.getAttribute('data-task-id') ===
+      taskId,
     completedWorkspace.taskId
   );
   await page.getByTestId('coordinator-tasks-tab').click();
@@ -528,6 +564,8 @@ try {
           'persisted import fingerprint, target directory, progress and completion state',
           'Chinese workspace filters, full searchable context details and source timestamps',
           'finite workspace completion generated a structured completion report',
+          'manual experience optimization linked to a real code task and advanced after result acceptance',
+          'Chinese optimization sheet and durable run timeline visible in the real UI',
           'result delivered through ACP and explicitly acknowledged',
           'changes requested and versioned result accepted',
           'main conversation switched through the UI without losing task history',

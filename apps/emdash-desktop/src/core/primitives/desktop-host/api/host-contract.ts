@@ -25,6 +25,39 @@ export const NODE_PLATFORMS = [
 
 export type NodePlatform = (typeof NODE_PLATFORMS)[number];
 
+export const liveRuntimeStateSchema = z.object({
+  version: z.literal(1),
+  sourcePath: z.string(),
+  branch: z.string(),
+  runningCommit: z.string(),
+  lastKnownGoodCommit: z.string().optional(),
+  pendingCommit: z.string().optional(),
+  dirty: z.boolean(),
+  status: z.enum([
+    'starting',
+    'running',
+    'waiting_for_idle',
+    'restarting',
+    'stopping',
+    'stopped',
+    'failed',
+  ]),
+  childPid: z.number().int().positive().optional(),
+  supervisorPid: z.number().int().positive(),
+  startedAt: z.number(),
+  updatedAt: z.number(),
+  lastHealthCheck: z
+    .object({
+      commit: z.string(),
+      passed: z.boolean(),
+      checkedAt: z.number(),
+      failures: z.array(z.string()),
+    })
+    .optional(),
+  error: z.string().optional(),
+});
+export type LiveRuntimeState = z.infer<typeof liveRuntimeStateSchema>;
+
 export interface ActiveSessionSummary {
   acpSessions: number;
   localTuiSessions: number;
@@ -128,6 +161,10 @@ export const desktopHostContract = defineContract({
   persistClipboardImage: procedure({
     input: z.void(),
     output: z.custom<NullablePathResult>(),
+  }),
+  captureCurrentWindow: procedure({
+    input: z.void(),
+    output: z.custom<RequiredPathResult>(),
   }),
   showTerminalContextMenu: procedure({
     input: z.object({
@@ -246,6 +283,14 @@ export const desktopHostContract = defineContract({
       mimeType: z.literal('text/plain'),
       content: z.string(),
     }),
+  }),
+  getLiveRuntimeState: procedure({
+    input: z.void(),
+    output: z.object({ available: z.boolean(), state: liveRuntimeStateSchema.optional() }),
+  }),
+  controlLiveRuntime: procedure({
+    input: z.object({ action: z.enum(['restart', 'mark-good']) }),
+    output: z.custom<ActionResult>(),
   }),
   submitFeedback: procedure({
     input: z.object({

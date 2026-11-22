@@ -41,14 +41,28 @@ export function createCoordinationWireController(service: CoordinatorService) {
     getByTask: ({ taskId }) => service.getByTask(taskId),
     openProject: ({ projectId }) => service.openProject(projectId),
     update: ({ id, ...patch }) => service.update(id, patch),
-    addWorkItem: ({ id, requestId, title, detail }) =>
-      service.addWorkItem(id, { requestId, title, ...(detail !== undefined && { detail }) }),
+    addWorkItem: ({ id, requestId, title, detail, kind, origin }) =>
+      service.addWorkItem(id, {
+        requestId,
+        title,
+        ...(detail !== undefined && { detail }),
+        ...(kind !== undefined && { kind }),
+        ...(origin !== undefined && { origin }),
+      }),
     updateWorkItem: ({ id, workItemId, state, title, detail }) =>
       service.updateWorkItem(id, workItemId, {
         state,
         ...(title !== undefined && { title }),
         ...(detail !== undefined && { detail }),
       }),
+    createOptimizationRun: ({ id, ...input }) => service.createOptimizationRun(id, input),
+    transitionOptimizationRun: ({ id, runId, ...input }) =>
+      service.transitionOptimizationRun(id, runId, input),
+    addOptimizationSuggestion: ({ id, ...input }) => service.addOptimizationSuggestion(id, input),
+    updateOptimizationSuggestion: ({ id, suggestionId, state }) =>
+      service.updateOptimizationSuggestion(id, suggestionId, state),
+    recordLivePromotion: ({ coordinatorId, ...input }) =>
+      service.recordLivePromotion(coordinatorId, input),
     checkpoint: ({ id, requestId, title }) => service.checkpoint(id, requestId, title),
     setLifecycleState: ({ id, action, note }) => service.setLifecycleState(id, action, note),
     review: ({ id, taskId, accepted, note, resultVersion }) =>

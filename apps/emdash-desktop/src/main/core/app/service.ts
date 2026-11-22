@@ -1,7 +1,8 @@
 import { exec } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { extname, resolve, sep } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 import type { HostRef } from '@emdash/core/primitives/host/api';
 import { parsePortableRelativePath, type HostFileRef } from '@emdash/core/primitives/path/api';
 import type { FsError } from '@emdash/core/runtimes/files/api';
@@ -112,6 +113,15 @@ class AppService implements Disposable {
       });
     }
     return this.cachedAppVersionPromise;
+  }
+
+  async captureCurrentWindow(): Promise<string> {
+    const window = getMainWindow();
+    if (!window || window.isDestroyed()) throw new Error('当前没有可截图的主窗口。');
+    const image = await window.webContents.capturePage();
+    const path = join(app.getPath('temp'), `emdash-window-${randomUUID()}.png`);
+    await writeFile(path, image.toPNG(), { mode: 0o600 });
+    return path;
   }
 
   async listInstalledFonts(

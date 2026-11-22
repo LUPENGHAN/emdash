@@ -828,6 +828,9 @@ export async function bootServices(
               purpose: main.purpose,
               lifecycle: main.lifecycle,
               workItems: Object.values(main.workItems),
+              optimizationRuns: Object.values(main.optimizationRuns),
+              optimizationSuggestions: Object.values(main.optimizationSuggestions),
+              livePromotions: Object.values(main.livePromotions),
               checkpoints: main.checkpoints,
               completionReport: main.completionReport,
               projectImports: Object.values(main.projectImports ?? {}),
@@ -862,7 +865,8 @@ export async function bootServices(
         let main = await service.getByTask(caller.taskId);
         if (!main) throw new Error('Only a main-agent conversation can import a project.');
         const saved = main.projectImports?.[action.requestId];
-        const url = action.kind === 'import_project' ? action.repositoryUrl.trim() : saved?.repositoryUrl;
+        const url =
+          action.kind === 'import_project' ? action.repositoryUrl.trim() : saved?.repositoryUrl;
         if (!url) throw new Error('The saved project import is unavailable.');
         const inferredName =
           url
@@ -871,11 +875,17 @@ export async function bootServices(
             .split(/[/:]/)
             .at(-1)
             ?.replace(/\.git$/i, '') || 'repository';
-        const name = action.kind === 'import_project' ? action.name?.trim() || inferredName : saved!.name;
+        const name =
+          action.kind === 'import_project' ? action.name?.trim() || inferredName : saved!.name;
         const defaultDirectory = `${name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'repository'}-${action.requestId.slice(0, 8)}`;
-        const directory = action.kind === 'import_project' ? action.directory ?? defaultDirectory : saved!.directory;
+        const directory =
+          action.kind === 'import_project'
+            ? (action.directory ?? defaultDirectory)
+            : saved!.directory;
         if (!/^[a-zA-Z0-9._-]+$/.test(directory))
-          throw new Error('Target directory may only contain letters, numbers, dot, underscore and dash.');
+          throw new Error(
+            'Target directory may only contain letters, numbers, dot, underscore and dash.'
+          );
         main = await service.prepareProjectImport(main.id, {
           requestId: action.requestId,
           repositoryUrl: url,
@@ -893,51 +903,57 @@ export async function bootServices(
         projectImportControllers.set(controllerKey, controller);
         try {
           if (!project) {
-          const root = join(app.getPath('userData'), 'agent-imported-repositories');
-          await mkdir(root, { recursive: true });
-          let lastProgress = -1;
-          const imported = await createProjectFromRemote(
-            {
-              db,
-              runtimes,
-              mintCloneCredentials: (input) => gitCredentials.mintCloneCredentials(input),
-            },
-            {
-              projectId: action.requestId,
-              host: { type: 'local' },
-              mode: 'clone',
-              repositoryUrl: url,
-              targetPath: join(root, directory),
-              name,
-            },
-            {
-              jobId: action.requestId,
-              signal: controller.signal,
-              progress: (progress) => {
-                const percent = Math.max(0, Math.min(100, progress.percent ?? 0));
-                if (percent < 100 && Math.floor(percent / 5) === Math.floor(lastProgress / 5)) return;
-                lastProgress = percent;
-                void service
-                  .updateProjectImport(main.id, action.requestId, {
-                    state: progress.phase === 'cloning' ? 'cloning' : 'registering',
-                    progress: progress.phase === 'cloning' ? percent : Math.max(percent, 95),
-                  })
-                  .catch(() => {});
+            const root = join(app.getPath('userData'), 'agent-imported-repositories');
+            await mkdir(root, { recursive: true });
+            let lastProgress = -1;
+            const imported = await createProjectFromRemote(
+              {
+                db,
+                runtimes,
+                mintCloneCredentials: (input) => gitCredentials.mintCloneCredentials(input),
               },
-            },
-            (_projectId, state) => {
-              if (state.phase !== 'cloning')
-                void service
-                  .updateProjectImport(main.id, action.requestId, {
-                    state: state.phase === 'error' ? 'failed' : state.phase === 'ready' ? 'ready' : 'registering',
-                    progress: state.phase === 'ready' ? 100 : 95,
-                    ...(state.phase === 'error' && { error: state.message }),
-                  })
-                  .catch(() => {});
-            }
-          );
-          if (!imported.success) throw new Error(imported.error.message);
-          project = imported.data;
+              {
+                projectId: action.requestId,
+                host: { type: 'local' },
+                mode: 'clone',
+                repositoryUrl: url,
+                targetPath: join(root, directory),
+                name,
+              },
+              {
+                jobId: action.requestId,
+                signal: controller.signal,
+                progress: (progress) => {
+                  const percent = Math.max(0, Math.min(100, progress.percent ?? 0));
+                  if (percent < 100 && Math.floor(percent / 5) === Math.floor(lastProgress / 5))
+                    return;
+                  lastProgress = percent;
+                  void service
+                    .updateProjectImport(main.id, action.requestId, {
+                      state: progress.phase === 'cloning' ? 'cloning' : 'registering',
+                      progress: progress.phase === 'cloning' ? percent : Math.max(percent, 95),
+                    })
+                    .catch(() => {});
+                },
+              },
+              (_projectId, state) => {
+                if (state.phase !== 'cloning')
+                  void service
+                    .updateProjectImport(main.id, action.requestId, {
+                      state:
+                        state.phase === 'error'
+                          ? 'failed'
+                          : state.phase === 'ready'
+                            ? 'ready'
+                            : 'registering',
+                      progress: state.phase === 'ready' ? 100 : 95,
+                      ...(state.phase === 'error' && { error: state.message }),
+                    })
+                    .catch(() => {});
+              }
+            );
+            if (!imported.success) throw new Error(imported.error.message);
+            project = imported.data;
           }
           const projectIds = [...new Set([...main.projectIds, project.id])];
           const projectAccess =
@@ -979,6 +995,10 @@ export async function bootServices(
           'cancel_pending_task',
           'add_work_item',
           'update_work_item',
+          'create_optimization_run',
+          'transition_optimization_run',
+          'add_optimization_suggestion',
+          'update_optimization_suggestion',
           'create_checkpoint',
           'set_main_agent_state',
         ].includes(action.kind)
@@ -987,6 +1007,10 @@ export async function bootServices(
       if (
         action.kind === 'add_work_item' ||
         action.kind === 'update_work_item' ||
+        action.kind === 'create_optimization_run' ||
+        action.kind === 'transition_optimization_run' ||
+        action.kind === 'add_optimization_suggestion' ||
+        action.kind === 'update_optimization_suggestion' ||
         action.kind === 'create_checkpoint' ||
         action.kind === 'set_main_agent_state'
       ) {
@@ -1007,9 +1031,49 @@ export async function bootServices(
                   ...(action.title !== undefined && { title: action.title }),
                   ...(action.detail !== undefined && { detail: action.detail }),
                 })
-              : action.kind === 'create_checkpoint'
-                ? await service.checkpoint(main.id, action.requestId, action.title)
-                : await service.setLifecycleState(main.id, action.action, action.note);
+              : action.kind === 'create_optimization_run'
+                ? await service.createOptimizationRun(main.id, {
+                    requestId: action.requestId,
+                    conversationId: action.conversationId,
+                    ...(action.suggestionId && { suggestionId: action.suggestionId }),
+                    executionMode: action.executionMode,
+                    experienceConfirmation: action.experienceConfirmation,
+                    objective: action.objective,
+                    observedProblem: action.observedProblem,
+                    capturedContext: {
+                      ...(action.surface && { surface: action.surface }),
+                      ...(action.route && { route: action.route }),
+                      selectedEntityRefs: action.selectedEntityRefs,
+                      ...(action.screenshotRef && { screenshotRef: action.screenshotRef }),
+                      logRefs: action.logRefs,
+                    },
+                    baseline: {
+                      ...(action.liveRevision && { liveRevision: action.liveRevision }),
+                      appVersion: action.appVersion,
+                    },
+                    risk: action.risk,
+                  })
+                : action.kind === 'transition_optimization_run'
+                  ? await service.transitionOptimizationRun(main.id, action.runId, {
+                      state: action.state,
+                      ...(action.reason && { reason: action.reason }),
+                      ...(action.technicalValidationPassed !== undefined && {
+                        technicalValidationPassed: action.technicalValidationPassed,
+                      }),
+                      ...(action.userDecision && { userDecision: action.userDecision }),
+                      ...(action.note && { note: action.note }),
+                    })
+                  : action.kind === 'add_optimization_suggestion'
+                    ? await service.addOptimizationSuggestion(main.id, action)
+                    : action.kind === 'update_optimization_suggestion'
+                      ? await service.updateOptimizationSuggestion(
+                          main.id,
+                          action.suggestionId,
+                          action.state
+                        )
+                      : action.kind === 'create_checkpoint'
+                        ? await service.checkpoint(main.id, action.requestId, action.title)
+                        : await service.setLifecycleState(main.id, action.action, action.note);
         return { text: JSON.stringify(record) };
       }
       if (
@@ -1471,7 +1535,8 @@ export async function bootServices(
         params,
         request.projectGrants,
         request.dependsOn,
-        request.documentRefs
+        request.documentRefs,
+        request.optimizationRunId
       );
     },
     getBlocker: async (taskId) => {

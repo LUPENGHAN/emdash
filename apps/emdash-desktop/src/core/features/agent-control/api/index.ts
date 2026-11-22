@@ -101,6 +101,65 @@ export type AgentControlAction =
   | { kind: 'get_task_status'; taskId: string }
   | { kind: 'add_work_item'; requestId: string; title: string; detail?: string }
   | {
+      kind: 'create_optimization_run';
+      requestId: string;
+      conversationId: string;
+      suggestionId?: string;
+      executionMode: 'automatic' | 'proposal-first';
+      experienceConfirmation: 'user' | 'acceptance-criteria';
+      objective: string;
+      observedProblem: string;
+      surface?: string;
+      route?: string;
+      selectedEntityRefs: string[];
+      screenshotRef?: string;
+      logRefs: string[];
+      liveRevision?: string;
+      appVersion: string;
+      risk: {
+        level: 'low' | 'medium' | 'high';
+        reasons: string[];
+        requiresUserConfirmation: boolean;
+      };
+    }
+  | {
+      kind: 'transition_optimization_run';
+      runId: string;
+      state:
+        | 'captured'
+        | 'investigating'
+        | 'planning'
+        | 'waiting_for_approval'
+        | 'implementing'
+        | 'validating'
+        | 'ready_to_apply'
+        | 'applying'
+        | 'observing'
+        | 'accepted'
+        | 'blocked'
+        | 'failed'
+        | 'rolled_back';
+      reason?: string;
+      technicalValidationPassed?: boolean;
+      userDecision?: 'pending' | 'accepted' | 'continue' | 'rollback';
+      note?: string;
+    }
+  | {
+      kind: 'add_optimization_suggestion';
+      requestId: string;
+      fingerprint: string;
+      title: string;
+      observedPattern: string;
+      proposedOutcome: string;
+      evidenceRefs: string[];
+      confidence: 'low' | 'medium' | 'high';
+    }
+  | {
+      kind: 'update_optimization_suggestion';
+      suggestionId: string;
+      state: 'dismissed' | 'expired';
+    }
+  | {
       kind: 'update_work_item';
       workItemId: string;
       state: 'open' | 'in_progress' | 'waiting' | 'review' | 'done' | 'deferred' | 'cancelled';
@@ -135,6 +194,8 @@ export type AgentControlAction =
       projectGrants?: string[];
       dependsOn?: string[];
       documentRefs?: ManagementDocumentReference[];
+      /** Associate this code task with a manually triggered optimization run. */
+      optimizationRunId?: string;
       /** The explicit code base branch; absent resolves the target project baseline. */
       baseBranch?: string;
       /** An agent to start in the new task with this first message. */

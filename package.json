@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "nx run-many -t dev --all --parallel=10",
+    "live": "pnpm --dir apps/emdash-desktop run live",
     "build": "nx run-many -t build --all",
     "test": "node tooling/scripts/test.mjs",
     "lint": "nx run-many -t lint --all && node tooling/oxlint/scripts/check-allowlists.mjs",

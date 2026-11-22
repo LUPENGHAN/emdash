@@ -14,6 +14,15 @@ import {
   type DocumentMigrationInput,
 } from '../api/documents';
 import {
+  canTransitionOptimizationRun,
+  requiresOptimizationConfirmation,
+  type LivePromotion,
+  type OptimizationRisk,
+  type OptimizationRun,
+  type OptimizationRunState,
+  type OptimizationSuggestion,
+} from '../api/optimization';
+import {
   taskResultSchema,
   agentSelectionSchema,
   coordinatorRecord,
@@ -94,6 +103,14 @@ Workers must call submit_task_result with commits, checks and unresolved issues.
 When a result notification arrives, call acknowledge_task_results with its event IDs before taking follow-up actions.
 Agent startup, an idle process and a created PR do not prove task completion. Do not automatically merge branches or PRs.`;
 
+function optimizationWorkItemState(state: OptimizationRunState): WorkspaceWorkItem['state'] {
+  if (state === 'accepted') return 'done';
+  if (['waiting_for_approval', 'blocked', 'failed'].includes(state)) return 'waiting';
+  if (['ready_to_apply', 'observing', 'rolled_back'].includes(state)) return 'review';
+  if (state === 'captured') return 'open';
+  return 'in_progress';
+}
+
 export class CoordinatorService {
   private readonly locks = new KeyedMutex();
   private readonly deliveries = new KeyedMutex();
@@ -117,7 +134,7 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '10',
+        version: '11',
         id,
         kind: 'project',
         name: '主任务',
@@ -133,6 +150,9 @@ export class CoordinatorService {
         lifecycle: { kind: 'ongoing', state: 'active' },
         workItems: {},
         checkpoints: [],
+        optimizationRuns: {},
+        optimizationSuggestions: {},
+        livePromotions: {},
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -186,7 +206,7 @@ export class CoordinatorService {
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '10',
+        version: '11',
         id,
         name,
         kind: 'cross-project',
@@ -203,6 +223,9 @@ export class CoordinatorService {
         lifecycle: input.lifecycle ?? { kind: 'finite', state: 'active' },
         workItems: {},
         checkpoints: [],
+        optimizationRuns: {},
+        optimizationSuggestions: {},
+        livePromotions: {},
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -264,7 +287,11 @@ export class CoordinatorService {
         { key: source.id, value: coordinatorRecord.schema.parse(source) },
         { key: destination.id, value: coordinatorRecord.schema.parse(destination) },
       ]);
-      this.deps.emit({ coordinatorId: source.id, projectId: source.projectId, taskId: source.taskId });
+      this.deps.emit({
+        coordinatorId: source.id,
+        projectId: source.projectId,
+        taskId: source.taskId,
+      });
       this.deps.emit({
         coordinatorId: destination.id,
         projectId: destination.projectId,
@@ -275,7 +302,8 @@ export class CoordinatorService {
   }
   async rollbackStandaloneMigration(id: string): Promise<Coordinator> {
     const destination = await this.get(id);
-    if (!destination.migratedFromId) throw new Error('This workspace was not created by migration.');
+    if (!destination.migratedFromId)
+      throw new Error('This workspace was not created by migration.');
     return this.underLocks(this.locks, [id, destination.migratedFromId], async () => {
       const latest = await this.get(id);
       const source = await this.get(latest.migratedFromId!);
@@ -290,7 +318,8 @@ export class CoordinatorService {
         source.lifecycle.archivedFrom = undefined;
       }
       source.supersededById = undefined;
-      latest.lifecycle.archivedFrom = latest.lifecycle.state === 'archived' ? undefined : latest.lifecycle.state;
+      latest.lifecycle.archivedFrom =
+        latest.lifecycle.state === 'archived' ? undefined : latest.lifecycle.state;
       latest.lifecycle.state = 'archived';
       source.updatedAt = now;
       latest.updatedAt = now;
@@ -298,8 +327,16 @@ export class CoordinatorService {
         { key: source.id, value: coordinatorRecord.schema.parse(source) },
         { key: latest.id, value: coordinatorRecord.schema.parse(latest) },
       ]);
-      this.deps.emit({ coordinatorId: source.id, projectId: source.projectId, taskId: source.taskId });
-      this.deps.emit({ coordinatorId: latest.id, projectId: latest.projectId, taskId: latest.taskId });
+      this.deps.emit({
+        coordinatorId: source.id,
+        projectId: source.projectId,
+        taskId: source.taskId,
+      });
+      this.deps.emit({
+        coordinatorId: latest.id,
+        projectId: latest.projectId,
+        taskId: latest.taskId,
+      });
       return source;
     });
   }
@@ -924,7 +961,8 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
 
   async addWorkItem(
     id: string,
-    input: Pick<WorkspaceWorkItem, 'title' | 'detail'> & { requestId: string }
+    input: Pick<WorkspaceWorkItem, 'title' | 'detail'> &
+      Partial<Pick<WorkspaceWorkItem, 'kind' | 'origin'>> & { requestId: string }
   ): Promise<Coordinator> {
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
@@ -939,11 +977,240 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       const now = Date.now();
       record.workItems[input.requestId] = {
         id: input.requestId,
+        kind: input.kind ?? 'delivery',
+        origin: input.origin ?? { kind: 'user' },
         title,
         ...(detail && { detail }),
         state: 'open',
         taskIds: [],
         createdAt: now,
+        updatedAt: now,
+      };
+      await this.save(record);
+      return record;
+    });
+  }
+
+  async createOptimizationRun(
+    id: string,
+    input: {
+      requestId: string;
+      conversationId: string;
+      suggestionId?: string;
+      executionMode: OptimizationRun['executionMode'];
+      experienceConfirmation: OptimizationRun['experienceConfirmation'];
+      objective: string;
+      observedProblem: string;
+      capturedContext: OptimizationRun['capturedContext'];
+      baseline: OptimizationRun['baseline'];
+      risk: OptimizationRisk;
+    }
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const existing = record.optimizationRuns[input.requestId];
+      if (existing) {
+        if (
+          existing.objective !== input.objective.trim() ||
+          existing.observedProblem !== input.observedProblem.trim()
+        )
+          throw new Error('This optimization request has different content.');
+        return record;
+      }
+      if (input.suggestionId && !record.optimizationSuggestions[input.suggestionId])
+        throw new Error('The optimization suggestion no longer exists.');
+      const now = Date.now();
+      const workItemId = randomUUID();
+      record.workItems[workItemId] = {
+        id: workItemId,
+        kind: 'experience-improvement',
+        origin: input.suggestionId
+          ? { kind: 'accepted-suggestion', suggestionId: input.suggestionId }
+          : { kind: 'agent', conversationId: input.conversationId },
+        title: input.objective.trim().slice(0, 200),
+        detail: input.observedProblem.trim(),
+        state: 'open',
+        taskIds: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      const requiresApproval =
+        input.executionMode === 'proposal-first' || requiresOptimizationConfirmation(input.risk);
+      record.optimizationRuns[input.requestId] = {
+        id: input.requestId,
+        workItemId,
+        trigger: input.suggestionId
+          ? {
+              kind: 'accepted-suggestion',
+              suggestionId: input.suggestionId,
+              conversationId: input.conversationId,
+            }
+          : { kind: 'manual', conversationId: input.conversationId },
+        executionMode: input.executionMode,
+        experienceConfirmation: input.experienceConfirmation,
+        objective: input.objective.trim(),
+        observedProblem: input.observedProblem.trim(),
+        capturedContext: input.capturedContext,
+        baseline: input.baseline,
+        risk: input.risk,
+        state: 'captured',
+        taskIds: [],
+        acceptedResultVersions: [],
+        stateHistory: [
+          {
+            state: 'captured',
+            at: now,
+            ...(requiresApproval && { reason: '实施前需要确认方案或高风险操作。' }),
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      };
+      if (input.suggestionId) {
+        const suggestion = record.optimizationSuggestions[input.suggestionId]!;
+        suggestion.state = 'accepted';
+        suggestion.workItemId = workItemId;
+        suggestion.runId = input.requestId;
+        suggestion.updatedAt = now;
+      }
+      await this.save(record);
+      return record;
+    });
+  }
+
+  async transitionOptimizationRun(
+    id: string,
+    runId: string,
+    input: {
+      state: OptimizationRunState;
+      reason?: string;
+      risk?: OptimizationRisk;
+      technicalValidationPassed?: boolean;
+      userDecision?: 'pending' | 'accepted' | 'continue' | 'rollback';
+      note?: string;
+    }
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const run = record.optimizationRuns[runId];
+      if (!run) throw new Error('The optimization run no longer exists.');
+      const nextRisk = input.risk ?? run.risk;
+      if (input.risk) run.risk = input.risk;
+      if (run.state === input.state) return record;
+      if (!canTransitionOptimizationRun(run.state, input.state))
+        throw new Error(`Cannot move an optimization from ${run.state} to ${input.state}.`);
+      if (
+        ['implementing', 'applying'].includes(input.state) &&
+        requiresOptimizationConfirmation(nextRisk) &&
+        run.state !== 'waiting_for_approval'
+      )
+        throw new Error('High-risk optimization requires explicit approval before implementation.');
+      if (input.state === 'ready_to_apply' && input.technicalValidationPassed !== true)
+        throw new Error('Technical validation must pass before an optimization can be applied.');
+      const now = Date.now();
+      run.state = input.state;
+      run.updatedAt = now;
+      run.stateHistory.push({
+        state: input.state,
+        at: now,
+        ...(input.reason?.trim() && { reason: input.reason.trim() }),
+      });
+      if (
+        input.technicalValidationPassed !== undefined ||
+        input.userDecision !== undefined ||
+        input.note !== undefined
+      ) {
+        run.observation = {
+          technicalValidationPassed:
+            input.technicalValidationPassed ?? run.observation?.technicalValidationPassed ?? false,
+          userDecision: input.userDecision ?? run.observation?.userDecision ?? 'pending',
+          ...(input.note?.trim() && { note: input.note.trim() }),
+          updatedAt: now,
+        };
+      }
+      const item = record.workItems[run.workItemId];
+      if (item) {
+        item.state = optimizationWorkItemState(input.state);
+        item.updatedAt = now;
+        item.resolvedAt = input.state === 'accepted' ? now : undefined;
+      }
+      await this.save(record);
+      return record;
+    });
+  }
+
+  async addOptimizationSuggestion(
+    id: string,
+    input: Omit<
+      OptimizationSuggestion,
+      'id' | 'state' | 'workItemId' | 'runId' | 'createdAt' | 'updatedAt'
+    > & { requestId: string }
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const duplicate = Object.values(record.optimizationSuggestions).find(
+        (suggestion) => suggestion.fingerprint === input.fingerprint && suggestion.state === 'new'
+      );
+      if (duplicate) return record;
+      const now = Date.now();
+      record.optimizationSuggestions[input.requestId] = {
+        id: input.requestId,
+        fingerprint: input.fingerprint,
+        title: input.title.trim(),
+        observedPattern: input.observedPattern.trim(),
+        proposedOutcome: input.proposedOutcome.trim(),
+        evidenceRefs: [...input.evidenceRefs],
+        confidence: input.confidence,
+        state: 'new',
+        createdAt: now,
+        updatedAt: now,
+      };
+      await this.save(record);
+      return record;
+    });
+  }
+
+  async updateOptimizationSuggestion(
+    id: string,
+    suggestionId: string,
+    state: 'dismissed' | 'expired'
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const suggestion = record.optimizationSuggestions[suggestionId];
+      if (!suggestion) throw new Error('The optimization suggestion no longer exists.');
+      if (suggestion.state === 'accepted')
+        throw new Error('An accepted optimization suggestion cannot be dismissed.');
+      suggestion.state = state;
+      suggestion.updatedAt = Date.now();
+      await this.save(record);
+      return record;
+    });
+  }
+
+  async recordLivePromotion(
+    id: string,
+    input: Omit<LivePromotion, 'createdAt' | 'updatedAt'>
+  ): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const existing = record.livePromotions[input.id];
+      if (existing && existing.toRevision !== input.toRevision)
+        throw new Error('This live promotion request has different content.');
+      if (input.state === 'healthy' && input.commits.length === 0)
+        throw new Error('A healthy live revision must be backed by accepted commits.');
+      if (['dependency', 'data-migration'].includes(input.changeClass) && !input.backupSetId)
+        throw new Error('Dependency and data changes require a backup set before promotion.');
+      if (input.optimizationRunId) {
+        const run = record.optimizationRuns[input.optimizationRunId];
+        if (!run) throw new Error('The optimization run no longer exists.');
+        run.promotionId = input.id;
+        run.updatedAt = Date.now();
+      }
+      const now = Date.now();
+      record.livePromotions[input.id] = {
+        ...input,
+        createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
       await this.save(record);
@@ -1180,7 +1447,8 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     params: CreateTaskParams,
     grantedProjectIds: string[] = [],
     dependsOn: string[] = [],
-    documentRefs: ManagementDocumentReference[] = []
+    documentRefs: ManagementDocumentReference[] = [],
+    optimizationRunId?: string
   ): Promise<void> {
     const refs = documentReferencesSchema.parse(documentRefs);
     await this.assertDelegationGrants(caller, grantedProjectIds);
@@ -1252,6 +1520,17 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
           submissions: {},
           ...(grantedProjectIds.length && { grantedProjectIds: [...new Set(grantedProjectIds)] }),
         };
+        if (optimizationRunId) {
+          const run = latest.optimizationRuns[optimizationRunId];
+          if (!run) throw new Error('The optimization run no longer exists.');
+          run.taskIds = [...new Set([...run.taskIds, params.id])];
+          run.updatedAt = Date.now();
+          const workItem = latest.workItems[run.workItemId];
+          if (workItem) {
+            workItem.taskIds = [...new Set([...workItem.taskIds, params.id])];
+            workItem.updatedAt = Date.now();
+          }
+        }
         if (!latest.projectIds.includes(params.projectId)) {
           latest.projectIds = [...latest.projectIds, params.projectId];
         }
@@ -1646,6 +1925,34 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       if (!task.review) {
         task.state = accepted ? 'done' : 'changes_requested';
         task.review = { note, accepted, at: Date.now() };
+        for (const run of Object.values(record.optimizationRuns)) {
+          if (!run.taskIds.includes(taskId)) continue;
+          if (accepted) {
+            run.acceptedResultVersions = [
+              ...run.acceptedResultVersions.filter((entry) => entry.taskId !== taskId),
+              { taskId, version: resultVersion },
+            ];
+            if (
+              run.taskIds.every((id) => record.tasks[id]?.state === 'done') &&
+              canTransitionOptimizationRun(run.state, 'validating')
+            ) {
+              run.state = 'validating';
+              run.stateHistory.push({
+                state: 'validating',
+                at: Date.now(),
+                reason: '关联任务已验收。',
+              });
+            }
+          } else if (run.state === 'validating') {
+            run.state = 'implementing';
+            run.stateHistory.push({
+              state: 'implementing',
+              at: Date.now(),
+              reason: '任务需要继续修改。',
+            });
+          }
+          run.updatedAt = Date.now();
+        }
         await this.save(record);
       }
       await this.deps.setTaskStatus(taskId, accepted ? 'done' : 'in_progress');

@@ -153,6 +153,10 @@ export async function executeAgentAction(
     case 'review_task_result':
     case 'add_work_item':
     case 'update_work_item':
+    case 'create_optimization_run':
+    case 'transition_optimization_run':
+    case 'add_optimization_suggestion':
+    case 'update_optimization_suggestion':
     case 'create_checkpoint':
     case 'set_main_agent_state':
       throw new Error('Result coordination must run in the background.');
