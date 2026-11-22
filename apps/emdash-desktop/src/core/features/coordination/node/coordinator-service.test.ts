@@ -54,12 +54,39 @@ function setup() {
       setOrThrow: async (id: string, value: Coordinator) => {
         records.set(id, structuredClone(value));
       },
+      delOrThrow: vi.fn(async (id: string) => {
+        records.delete(id);
+      }),
     },
     getTask: vi.fn<ConstructorParameters<typeof CoordinatorService>[0]['getTask']>(async (id) => {
+      const main = [...records.values()].find((record) => record.taskId === id);
+      if (main)
+        return {
+          id,
+          projectId: main.projectId,
+          name: main.name,
+          type: 'coordination',
+          archivedAt: undefined,
+        };
       const record = [...records.values()].find((record) => record.tasks[id]);
       const task = record?.tasks[id];
-      return task ? { id, projectId: task.projectId, name: task.name, type: 'task' } : null;
+      return task
+        ? { id, projectId: task.projectId, name: task.name, type: 'task', archivedAt: undefined }
+        : null;
     }),
+    taskDeletion: {
+      getDeletePreflight: vi.fn(async (taskIds: string[]) => ({
+        tasks: taskIds.map((taskId) => ({
+          taskId,
+          hasWorktree: true,
+          hasUncommittedChanges: false,
+          hasDeletableBranch: true,
+          hostReachable: true,
+        })),
+      })),
+      deleteTask: vi.fn(async () => {}),
+      deleteCoordinationTask: vi.fn(async () => {}),
+    },
     resources: () => resources,
     defaultAgent: async () => 'claude',
     resolveSelection: createSelectionResolver({
@@ -725,6 +752,77 @@ describe('main agent coordination', () => {
     const restored = await test.service.restoreTrash(main.id);
     expect(restored.deletedAt).toBeUndefined();
     expect(await test.service.list()).toHaveLength(1);
+  });
+
+  it('repairs missing delegated tasks so stale assignments no longer block cleanup', async () => {
+    const test = setup();
+    const main = await assigned(test);
+    vi.mocked(test.deps.getTask).mockImplementation(async (id) =>
+      id === main.taskId
+        ? {
+            id,
+            projectId: main.projectId,
+            name: main.name,
+            type: 'coordination',
+            archivedAt: undefined,
+          }
+        : null
+    );
+
+    await new CoordinatorService(test.deps).recover();
+
+    const repaired = await test.service.getByTask(main.taskId);
+    expect(repaired?.tasks['worker-task']).toMatchObject({
+      state: 'cancelled',
+      blockedReason: 'Task record no longer exists.',
+    });
+    await expect(test.service.trash(main.id)).resolves.toMatchObject({
+      deletedAt: expect.any(Number),
+    });
+  });
+
+  it('permanently deletes the main workspace and optionally cascades to real child tasks', async () => {
+    const test = setup();
+    const main = await assigned(test);
+
+    const preview = await test.service.permanentDeletePreview(main.id);
+    expect(preview).toMatchObject({
+      coordinatorId: main.id,
+      staleTaskCount: 0,
+      mainTask: { taskId: main.taskId, hasWorktree: true },
+      childTasks: [{ taskId: 'worker-task', hasDeletableBranch: true }],
+    });
+
+    await test.service.permanentlyDelete(main.id, {
+      deleteChildren: true,
+      deleteChildBranches: true,
+    });
+
+    expect(test.deps.taskDeletion.deleteTask).toHaveBeenCalledWith('project', 'worker-task', {
+      deleteWorktree: true,
+      deleteBranch: true,
+      deleteConversations: true,
+    });
+    expect(test.deps.taskDeletion.deleteCoordinationTask).toHaveBeenCalledWith(
+      'project',
+      main.taskId,
+      { deleteWorktree: true, deleteBranch: true, deleteConversations: true }
+    );
+    expect(test.records.has(main.id)).toBe(false);
+  });
+
+  it('preserves child tasks when permanent deletion cascade is declined', async () => {
+    const test = setup();
+    const main = await assigned(test);
+
+    await test.service.permanentlyDelete(main.id, {
+      deleteChildren: false,
+      deleteChildBranches: false,
+    });
+
+    expect(test.deps.taskDeletion.deleteTask).not.toHaveBeenCalled();
+    expect(test.deps.taskDeletion.deleteCoordinationTask).toHaveBeenCalledOnce();
+    expect(test.records.has(main.id)).toBe(false);
   });
 
   it('runs a user-triggered experience optimization through validation and experience review', async () => {

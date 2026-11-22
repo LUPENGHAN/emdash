@@ -567,6 +567,24 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
     this.notifyTaskDeleted(taskId, projectId);
   }
 
+  async deleteCoordinationTask(
+    projectId: string,
+    taskId: string,
+    options?: DeleteTaskOptions
+  ): Promise<void> {
+    const result = await deleteTask(this.dependencies.deletion, {
+      taskId,
+      allowCoordination: true,
+      deleteWorktree: options?.deleteWorktree,
+      deleteBranch: options?.deleteBranch,
+      deleteConversations: options?.deleteConversations,
+    });
+    if (!result.success && result.error.type !== 'task-not-found') {
+      throw new Error(result.error.message);
+    }
+    this.notifyTaskDeleted(taskId, projectId);
+  }
+
   notifyTaskDeleted(taskId: string, projectId: string): void {
     this._hooks.callHookBackground('task:deleted', taskId, projectId);
   }

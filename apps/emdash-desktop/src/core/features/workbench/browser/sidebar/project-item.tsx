@@ -7,6 +7,7 @@ import {
   FolderInput,
   FolderOpen,
   Loader2,
+  LockKeyhole,
   Pencil,
   Plus,
   Trash2,
@@ -112,6 +113,7 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
       : 'connected';
   const ProjectIcon = isSshProject ? FolderInput : isExpanded ? FolderOpen : FolderClosed;
   const projectLabel = project.name ?? 'project';
+  const isLiveSource = project.data?.liveSource === true;
   const createAvailability = taskHostActionAvailability(projectId);
   const createDisabledReason =
     createAvailability.kind === 'disabled'
@@ -266,7 +268,7 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
           />
         )}
         {archived ? null : <ContextMenu.Separator />}
-        {!archived && (
+        {!archived && !isLiveSource && (
           <ContextMenu.Item
             disabled={project.state === 'unregistered'}
             onClick={() => {
@@ -278,18 +280,25 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
           </ContextMenu.Item>
         )}
         <ContextMenu.Separator />
-        <ContextMenu.Item
-          variant="destructive"
-          onClick={() => {
-            void confirmDeleteProject({
-              projectId,
-              projectLabel: project.name ?? 'this project',
-            });
-          }}
-        >
-          <Trash2 className="size-4" />
-          Remove Project
-        </ContextMenu.Item>
+        {isLiveSource ? (
+          <ContextMenu.Label className="flex items-center gap-2 text-foreground-muted">
+            <LockKeyhole className="size-4" />
+            Live 源码仓库不可归档或删除
+          </ContextMenu.Label>
+        ) : (
+          <ContextMenu.Item
+            variant="destructive"
+            onClick={() => {
+              void confirmDeleteProject({
+                projectId,
+                projectLabel: project.name ?? 'this project',
+              });
+            }}
+          >
+            <Trash2 className="size-4" />
+            Remove Project
+          </ContextMenu.Item>
+        )}
       </ContextMenu.Content>
     </ContextMenu.Root>
   );

@@ -372,10 +372,10 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     id: 'resource-monitor',
-    label: 'Resource monitor',
+    label: 'Agent 运行监控',
     tab: 'interface',
-    description: 'Track CPU and memory usage for running agents.',
-    keywords: ['cpu', 'memory', 'performance'],
+    description: '查看运行中 Agent 进程的 CPU 和内存占用。',
+    keywords: ['cpu', 'memory', 'performance', '进程', '内存', '运行'],
   },
   {
     id: 'context-bar',

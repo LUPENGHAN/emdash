@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
+import { AgentProcessMonitorButton } from '@core/features/dev-perf/browser/agent-process-monitor-button';
 import { UsageStatsButton } from '@core/features/usage-stats/contributions/browser/usage-stats-button';
+import { LiveRestartButton } from '@core/features/workbench/browser/live-restart-button';
 import { SidebarRecoveryControls } from '@core/features/workbench/browser/sidebar-recovery-controls';
 import { WindowControls } from '@core/features/workbench/browser/window-controls';
 import { useWorkspaceLayoutContext } from '@core/features/workbench/contributions/browser/layout-provider';
@@ -35,6 +37,8 @@ export function BorderlessTitlebar({ rightSlot }: { rightSlot?: ReactNode }) {
       </div>
       {rightSlot}
       <UsageStatsButton />
+      <AgentProcessMonitorButton />
+      <LiveRestartButton />
       {isLinux && <WindowControls />}
     </header>
   );

@@ -11,9 +11,10 @@ export type PsProcess = {
 };
 
 /**
- * Parse `ps -A -o pid=,ppid=,pcpu=,rss=,comm=` output. The command column is
- * last and may contain spaces; `rss` is reported in KiB on both macOS (BSD ps)
- * and Linux (procps).
+ * Parse `ps -A -o pid=,ppid=,pcpu=,rss=,command=` output. The full command line
+ * is last and may contain spaces; `rss` is reported in KiB on both macOS (BSD ps)
+ * and Linux (procps). Full arguments let the monitor distinguish agent launchers
+ * from Emdash infrastructure processes.
  */
 export function parsePsSnapshot(output: string): PsProcess[] {
   const processes: PsProcess[] = [];
@@ -83,7 +84,7 @@ export async function snapshotProcessTree(
     recordSpawn('other', 'ps');
     execFile(
       'ps',
-      ['-A', '-o', 'pid=,ppid=,pcpu=,rss=,comm='],
+      ['-A', '-o', 'pid=,ppid=,pcpu=,rss=,command='],
       { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 2_000 },
       (_error, stdout) => resolve(stdout ?? '')
     );

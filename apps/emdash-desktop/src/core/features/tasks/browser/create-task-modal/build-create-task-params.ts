@@ -36,7 +36,9 @@ export function buildInitialConversation(
   state: InitialConversationState
 ): NonNullable<TaskConfig['initialConversation']> | undefined {
   const { provider } = state;
-  if (!provider) return undefined;
+  // An empty request means "create the task/workspace only". Do not materialize a
+  // provider session just because the task has an inherited default agent.
+  if (!provider || !state.prompt.trim()) return undefined;
   const type = state.useChatUi ? 'acp' : 'pty';
 
   return {

@@ -4,6 +4,11 @@ import type { AgentCaller, AgentControlResult } from '@core/features/agent-contr
 import type { TaskDelegationStatus } from '@core/features/agent-control/api/delegations';
 import type { DelegationResources } from '@core/features/agent-control/api/node/delegation-resources';
 import type { CreateTaskParams, Task } from '@core/primitives/tasks/api';
+import type {
+  DeletePreflightResult,
+  DeleteTaskOptions,
+  TaskDeletePreflightItem,
+} from '@core/primitives/tasks/api';
 import {
   documentReferencesSchema,
   type ManagementDocumentReference,
@@ -36,6 +41,9 @@ import {
   type ProjectAccess,
   type TakeoverPreview,
   type DocumentStorage,
+  type CoordinatorDeleteTaskPreview,
+  type CoordinatorPermanentDeleteOptions,
+  type CoordinatorPermanentDeletePreview,
   type WorkspaceLifecycle,
   type WorkspaceWorkItem,
   type WorkspaceProjectImport,
@@ -65,7 +73,17 @@ type Dependencies = {
     getOrThrow(id: string): Promise<Coordinator | null>;
     setOrThrow(id: string, value: Coordinator): Promise<void>;
     setManyOrThrow(entries: { key: string; value: Coordinator }[]): Promise<void>;
+    delOrThrow?(id: string): Promise<void>;
     getAll(): Promise<Record<string, Coordinator | undefined>>;
+  };
+  taskDeletion?: {
+    getDeletePreflight(taskIds: string[]): Promise<DeletePreflightResult>;
+    deleteTask(projectId: string, taskId: string, options?: DeleteTaskOptions): Promise<void>;
+    deleteCoordinationTask(
+      projectId: string,
+      taskId: string,
+      options?: DeleteTaskOptions
+    ): Promise<void>;
   };
   resources(): DelegationResources;
   defaultAgent(): Promise<string>;
@@ -1334,6 +1352,94 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       return record;
     });
   }
+  async permanentDeletePreview(id: string): Promise<CoordinatorPermanentDeletePreview> {
+    const record = await this.get(id);
+    if (!this.deps.taskDeletion) throw new Error('Task deletion is unavailable.');
+    const resolvedChildren = await Promise.all(
+      Object.values(record.tasks).map(async (assignment) => ({
+        assignment,
+        task: await this.deps.getTask(assignment.taskId),
+      }))
+    );
+    const childTasks = resolvedChildren.filter(
+      (entry): entry is typeof entry & { task: NonNullable<typeof entry.task> } => !!entry.task
+    );
+    const mainTask = await this.deps.getTask(record.taskId);
+    const liveTaskIds = [
+      ...(mainTask ? [record.taskId] : []),
+      ...childTasks.map(({ task }) => task.id),
+    ];
+    const preflight = liveTaskIds.length
+      ? await this.deps.taskDeletion.getDeletePreflight(liveTaskIds)
+      : { tasks: [] };
+    const facts = new Map(preflight.tasks.map((item) => [item.taskId, item]));
+    return {
+      coordinatorId: record.id,
+      name: record.name,
+      mainTask: mainTask
+        ? this.deleteTaskPreview(
+            {
+              taskId: mainTask.id,
+              projectId: mainTask.projectId,
+              name: mainTask.name,
+            },
+            facts.get(mainTask.id)
+          )
+        : null,
+      childTasks: childTasks.map(({ task }) =>
+        this.deleteTaskPreview(
+          { taskId: task.id, projectId: task.projectId, name: task.name },
+          facts.get(task.id)
+        )
+      ),
+      staleTaskCount: resolvedChildren.length - childTasks.length,
+    };
+  }
+  async permanentlyDelete(id: string, options: CoordinatorPermanentDeleteOptions): Promise<void> {
+    await this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      if (!this.deps.taskDeletion || !this.deps.store.delOrThrow)
+        throw new Error('Permanent main agent deletion is unavailable.');
+      if (options.deleteChildren) {
+        for (const assignment of Object.values(record.tasks)) {
+          const task = await this.deps.getTask(assignment.taskId);
+          if (!task) continue;
+          await this.deps.taskDeletion.deleteTask(task.projectId, task.id, {
+            deleteWorktree: true,
+            deleteBranch: options.deleteChildBranches,
+            deleteConversations: true,
+          });
+        }
+      }
+      const mainTask = await this.deps.getTask(record.taskId);
+      if (mainTask)
+        await this.deps.taskDeletion.deleteCoordinationTask(mainTask.projectId, mainTask.id, {
+          deleteWorktree: true,
+          deleteBranch: true,
+          deleteConversations: true,
+        });
+      await this.deps.store.delOrThrow(record.id);
+      this.deps.emit({
+        coordinatorId: record.id,
+        projectId: record.projectId,
+        taskId: record.taskId,
+      });
+    });
+  }
+  private deleteTaskPreview(
+    task: Pick<CoordinatorDeleteTaskPreview, 'taskId' | 'projectId' | 'name'>,
+    facts?: TaskDeletePreflightItem
+  ): CoordinatorDeleteTaskPreview {
+    return {
+      ...task,
+      hasWorktree: facts?.hasWorktree ?? false,
+      hasUncommittedChanges: facts?.hasUncommittedChanges ?? false,
+      hasDeletableBranch: facts?.hasDeletableBranch ?? false,
+      hostReachable: facts?.hostReachable ?? true,
+      changedLines: facts?.changedLines,
+      unpushedCommits: facts?.unpushedCommits,
+    };
+  }
   private completeFinite(record: Coordinator, note?: string): void {
     if (record.lifecycle.kind !== 'finite')
       throw new Error('Ongoing main agents use checkpoints instead of completion.');
@@ -2011,6 +2117,13 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         await this.locks.runExclusive(record.id, async () => {
           const latest = await this.get(record.id);
           let changed = false;
+          for (const task of Object.values(latest.tasks)) {
+            if (['done', 'cancelled'].includes(task.state)) continue;
+            if (await this.deps.getTask(task.taskId)) continue;
+            task.state = 'cancelled';
+            task.blockedReason = 'Task record no longer exists.';
+            changed = true;
+          }
           for (const event of latest.events)
             if (event.state === 'queued') {
               event.state = 'pending';

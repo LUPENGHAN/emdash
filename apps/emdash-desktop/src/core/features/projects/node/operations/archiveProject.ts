@@ -1,5 +1,10 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { AutomationsService } from '@core/features/automations/api/node/automations-service';
+import { workspaceRegistryTable as workspaces } from '@core/features/workspaces/api/node/registry';
+import {
+  isLiveSourceRepository,
+  LIVE_SOURCE_REPOSITORY_PROTECTED_MESSAGE,
+} from '@core/primitives/app-identity/node/live-source-repository';
 import type { AppDb } from '@core/services/app-db/node/db';
 import { appDbPokes } from '@core/services/app-db/node/pokes';
 import { projects } from '@core/services/app-db/node/schema';
@@ -22,6 +27,13 @@ export async function archiveProject(
 ): Promise<void> {
   const existing = await liveProject(db, projectId);
   if (!existing) throw new Error(`Project ${projectId} not found`);
+  if (
+    isLiveSourceRepository({
+      hostType: existing.repositoryLocation === 'local' ? 'local' : 'remote',
+      path: existing.repositoryPath,
+    })
+  )
+    throw new Error(LIVE_SOURCE_REPOSITORY_PROTECTED_MESSAGE);
   if (existing.archivedAt) return;
 
   const now = new Date().toISOString();
@@ -76,10 +88,22 @@ export async function restoreProject(
 async function liveProject(
   db: AppDb,
   projectId: string
-): Promise<{ archivedAt: string | null } | undefined> {
+): Promise<
+  | {
+      archivedAt: string | null;
+      repositoryLocation: 'local' | 'remote' | null;
+      repositoryPath: string | null;
+    }
+  | undefined
+> {
   const [row] = await db
-    .select({ archivedAt: projects.archivedAt })
+    .select({
+      archivedAt: projects.archivedAt,
+      repositoryLocation: workspaces.location,
+      repositoryPath: workspaces.path,
+    })
     .from(projects)
+    .leftJoin(workspaces, eq(workspaces.id, projects.repositoryWorkspaceId))
     .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
     .limit(1);
   return row;

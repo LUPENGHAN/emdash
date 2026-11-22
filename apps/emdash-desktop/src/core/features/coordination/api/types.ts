@@ -223,6 +223,31 @@ export type CoordinatorActionAvailability = {
   trash: { available: boolean; reason?: string };
 };
 
+export type CoordinatorDeleteTaskPreview = {
+  taskId: string;
+  projectId: string;
+  name: string;
+  hasWorktree: boolean;
+  hasUncommittedChanges: boolean;
+  hasDeletableBranch: boolean;
+  hostReachable: boolean;
+  changedLines?: { added: number; deleted: number } | null;
+  unpushedCommits?: number | null;
+};
+
+export type CoordinatorPermanentDeletePreview = {
+  coordinatorId: string;
+  name: string;
+  mainTask: CoordinatorDeleteTaskPreview | null;
+  childTasks: CoordinatorDeleteTaskPreview[];
+  staleTaskCount: number;
+};
+
+export type CoordinatorPermanentDeleteOptions = {
+  deleteChildren: boolean;
+  deleteChildBranches: boolean;
+};
+
 export function getCoordinatorActionAvailability(
   record: Coordinator
 ): CoordinatorActionAvailability {

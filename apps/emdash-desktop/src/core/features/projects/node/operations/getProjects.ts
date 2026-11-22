@@ -6,6 +6,7 @@ import {
   workspaceRegistryTable as workspaces,
 } from '@core/features/workspaces/api/node/registry';
 import { workspacePathIdentityKey } from '@core/features/workspaces/api/workspace-path-identity';
+import { isLiveSourceRepository } from '@core/primitives/app-identity/node/live-source-repository';
 import type { Project } from '@core/primitives/projects/api';
 import type { AppDb } from '@core/services/app-db/node/db';
 import { projects, type ProjectRow } from '@core/services/app-db/node/schema';
@@ -51,6 +52,9 @@ export function projectFromRow(
         baseRef: row.baseRef,
         connectionId: repository.sshConnectionId ?? '',
         repositoryWorkspaceId: row.repositoryWorkspaceId ?? null,
+        ...(isLiveSourceRepository({ hostType: 'remote', path: repository.path })
+          ? { liveSource: true as const }
+          : {}),
         folderId: row.folderId,
         archivedAt: row.archivedAt,
         createdAt: row.createdAt,
@@ -63,6 +67,9 @@ export function projectFromRow(
         path: repository.path,
         baseRef: row.baseRef,
         repositoryWorkspaceId: row.repositoryWorkspaceId ?? null,
+        ...(isLiveSourceRepository({ hostType: 'local', path: repository.path })
+          ? { liveSource: true as const }
+          : {}),
         folderId: row.folderId,
         archivedAt: row.archivedAt,
         createdAt: row.createdAt,

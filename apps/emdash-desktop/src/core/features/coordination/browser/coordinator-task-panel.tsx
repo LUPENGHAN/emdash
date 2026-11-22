@@ -423,7 +423,6 @@ function WorkspaceOverview({
                     ? '已完成'
                     : '已归档'}
             </span>
-            <LiveBuildBadge />
           </div>
           <p className="mt-1 max-w-3xl text-sm text-foreground-muted">
             {record.purpose || '尚未填写工作目标。可以在对话中继续细化。'}
@@ -694,102 +693,6 @@ function WorkspaceOverview({
         </section>
       )}
     </section>
-  );
-}
-
-function LiveBuildBadge() {
-  const live = (
-    import.meta as ImportMeta & {
-      env?: {
-        VITE_BUILD?: string;
-        VITE_LIVE_REVISION?: string;
-        VITE_LIVE_BRANCH?: string;
-        VITE_LIVE_DIRTY?: string;
-      };
-    }
-  ).env;
-  if (live?.VITE_BUILD !== 'live') return null;
-  return <LiveRuntimeStatus fallback={live} />;
-}
-
-function LiveRuntimeStatus({
-  fallback,
-}: {
-  fallback: {
-    VITE_LIVE_REVISION?: string;
-    VITE_LIVE_BRANCH?: string;
-    VITE_LIVE_DIRTY?: string;
-  };
-}) {
-  const runtime = useQuery({
-    queryKey: ['live-runtime-state'],
-    queryFn: async () => (await getHostClient()).getLiveRuntimeState(undefined),
-    refetchInterval: 2_000,
-  });
-  const state = runtime.data?.state;
-  const [controlling, setControlling] = useState(false);
-  const control = (action: 'restart' | 'mark-good') => {
-    setControlling(true);
-    void getHostClient()
-      .then((client) => client.controlLiveRuntime({ action }))
-      .then((result) => {
-        if (!result.success) throw new Error(result.error);
-        toast.success(action === 'restart' ? '已请求受控重启' : '已标记为可用版本');
-        return runtime.refetch();
-      })
-      .catch((error) => toast.error('实时开发版操作失败', { description: String(error) }))
-      .finally(() => setControlling(false));
-  };
-  const status = state?.status;
-  const statusLabel = status
-    ? {
-        starting: '启动中',
-        running: '运行中',
-        waiting_for_idle: '等待空闲后重启',
-        restarting: '重启中',
-        stopping: '停止中',
-        stopped: '已停止',
-        failed: '运行失败',
-      }[status]
-    : '状态读取中';
-  return (
-    <details className="relative text-xs">
-      <summary className="bg-success/15 text-success cursor-pointer list-none rounded-full px-2 py-0.5">
-        实时开发版 · {statusLabel} · {state?.branch || fallback.VITE_LIVE_BRANCH || '未知分支'} ·{' '}
-        {(state?.runningCommit || fallback.VITE_LIVE_REVISION || '未知提交').slice(0, 12)}
-        {(state?.dirty ?? fallback.VITE_LIVE_DIRTY === '1') ? ' · 有未提交修改' : ' · 已同步'}
-      </summary>
-      <div className="absolute top-full right-0 z-20 mt-2 w-80 space-y-2 rounded-lg border border-border bg-background p-3 shadow-lg">
-        <p>源码：{state?.sourcePath || '正在读取'}</p>
-        {state?.pendingCommit && <p>待应用：{state.pendingCommit.slice(0, 12)}</p>}
-        {state?.lastKnownGoodCommit && (
-          <p>上个可用版本：{state.lastKnownGoodCommit.slice(0, 12)}</p>
-        )}
-        {state?.error && (
-          <p role="alert" className="text-foreground-destructive">
-            {state.error}
-          </p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={controlling || !state}
-            onClick={() => control('restart')}
-          >
-            受控重启
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={controlling || !state || state.dirty || state.status !== 'running'}
-            onClick={() => control('mark-good')}
-          >
-            标记为可用版本
-          </Button>
-        </div>
-      </div>
-    </details>
   );
 }
 

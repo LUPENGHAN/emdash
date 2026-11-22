@@ -114,7 +114,8 @@ export const CreateTaskModal = observer(function CreateTaskModal({
     resolvedInitialPR,
     defaults.linkedType,
     initialWorkspaceId,
-    initialName
+    initialName,
+    projectData?.liveSource === true
   );
 
   const { includeIssueContextByDefault } = useTaskSettings();
@@ -192,6 +193,11 @@ export const CreateTaskModal = observer(function CreateTaskModal({
                 },
               ]}
             />
+            <p className="text-xs text-foreground-muted">
+              {projectData?.liveSource
+                ? '实时开发版固定使用当前 Emdash 源码仓库，不创建分支或工作树。'
+                : '初始需求留空时只创建任务、分支和工作区，不启动 Agent；填写需求后才创建会话。'}
+            </p>
           </TaskStateProvider>
         </div>
       </Dialog.Body>

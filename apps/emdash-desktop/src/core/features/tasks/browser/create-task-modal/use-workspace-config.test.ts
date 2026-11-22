@@ -103,11 +103,13 @@ function Probe({
   isUnborn = false,
   hasRepository = true,
   pr = null,
+  repositoryRootOnly = false,
 }: {
   initial: Parameters<typeof useWorkspaceConfig>[0]['initial'];
   isUnborn?: boolean;
   hasRepository?: boolean;
   pr?: Parameters<typeof useWorkspaceConfig>[0]['pr'];
+  repositoryRootOnly?: boolean;
 }) {
   latestState = useWorkspaceConfig({
     projectId: 'project-1',
@@ -120,6 +122,7 @@ function Probe({
     taskName: 'Generated task branch',
     linkedIssue: null,
     createBranchAndWorktreeDefault: true,
+    repositoryRootOnly,
     resetKey: 'project-1',
     initial,
   });
@@ -162,6 +165,7 @@ describe('useWorkspaceConfig branch selection', () => {
       isUnborn?: boolean;
       hasRepository?: boolean;
       pr?: Parameters<typeof useWorkspaceConfig>[0]['pr'];
+      repositoryRootOnly?: boolean;
     } = {}
   ) {
     await act(async () => {
@@ -416,5 +420,27 @@ describe('useWorkspaceConfig branch selection', () => {
     expect(latestState?.presetId).toBe('repo-root');
     expect(latestState?.isValid).toBe(true);
     expect(latestState?.resolvedConfig.git).toEqual({ kind: 'none' });
+  });
+
+  it('pins Live self-development to the repository root', async () => {
+    await renderProbe(
+      {
+        mode: 'new-worktree',
+        presetId: 'new-worktree',
+      },
+      { repositoryRootOnly: true }
+    );
+
+    expect(latestState?.repositoryRootOnly).toBe(true);
+    expect(latestState?.mode).toBe('existing');
+    expect(latestState?.presetId).toBe('repo-root');
+    expect(latestState?.resolvedConfig).toEqual({
+      version: '2',
+      git: { kind: 'none' },
+      workspace: { kind: 'repository-instance', workspaceId: 'repo-workspace-1' },
+    });
+
+    act(() => latestState?.setPresetId('new-worktree'));
+    expect(latestState?.presetId).toBe('repo-root');
   });
 });

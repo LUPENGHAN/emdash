@@ -35,6 +35,8 @@ export const localProjectSchema = z.object({
    */
   baseRef: z.string().nullable(),
   repositoryWorkspaceId: z.string().nullable(),
+  /** True only for the source checkout currently hosting the Live build. */
+  liveSource: z.literal(true).optional(),
   /** Null when the project is ungrouped. Absent on objects built before folders existed. */
   folderId: z.string().nullable().optional(),
   /** Null when the project is in the working list. */
@@ -52,6 +54,8 @@ export const sshProjectSchema = z.object({
   baseRef: z.string().nullable(),
   connectionId: z.string(),
   repositoryWorkspaceId: z.string().nullable(),
+  /** Remote projects can never host the local Live build; kept for the shared shape. */
+  liveSource: z.literal(true).optional(),
   folderId: z.string().nullable().optional(),
   archivedAt: z.string().nullable().optional(),
   createdAt: z.string(),

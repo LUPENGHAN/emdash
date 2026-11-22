@@ -24,7 +24,8 @@ export function useCreateTaskState(
   initialPR?: PullRequest,
   initialLinkedType: LinkedType = null,
   initialWorkspaceId?: string,
-  initialName?: string
+  initialName?: string,
+  repositoryRootOnly = false
 ) {
   const { autoGenerateName, createBranchAndWorktree, includeIssueContextByDefault } =
     useTaskSettings();
@@ -130,6 +131,7 @@ export function useCreateTaskState(
     taskName: taskName.effectiveTaskName,
     linkedIssue: linkedType === 'issue' ? linkedIssue : null,
     createBranchAndWorktreeDefault: createBranchAndWorktree,
+    repositoryRootOnly,
     resetKey: projectId,
     initial: initialWorkspaceId
       ? {

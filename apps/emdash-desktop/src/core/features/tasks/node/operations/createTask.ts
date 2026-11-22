@@ -39,6 +39,10 @@ import {
   findWorkspaceTombstoneConflict,
   type WorkspaceTombstoneConflict,
 } from '@core/features/workspaces/api/node/registry/workspace-tombstones';
+import {
+  isLiveSourceRepository,
+  LIVE_SOURCE_REPOSITORY_PROTECTED_MESSAGE,
+} from '@core/primitives/app-identity/node/live-source-repository';
 import type { ConversationConfig } from '@core/primitives/conversations/api';
 import type { Conversation } from '@core/primitives/conversations/api';
 import type {
@@ -91,6 +95,20 @@ export async function prepareCreateTask(
   const project = attached.data;
 
   const { workspaceConfig } = params;
+  if (
+    isLiveSourceRepository({
+      hostType: project.host.type === 'local' ? 'local' : 'remote',
+      path: project.repoPath,
+    }) &&
+    (workspaceConfig.workspace.kind !== 'repository-instance' ||
+      workspaceConfig.workspace.workspaceId !== project.project.repositoryWorkspaceId ||
+      workspaceConfig.git.kind !== 'none')
+  ) {
+    return err({
+      type: 'provision-failed',
+      message: `${LIVE_SOURCE_REPOSITORY_PROTECTED_MESSAGE} 请选择当前仓库，不要创建或切换分支。`,
+    });
+  }
   if (workspaceConfig.git.kind === 'management' && params.taskConfig.role !== 'coordination')
     return err({
       type: 'provision-failed',

@@ -23,6 +23,7 @@
     "dev:main": "node ../model-gateway/scripts/build.mjs && node ../../tooling/scripts/ensure-packages-built.mjs && electron-vite dev --watch main",
     "dev:renderer": "node ../model-gateway/scripts/build.mjs && node ../../tooling/scripts/ensure-packages-built.mjs && electron-vite dev --watch renderer",
     "live": "node ../model-gateway/scripts/build.mjs && node ../../tooling/scripts/ensure-packages-built.mjs && tsx scripts/live/supervisor.ts",
+    "live:install-launcher": "tsx scripts/live/install-launcher.ts",
     "live:status": "tsx scripts/live/control.ts status",
     "live:restart": "tsx scripts/live/control.ts restart",
     "live:mark-good": "tsx scripts/live/control.ts mark-good",

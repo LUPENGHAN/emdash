@@ -77,6 +77,8 @@ export type WorkspaceConfigState = {
    * conflicting workspace so the UI can warn and offer a CTA.
    */
   branchConflict: ProjectWorkspaceOption | null;
+  /** Live self-development is pinned to the repository checkout that hosts the app. */
+  repositoryRootOnly?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -117,8 +119,10 @@ function defaultPreset(opts: {
   mode: WorkspaceMode;
   hasPR: boolean;
   worktreesDisabled: boolean;
+  repositoryRootOnly: boolean;
   initialPresetId?: WorkspacePresetId;
 }): WorkspacePresetId {
+  if (opts.repositoryRootOnly) return 'repo-root';
   if (opts.worktreesDisabled) {
     if (opts.initialPresetId && !presetRequiresCommits(opts.initialPresetId)) {
       return opts.initialPresetId;
@@ -163,6 +167,7 @@ export function useWorkspaceConfig(opts: {
   taskName: string;
   linkedIssue: LinkedIssue | null;
   createBranchAndWorktreeDefault?: boolean;
+  repositoryRootOnly?: boolean;
   resetKey?: unknown;
   initial?: WorkspaceConfigInitial;
 }): WorkspaceConfigState {
@@ -177,12 +182,13 @@ export function useWorkspaceConfig(opts: {
     taskName,
     linkedIssue,
     createBranchAndWorktreeDefault = true,
+    repositoryRootOnly = false,
     resetKey,
     initial,
   } = opts;
 
   const hasPR = !!pr;
-  const worktreesDisabled = isUnborn || !hasRepository;
+  const worktreesDisabled = repositoryRootOnly || isUnborn || !hasRepository;
   const initialMode = defaultMode(worktreesDisabled, initial?.mode);
   const [mode, setModeRaw] = useState<WorkspaceMode>(initialMode);
   const [presetId, setPresetIdRaw] = useState<WorkspacePresetId>(() =>
@@ -190,6 +196,7 @@ export function useWorkspaceConfig(opts: {
       mode: initialMode,
       hasPR,
       worktreesDisabled,
+      repositoryRootOnly,
       initialPresetId: initial?.presetId,
     })
   );
@@ -203,14 +210,14 @@ export function useWorkspaceConfig(opts: {
     setPrevResetKey(resetKey);
     const nextMode = defaultMode(worktreesDisabled, undefined);
     setModeRaw(nextMode);
-    setPresetIdRaw(defaultPreset({ mode: nextMode, hasPR, worktreesDisabled }));
+    setPresetIdRaw(defaultPreset({ mode: nextMode, hasPR, worktreesDisabled, repositoryRootOnly }));
     setSelectedWorkspaceId(null);
   }
 
   const [prevWorktreesDisabled, setPrevWorktreesDisabled] = useState(worktreesDisabled);
   if (worktreesDisabled !== prevWorktreesDisabled) {
     setPrevWorktreesDisabled(worktreesDisabled);
-    if (worktreesDisabled && presetRequiresCommits(presetId)) {
+    if (repositoryRootOnly || (worktreesDisabled && presetRequiresCommits(presetId))) {
       setModeRaw('existing');
       setPresetIdRaw('repo-root');
       setSelectedWorkspaceId(null);
@@ -222,26 +229,37 @@ export function useWorkspaceConfig(opts: {
   if (hasPR !== prevHasPR) {
     setPrevHasPR(hasPR);
     if (hasPR) {
-      if (!worktreesDisabled) {
+      if (!worktreesDisabled && !repositoryRootOnly) {
         setModeRaw('new-worktree');
         setPresetIdRaw('checkout-pr');
       }
     } else if (presetId === 'checkout-pr' || presetId === 'pr-new-branch') {
       const nextMode = defaultMode(worktreesDisabled, undefined);
       setModeRaw(nextMode);
-      setPresetIdRaw(defaultPreset({ mode: nextMode, hasPR: false, worktreesDisabled }));
+      setPresetIdRaw(
+        defaultPreset({
+          mode: nextMode,
+          hasPR: false,
+          worktreesDisabled,
+          repositoryRootOnly,
+        })
+      );
     }
   }
 
   const setMode = (next: WorkspaceMode) => {
-    const normalizedMode = worktreesDisabled && next === 'new-worktree' ? 'existing' : next;
+    const normalizedMode =
+      (worktreesDisabled || repositoryRootOnly) && next === 'new-worktree' ? 'existing' : next;
     setModeRaw(normalizedMode);
-    setPresetIdRaw(defaultPreset({ mode: normalizedMode, hasPR, worktreesDisabled }));
+    setPresetIdRaw(
+      defaultPreset({ mode: normalizedMode, hasPR, worktreesDisabled, repositoryRootOnly })
+    );
     if (normalizedMode !== 'existing') setSelectedWorkspaceId(null);
   };
 
   const setPresetId = (id: WorkspacePresetId) => {
-    const normalizedId = worktreesDisabled && presetRequiresCommits(id) ? 'repo-root' : id;
+    const normalizedId =
+      repositoryRootOnly || (worktreesDisabled && presetRequiresCommits(id)) ? 'repo-root' : id;
     setPresetIdRaw(normalizedId);
     setModeRaw(modeForPreset(normalizedId));
     // Clear selected workspace when leaving 'existing' presets.
@@ -429,5 +447,6 @@ export function useWorkspaceConfig(opts: {
     isValid,
     missingBranch,
     branchConflict,
+    repositoryRootOnly,
   };
 }

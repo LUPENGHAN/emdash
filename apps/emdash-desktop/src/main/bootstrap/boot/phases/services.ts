@@ -224,6 +224,7 @@ import type { TaskProviderOpts } from '@core/features/workspaces/api/node/worksp
 import { createWorkspaceDeletionSweepKind } from '@core/features/workspaces/node/sweep/workspace-deletion-sweep';
 import { WorkspaceRegistryBackfillService } from '@core/features/workspaces/node/sync/workspace-registry-backfill';
 import { WorkspaceRegistrySyncService } from '@core/features/workspaces/node/sync/workspace-registry-sync-service';
+import { getLiveSourceRepositoryPath } from '@core/primitives/app-identity/node/live-source-repository';
 import { hostPathFromNative } from '@core/primitives/desktop-runtime/api';
 import { startPeriodicSweep } from '@core/primitives/periodic-sweep/node/periodic-sweep';
 import { DEFAULT_AGENT_GIT_CREDENTIALS } from '@core/primitives/project-settings/api';
@@ -1398,6 +1399,27 @@ export async function bootServices(
     availability: desktopRuntimes.hostAvailability,
     adapter: projectAttachmentAdapter,
   });
+  const liveSourceRepositoryPath = getLiveSourceRepositoryPath();
+  if (liveSourceRepositoryPath) {
+    runInBackground('live-source-project', async () => {
+      const existing = await getProjectByPath(db, LOCAL_HOST_REF, liveSourceRepositoryPath);
+      if (existing) return;
+      const created = await createProject(
+        { db, runtimes },
+        {
+          type: 'local',
+          path: liveSourceRepositoryPath,
+          name: 'emdash',
+        }
+      );
+      if (!created.success) {
+        log.error('Could not bind the Live source repository', {
+          path: liveSourceRepositoryPath,
+          error: created.error,
+        });
+      }
+    });
+  }
   const sessionLaunchContexts = new TaskSessionLaunchContextResolver({
     db,
     projects: projectManager,
@@ -1732,6 +1754,13 @@ export async function bootServices(
     }),
     onSchedulingChange: scheduleDelegations,
     store: new AppDbKeyValueStore<Record<string, Coordinator>>(db, 'coordinators'),
+    taskDeletion: {
+      getDeletePreflight: (taskIds) => taskService.getDeletePreflight(taskIds),
+      deleteTask: (projectId, taskId, options) =>
+        taskService.deleteTask(projectId, taskId, options),
+      deleteCoordinationTask: (projectId, taskId, options) =>
+        taskService.deleteCoordinationTask(projectId, taskId, options),
+    },
     resources: () => {
       if (!taskDelegation.service) throw new Error('Task resources are still starting.');
       return taskDelegation.service.resources;

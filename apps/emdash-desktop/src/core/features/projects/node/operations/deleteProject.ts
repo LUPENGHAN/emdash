@@ -21,6 +21,10 @@ import {
   liveWorkspaces,
   workspaceRegistryTable as workspaces,
 } from '@core/features/workspaces/api/node/registry';
+import {
+  isLiveSourceRepository,
+  LIVE_SOURCE_REPOSITORY_PROTECTED_MESSAGE,
+} from '@core/primitives/app-identity/node/live-source-repository';
 import type { TelemetryService } from '@core/primitives/telemetry/api/telemetry';
 import type { MutationError } from '@core/primitives/wire/api/mutations';
 import type { AppDb } from '@core/services/app-db/node/db';
@@ -67,6 +71,7 @@ export async function deleteProject(
       name: projects.name,
       repositoryWorkspaceId: projects.repositoryWorkspaceId,
       repositoryLocation: workspaces.location,
+      repositoryPath: workspaces.path,
       repositorySshConnectionId: workspaces.sshConnectionId,
     })
     .from(projects)
@@ -75,6 +80,17 @@ export async function deleteProject(
     .limit(1);
   if (!project) {
     return err({ type: 'project-not-found', message: `Project ${projectId} was not found` });
+  }
+  if (
+    isLiveSourceRepository({
+      hostType: project.repositoryLocation === 'local' ? 'local' : 'remote',
+      path: project.repositoryPath,
+    })
+  ) {
+    return err({
+      type: 'live-source-repository-protected',
+      message: LIVE_SOURCE_REPOSITORY_PROTECTED_MESSAGE,
+    });
   }
   try {
     await dependencies.beforeDelete?.(projectId);

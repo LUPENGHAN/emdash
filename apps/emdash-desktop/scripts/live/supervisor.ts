@@ -154,6 +154,9 @@ export function startLiveChild(
       VITE_LIVE_DIRTY: source.dirty ? '1' : '0',
       EMDASH_USER_DATA_DIR: profilePath,
       EMDASH_LIVE_STATE_FILE: statePath,
+      // This is the only repository the Live app may use for self-development.
+      // Packaged builds never receive this capability.
+      EMDASH_LIVE_SOURCE_PATH: source.sourcePath,
       EMDASH_LOG_FILE: logPath,
       LOG_LEVEL: process.env.LOG_LEVEL ?? 'debug',
     },

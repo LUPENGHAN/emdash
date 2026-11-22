@@ -8,6 +8,7 @@ export type ConfirmActionDialogArgs = {
   title: string;
   description: ReactNode;
   confirmLabel?: string;
+  cancelLabel?: string;
   variant?: 'destructive' | 'default';
   /** Optional secondary choice surfaced with the confirmation. */
   checkbox?: { label: string; defaultChecked?: boolean };
@@ -19,6 +20,7 @@ export function ConfirmActionDialog({
   title,
   description,
   confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
   variant = 'destructive',
   checkbox,
 }: ConfirmActionDialogArgs) {
@@ -40,8 +42,8 @@ export function ConfirmActionDialog({
         )}
       </Dialog.Body>
       <Dialog.Footer>
-        <Button variant="secondary" onClick={controller.dismiss}>
-          Cancel
+        <Button variant="secondary" onClick={controller.dismiss} autoFocus>
+          {cancelLabel}
         </Button>
         <ConfirmButton
           data-testid="confirm-action-submit"

@@ -25,6 +25,7 @@ import {
   workspaceLifecycleSchema,
   workspaceWorkItemSchema,
   type Coordinator,
+  type CoordinatorPermanentDeletePreview,
   type CoordinationEvent,
   type ResolvedAgentSelection,
   type TakeoverPreview,
@@ -294,6 +295,21 @@ export const coordinationContract = defineContract({
   restoreTrash: procedure({
     input: z.object({ id: z.string() }),
     output: z.custom<Coordinator>(),
+  }),
+  permanentDeletePreview: procedure({
+    input: z.object({ id: z.string() }),
+    output: z.custom<CoordinatorPermanentDeletePreview>(),
+  }),
+  permanentlyDelete: procedure({
+    input: z.object({
+      id: z.string(),
+      options: z.object({
+        deleteChildren: z.boolean(),
+        deleteChildBranches: z.boolean(),
+      }),
+    }),
+    output: z.void(),
+    callTimeoutMs: 0,
   }),
   review: procedure({
     input: z.object({

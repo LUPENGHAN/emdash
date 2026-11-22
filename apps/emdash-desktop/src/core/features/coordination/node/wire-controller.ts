@@ -68,6 +68,8 @@ export function createCoordinationWireController(service: CoordinatorService) {
     completeAndArchive: ({ id, note }) => service.completeAndArchive(id, note),
     trash: ({ id }) => service.trash(id),
     restoreTrash: ({ id }) => service.restoreTrash(id),
+    permanentDeletePreview: ({ id }) => service.permanentDeletePreview(id),
+    permanentlyDelete: ({ id, options }) => service.permanentlyDelete(id, options),
     review: ({ id, taskId, accepted, note, resultVersion }) =>
       service.review(id, taskId, accepted, note, resultVersion),
     retryDelivery: ({ id }) => service.deliverPending(id),

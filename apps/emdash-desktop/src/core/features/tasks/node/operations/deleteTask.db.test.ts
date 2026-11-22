@@ -80,6 +80,23 @@ describe('deleteTask', () => {
     expect((await fixture.db.select().from(tasks))[0].deletedAt).toBeNull();
   });
 
+  it('allows the dedicated permanent-delete flow to remove a main agent runtime', async () => {
+    await seedTask();
+    await fixture.db.update(tasks).set({ type: 'coordination' }).where(eq(tasks.id, 'task-1'));
+    const { runtimes } = makeRuntimes();
+    const { dependencies } = makeDependencies(runtimes);
+
+    const result = await deleteTask(dependencies, {
+      taskId: 'task-1',
+      allowCoordination: true,
+      deleteBranch: true,
+      deleteConversations: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(await fixture.db.select().from(tasks).where(eq(tasks.id, 'task-1'))).toHaveLength(0);
+  });
+
   function seedTaskConversation(id: string): void {
     const registry = createConversationRegistry(fixture.db);
     registry.adopt({

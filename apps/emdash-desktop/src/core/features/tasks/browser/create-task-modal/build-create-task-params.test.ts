@@ -41,6 +41,14 @@ function makeInitialConversationState(
 }
 
 describe('buildInitialConversation', () => {
+  it('does not create an agent conversation when the initial request is empty', () => {
+    expect(
+      buildInitialConversation(
+        makeInitialConversationState(agent('codex'), false, { prompt: '   ' })
+      )
+    ).toBeUndefined();
+  });
+
   it('carries a provider source and drops the agent catalog model', () => {
     const built = buildInitialConversation(
       makeInitialConversationState(agent('claude'), false, {

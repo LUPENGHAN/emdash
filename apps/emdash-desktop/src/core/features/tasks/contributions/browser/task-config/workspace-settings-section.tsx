@@ -43,6 +43,17 @@ export function WorkspaceSettingsSection({ defaultOpen = true }: WorkspaceSettin
   const hasSettings = !PRESETS_WITHOUT_SETTINGS.has(presetId);
   const Panel = PRESET_PANELS[presetId as Exclude<WorkspacePresetId, 'repo-root'>];
 
+  if (workspaceConfig.repositoryRootOnly) {
+    return (
+      <div className="flex flex-col gap-2 rounded-md border border-border bg-background-secondary p-3">
+        <p className="text-sm font-medium">当前 Emdash 源码仓库</p>
+        <p className="text-xs text-foreground-muted">
+          Live 开发版只在启动它的仓库中直接修改；不会创建、切换分支或工作树。
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <WorkspacePresetPicker

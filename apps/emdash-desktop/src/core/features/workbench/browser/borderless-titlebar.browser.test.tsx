@@ -36,6 +36,7 @@ vi.mock('@emdash/ui/react/primitives', () => ({
     Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
     Content: () => null,
   },
+  toast: { success: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock('@core/features/workbench/browser/window-controls', () => ({
@@ -118,5 +119,7 @@ describe('BorderlessTitlebar', () => {
     expect(host.querySelector('button[aria-label="Go back"]')).toBeNull();
     expect(host.querySelector('button[aria-label="Go forward"]')).toBeNull();
     expect(host.querySelector('button[aria-label="Usage statistics"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Agent 运行监控"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="立即完整重启"]')).toBeNull();
   });
 });
