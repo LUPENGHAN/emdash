@@ -88,6 +88,8 @@ export type AgentControlAction =
       resultVersion: number;
     }
   | { kind: 'list_projects'; query?: string }
+  | { kind: 'get_main_agent_context' }
+  | { kind: 'import_project'; requestId: string; repositoryUrl: string; name?: string }
   | { kind: 'get_task_status'; taskId: string }
   | { kind: 'add_work_item'; requestId: string; title: string; detail?: string }
   | {

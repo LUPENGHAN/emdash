@@ -5,6 +5,7 @@ import { getConversationsClient } from '@core/features/conversations/api/browser
 import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
 import { getCoordinationClient } from '@core/features/coordination/api/browser/client';
 import { getIntegrationsClient } from '@core/features/integrations/api/browser/client';
+import { getMemoryClient } from '@core/features/memory/api/browser/client';
 import { getProjectsWireClient } from '@core/features/projects/api/browser/client';
 import {
   asAvailableProject,
@@ -12,6 +13,7 @@ import {
   getProjectViewStore,
 } from '@core/features/projects/api/browser/stores/project-selectors';
 import { projectViewDef } from '@core/features/projects/contributions/views';
+import { getRequirementsClient } from '@core/features/requirements/api/browser/client';
 import { getTaskPrAssociationStore } from '@core/features/source-control/api/browser/stores/task-source-control-selectors';
 import {
   getTaskManagerStore,
@@ -142,6 +144,54 @@ export async function prepareCoordinator(input: {
     taskId: record.taskId,
     conversationId: record.conversationId,
   };
+}
+
+export async function prepareStandaloneCoordinator(input: {
+  wrapper: string;
+  mainWrapper: string;
+  repository: string;
+  worktreeRoot: string;
+}) {
+  const { project } = await prepareProject(input);
+  const agents = await getAgentsClient();
+  const selected = await agents.setUsedInstallation({
+    host: { type: 'local', id: 'local' },
+    id: 'opencode',
+    selection: { kind: 'path', path: input.mainWrapper },
+  });
+  if (!selected.success) throw new Error(JSON.stringify(selected.error));
+  const client = await getCoordinationClient();
+  const record = await client.createCrossProject({
+    id: crypto.randomUUID(),
+    name: '独立验收主任务',
+    purpose: '验证不依赖业务项目的顶层主任务完整流程',
+    lifecycle: { kind: 'ongoing', state: 'active' },
+    projectIds: [],
+    primary: { agent: 'opencode', connection: 'official', effort: null },
+  });
+  return {
+    id: record.id,
+    projectId: record.projectId,
+    targetProjectId: project.id,
+    taskId: record.taskId,
+    conversationId: record.conversationId,
+  };
+}
+
+export async function seedMainAgentKnowledge(projectId: string) {
+  const [requirements, memory] = await Promise.all([getRequirementsClient(), getMemoryClient()]);
+  await requirements.add({ projectId, title: '验证项目 TODO 聚合' });
+  await memory.add({
+    scope: 'project',
+    projectId,
+    title: '验证项目决策聚合',
+    detail: '主任务概览应显示这条决策。',
+  });
+  await memory.add({
+    scope: 'global',
+    title: '验证全局记忆聚合',
+    detail: '所有主任务都应读取这条记忆。',
+  });
 }
 
 export async function coordinatorSnapshot(taskId: string) {

@@ -1,4 +1,5 @@
 import { computed, makeAutoObservable, observable } from 'mobx';
+import { isMainAgentHostProject } from '@core/features/coordination/api/main-agent-host';
 import { type ProjectStore } from '@core/features/projects/api/browser/stores/project';
 import type { ProjectManagerStore } from '@core/features/projects/api/browser/stores/project-manager';
 import { asAvailableProject } from '@core/features/projects/api/browser/stores/project-selectors';
@@ -210,7 +211,9 @@ export class SidebarStore {
   }
 
   get orderedProjects(): ProjectStore[] {
-    const all = Array.from(this.projectManager.projects.values());
+    const all = Array.from(this.projectManager.projects.values()).filter(
+      (project) => !isMainAgentHostProject(project.id)
+    );
 
     return [...all].sort((a, b) => {
       const ai = this.projectOrder.indexOf(a.id);
@@ -262,7 +265,7 @@ export class SidebarStore {
   get pinnedSidebarEntries(): { projectId: string; taskId: string }[] {
     const pairs: { projectId: string; task: TaskStore }[] = [];
     for (const project of this.projectManager.projects.values()) {
-      if (project.data?.archivedAt) continue;
+      if (project.data?.archivedAt || isMainAgentHostProject(project.id)) continue;
       const context = asAvailableProject(project);
       if (!context) continue;
       const projectId = project.id;

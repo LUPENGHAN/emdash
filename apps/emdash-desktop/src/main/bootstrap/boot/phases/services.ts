@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -81,6 +82,7 @@ import {
   usageSessionRoots,
 } from '@core/features/conversations/node/usage-stats/usage-attribution';
 import { createUsageStatsService } from '@core/features/conversations/node/usage-stats/usage-stats-service';
+import { MAIN_AGENT_HOST_PROJECT_ID } from '@core/features/coordination/api/main-agent-host';
 import type { Coordinator } from '@core/features/coordination/api/types';
 import { CoordinatorDocuments } from '@core/features/coordination/node/coordinator-documents';
 import { CoordinatorService } from '@core/features/coordination/node/coordinator-service';
@@ -174,6 +176,8 @@ import {
   ProjectBaselineSyncTriggers,
   resolveProjectBaselineMergeTarget,
 } from '@core/features/projects/node/baseline-sync-triggers';
+import { createProject } from '@core/features/projects/node/operations/create-project';
+import { createProjectFromRemote } from '@core/features/projects/node/operations/create-project-from-remote';
 import type { ProjectDeletionDependencies } from '@core/features/projects/node/operations/deleteProject';
 import { getProjects } from '@core/features/projects/node/operations/getProjects';
 import {
@@ -267,7 +271,7 @@ import { sweepSessionHygiene } from '@main/core/runtime/operations/session-hygie
 import { createDesktopSessionIntentStores } from '@main/core/runtime/session-intent-stores';
 import { executeOAuthFlow } from '@main/core/shared/oauth-flow';
 import { getTerminalColorEnv } from '@main/core/terminal-shell/color-env';
-import { runLocalCommand } from '@main/core/utils/exec';
+import { getGitExecutable, runLocalCommand } from '@main/core/utils/exec';
 import { desktopKeyValueStore } from '@main/db/kv';
 import { cleanupLegacyOperationsDatabases } from '@main/db/legacy-operations-cleanup';
 import type { DesktopRuntimes } from '@main/gateway/desktop-runtimes';
@@ -797,6 +801,101 @@ export async function bootServices(
         if (!coordinationRuntime.background)
           throw new Error('Background agent control is starting.');
         return coordinationRuntime.background.dispatch(caller, action);
+      }
+      if (action.kind === 'get_main_agent_context') {
+        await assertActiveAgentCaller(caller);
+        const service = coordinationRuntime.service;
+        if (!service) throw new Error('Main agent coordination is starting.');
+        const main = await service.getByTask(caller.taskId);
+        if (!main) throw new Error('Only a main-agent conversation can read this context.');
+        const projectIds: string[] = [];
+        for (const projectId of main.projectIds) {
+          if (await service.mayAccessProject(caller, projectId, 'read')) projectIds.push(projectId);
+        }
+        const projects = await Promise.all(
+          projectIds.map(async (projectId) => ({
+            project: await getProjectById(db, projectId),
+            requirements: await requirementsService.list(projectId),
+            decisions: await memoryService.list({ kind: 'project', projectId }),
+          }))
+        );
+        return {
+          text: JSON.stringify({
+            workspace: {
+              id: main.id,
+              name: main.name,
+              purpose: main.purpose,
+              lifecycle: main.lifecycle,
+              workItems: Object.values(main.workItems),
+              checkpoints: main.checkpoints,
+            },
+            projects: projects.map(({ project, requirements, decisions }, index) => ({
+              id: projectIds[index],
+              name: project?.name ?? projectIds[index],
+              requirements,
+              decisions,
+            })),
+            globalMemory: await memoryService.list({ kind: 'global' }),
+          }),
+        };
+      }
+      if (action.kind === 'import_project') {
+        await assertActiveAgentCaller(caller);
+        const service = coordinationRuntime.service;
+        if (!service) throw new Error('Main agent coordination is starting.');
+        const main = await service.getByTask(caller.taskId);
+        if (!main) throw new Error('Only a main-agent conversation can import a project.');
+        let project = await getProjectById(db, action.requestId);
+        if (!project) {
+          const url = action.repositoryUrl.trim();
+          const inferredName =
+            url
+              .split(/[?#]/, 1)[0]
+              ?.replace(/\/+$/, '')
+              .split(/[/:]/)
+              .at(-1)
+              ?.replace(/\.git$/i, '') || 'repository';
+          const name = action.name?.trim() || inferredName;
+          const directory = `${name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'repository'}-${action.requestId.slice(0, 8)}`;
+          const root = join(app.getPath('userData'), 'agent-imported-repositories');
+          await mkdir(root, { recursive: true });
+          const imported = await createProjectFromRemote(
+            {
+              db,
+              runtimes,
+              mintCloneCredentials: (input) => gitCredentials.mintCloneCredentials(input),
+            },
+            {
+              projectId: action.requestId,
+              host: { type: 'local' },
+              mode: 'clone',
+              repositoryUrl: url,
+              targetPath: join(root, directory),
+              name,
+            },
+            {
+              jobId: action.requestId,
+              signal: new AbortController().signal,
+              progress: () => {},
+            },
+            () => {}
+          );
+          if (!imported.success) throw new Error(imported.error.message);
+          project = imported.data;
+        }
+        const projectIds = [...new Set([...main.projectIds, project.id])];
+        const projectAccess =
+          main.projectAccess?.mode === 'selected'
+            ? {
+                mode: 'selected' as const,
+                projectIds: [...new Set([...main.projectAccess.projectIds, project.id])],
+              }
+            : main.projectAccess;
+        await service.update(main.id, {
+          projectIds,
+          ...(projectAccess && { projectAccess }),
+        });
+        return { text: JSON.stringify(project) };
       }
       if (
         [
@@ -1388,6 +1487,67 @@ export async function bootServices(
   appScope.add(() => {
     delegationDrainStopped = true;
   });
+  let mainAgentHostProjectPromise: Promise<string> | undefined;
+  const ensureMainAgentHostProject = () => {
+    if (mainAgentHostProjectPromise) return mainAgentHostProjectPromise;
+    mainAgentHostProjectPromise = (async () => {
+      const repositoryPath = join(app.getPath('userData'), 'main-agent-workspaces');
+      const seedRepository = async () => {
+        const git = getGitExecutable();
+        try {
+          await runLocalCommand(git, ['-C', repositoryPath, 'rev-parse', '--verify', 'HEAD']);
+          return;
+        } catch {
+          const readme = join(repositoryPath, 'README.md');
+          await writeFile(
+            readme,
+            '# Emdash 主任务管理仓库\n\n此仓库由 Emdash 自动管理，用于隔离顶层主任务的工作树和管理文档。\n',
+            { flag: 'wx' }
+          ).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== 'EEXIST') throw error;
+          });
+          await runLocalCommand(git, ['-C', repositoryPath, 'add', 'README.md']);
+          await runLocalCommand(git, [
+            '-C',
+            repositoryPath,
+            '-c',
+            'user.name=Emdash',
+            '-c',
+            'user.email=emdash@local',
+            'commit',
+            '-m',
+            'chore: initialize main agent workspace',
+          ]);
+        }
+      };
+      const existing = await getProjectById(db, MAIN_AGENT_HOST_PROJECT_ID);
+      if (existing) {
+        await seedRepository();
+        return existing.id;
+      }
+      await mkdir(repositoryPath, { recursive: true });
+      const created = await createProject(
+        { db, runtimes },
+        {
+          type: 'local',
+          id: MAIN_AGENT_HOST_PROJECT_ID,
+          path: repositoryPath,
+          name: 'Emdash 主任务管理',
+          initGitRepository: true,
+        }
+      );
+      if (!created.success)
+        throw new Error(
+          `无法创建主任务管理仓库：${'message' in created.error ? created.error.message : created.error.type}`
+        );
+      await seedRepository();
+      return created.data.id;
+    })().catch((error) => {
+      mainAgentHostProjectPromise = undefined;
+      throw error;
+    });
+    return mainAgentHostProjectPromise;
+  };
   const coordinatorService = new CoordinatorService({
     delegations: {
       status: async (taskId) => {
@@ -1476,6 +1636,7 @@ export async function bootServices(
       if (!project || project.archivedAt)
         throw new Error('The project is unavailable or archived.');
     },
+    ensureMainAgentHostProject,
     setTaskStatus: (taskId, status) =>
       taskService.updateTaskStatus(taskId, status, telemetryService),
     emit: (event) => {
@@ -1685,12 +1846,14 @@ export async function bootServices(
 
   appScope.add(
     projectEvents.on('project:created', async (project) => {
+      if (project.id === MAIN_AGENT_HOST_PROJECT_ID) return;
       await coordinatorService.ensureProject(project.id);
     })
   );
   void getProjects(db)
     .then(async (projects) => {
       for (const project of projects) {
+        if (project.id === MAIN_AGENT_HOST_PROJECT_ID) continue;
         await coordinatorService.ensureProject(project.id).catch((error) =>
           log.warn('Could not restore project main agent', {
             projectId: project.id,

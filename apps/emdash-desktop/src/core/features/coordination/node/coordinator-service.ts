@@ -68,6 +68,7 @@ type Dependencies = {
     id: string
   ): Promise<Pick<Task, 'id' | 'projectId' | 'name' | 'type' | 'archivedAt'> | null>;
   assertProjectAvailable(projectId: string): Promise<void>;
+  ensureMainAgentHostProject?(): Promise<string>;
   setTaskStatus(taskId: string, status: 'review' | 'done' | 'in_progress'): Promise<void>;
   deliver(
     coordinator: Coordinator,
@@ -82,6 +83,7 @@ type Dependencies = {
 
 const instruction = `You are working in an app-level Emdash Main Agent workspace. Every conversation in this main-agent task has the same coordination permissions; the configured notification conversation only receives automatic result wake-ups.
 Keep workspace work items separate from Project requirements: work items describe this workspace's outcomes and analysis, while requirements remain the Project backlog authority.
+Before planning or updating a cross-project solution, call get_main_agent_context to read linked-project requirements, project decisions and global memory together.
 Coordinate existing Emdash tasks through MCP.
 Delegate implementation into task worktrees; keep code changes on their own branches.
 Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort. Use depends_on for tasks that must wait for approved prerequisite results. Attach only relevant management documents with document_refs; their versions and content are frozen for that task.
@@ -140,7 +142,7 @@ export class CoordinatorService {
   async createCrossProject(input: {
     id: string;
     name: string;
-    projectId: string;
+    projectId?: string;
     projectIds: string[];
     primary?: AgentSelection;
     delegationDefaults?: AgentSelection;
@@ -150,6 +152,8 @@ export class CoordinatorService {
     const id = `cross:${input.id}`;
     const name = input.name.trim();
     if (!name) throw new Error('Name the cross-project main agent.');
+    const projectId = input.projectId ?? (await this.deps.ensureMainAgentHostProject?.());
+    if (!projectId) throw new Error('The main-agent management repository is unavailable.');
     const projectIds = [...new Set(input.projectIds)].sort();
     const primary = agentSelectionSchema.parse(input.primary ?? {});
     const delegationDefaults = agentSelectionSchema.parse(input.delegationDefaults ?? {});
@@ -157,7 +161,7 @@ export class CoordinatorService {
       .update(
         JSON.stringify({
           name,
-          projectId: input.projectId,
+          projectId,
           projectIds,
           primary,
           delegationDefaults,
@@ -174,7 +178,7 @@ export class CoordinatorService {
           throw new Error('This creation request has different main agent parameters.');
         return record;
       }
-      await this.deps.assertProjectAvailable(input.projectId);
+      await this.deps.assertProjectAvailable(projectId);
       for (const projectId of projectIds) await this.deps.assertProjectAvailable(projectId);
       for (const selection of [primary, delegationDefaults]) {
         const resolved = await this.deps.resolveSelection(selection);
@@ -185,7 +189,7 @@ export class CoordinatorService {
         id,
         name,
         kind: 'cross-project',
-        projectId: input.projectId,
+        projectId,
         projectIds,
         taskId: randomUUID(),
         conversationId: randomUUID(),

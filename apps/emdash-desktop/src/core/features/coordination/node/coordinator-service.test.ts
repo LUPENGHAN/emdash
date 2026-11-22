@@ -549,6 +549,21 @@ describe('main agent coordination', () => {
     expect((await new CoordinatorService(test.deps).createCrossProject(input)).id).toBe(one.id);
   });
 
+  it('creates a top-level main agent on the dedicated management project without business projects', async () => {
+    const test = setup();
+    const ensureMainAgentHostProject = vi.fn(async () => 'main-agent-host');
+    const service = new CoordinatorService({ ...test.deps, ensureMainAgentHostProject });
+    const record = await service.createCrossProject({
+      id: 'standalone-workspace',
+      name: '独立分析工作区',
+      projectIds: [],
+    });
+    expect(record.projectId).toBe('main-agent-host');
+    expect(record.projectIds).toEqual([]);
+    expect(ensureMainAgentHostProject).toHaveBeenCalledOnce();
+    expect(test.deps.assertProjectAvailable).toHaveBeenCalledWith('main-agent-host');
+  });
+
   it('persists idempotent workspace work items separately from task results', async () => {
     const test = setup();
     const record = await test.service.createCrossProject({

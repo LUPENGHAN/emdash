@@ -140,6 +140,8 @@ export async function executeAgentAction(
     case 'read_management_document':
     case 'write_management_document':
     case 'list_projects':
+    case 'get_main_agent_context':
+    case 'import_project':
     case 'get_task_status':
     case 'cancel_pending_task':
     case 'retry_task':

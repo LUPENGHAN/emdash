@@ -1,13 +1,15 @@
 import { Button, Input, Select, toast } from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
 import { openFileInTaskEditor } from '@core/features/editor/api/browser/open-file-in-file-editor';
+import { getMemoryClient } from '@core/features/memory/api/browser/client';
 import {
   getProjectStore,
   getProjectManagerStore,
 } from '@core/features/projects/api/browser/stores/project-selectors';
+import { getRequirementsClient } from '@core/features/requirements/api/browser/client';
 import { TaskPullRequestStatus } from '@core/features/source-control/contributions/browser/task-pull-requests';
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
@@ -16,6 +18,7 @@ import { useTaskComposition } from '@core/features/workbench/api/browser/task-co
 import { useMemento } from '@core/primitives/mementos/react';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
+import { isMainAgentHostProject } from '../api/main-agent-host';
 import type { AssignedTask, Coordinator, ProjectAccess } from '../api/types';
 import { coordinatorViewMemento } from '../contributions/mementos';
 import { CoordinatorDocumentsPanel } from './coordinator-documents-panel';
@@ -442,6 +445,8 @@ function WorkspaceOverview({
         </article>
       </div>
 
+      <WorkspaceKnowledgeSummary record={record} />
+
       <section className="space-y-2" aria-labelledby="work-items-title">
         <h3 id="work-items-title" className="font-medium">
           工作事项
@@ -562,6 +567,129 @@ function WorkspaceOverview({
   );
 }
 
+function WorkspaceKnowledgeSummary({ record }: { record: Coordinator }) {
+  const queryClient = useQueryClient();
+  const linkedProjectIds = useMemo(
+    () => record.projectIds.filter((id) => !isMainAgentHostProject(id)),
+    [record.projectIds]
+  );
+  const linkedKey = linkedProjectIds.join(',');
+  const queryKey = useMemo(
+    () => ['main-agent-knowledge', record.id, linkedKey] as const,
+    [linkedKey, record.id]
+  );
+  const knowledge = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const [requirements, memory] = await Promise.all([
+        getRequirementsClient(),
+        getMemoryClient(),
+      ]);
+      const [projects, globalMemory] = await Promise.all([
+        Promise.all(
+          linkedProjectIds.map(async (projectId) => ({
+            projectId,
+            name: getProjectStore(projectId)?.name ?? projectId,
+            requirements: await requirements.list({ projectId }),
+            decisions: await memory.list({ scope: 'project', projectId }),
+          }))
+        ),
+        memory.list({ scope: 'global' }),
+      ]);
+      return { projects, globalMemory };
+    },
+  });
+  useEffect(() => {
+    let disposed = false;
+    const unsubscribers: Array<() => void> = [];
+    void Promise.all([getRequirementsClient(), getMemoryClient()])
+      .then(async ([requirements, memory]) => {
+        const requirementSubscription = await requirements.events.subscribe(undefined, {
+          onEvent: (event) => {
+            if (linkedProjectIds.includes(event.projectId))
+              void queryClient.invalidateQueries({ queryKey });
+          },
+          onGap: () => void queryClient.invalidateQueries({ queryKey }),
+        });
+        const memorySubscription = await memory.events.subscribe(undefined, {
+          onEvent: (event) => {
+            if (
+              event.scope === 'global' ||
+              (event.scope === 'project' && linkedProjectIds.includes(event.projectId))
+            )
+              void queryClient.invalidateQueries({ queryKey });
+          },
+          onGap: () => void queryClient.invalidateQueries({ queryKey }),
+        });
+        if (disposed) {
+          requirementSubscription();
+          memorySubscription();
+        } else {
+          unsubscribers.push(requirementSubscription, memorySubscription);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      for (const unsubscribe of unsubscribers) unsubscribe();
+    };
+  }, [linkedProjectIds, queryClient, queryKey]);
+  return (
+    <section className="space-y-2" aria-labelledby="workspace-knowledge-title">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 id="workspace-knowledge-title" className="font-medium">
+          项目 TODO、决策与记忆
+        </h3>
+        <Button type="button" size="sm" variant="ghost" onClick={() => void knowledge.refetch()}>
+          刷新上下文
+        </Button>
+      </div>
+      {!linkedProjectIds.length && (
+        <p className="text-sm text-foreground-muted">
+          还没有关联业务项目。派活到项目后会自动关联，并在这里汇总项目 TODO 与决策。
+        </p>
+      )}
+      {knowledge.isError && (
+        <p role="alert" className="text-sm text-foreground-destructive">
+          无法加载项目上下文：{String(knowledge.error)}
+        </p>
+      )}
+      <div className="grid gap-3 @xl:grid-cols-2">
+        {knowledge.data?.projects.map((project) => {
+          const open = project.requirements.filter((item) => item.status === 'open');
+          return (
+            <article key={project.projectId} className="rounded-lg border border-border p-3">
+              <h4 className="text-sm font-medium">{project.name}</h4>
+              <p className="mt-1 text-xs text-foreground-muted">
+                {open.length} 个待办 · {project.decisions.length} 条项目决策
+              </p>
+              {open.length > 0 && (
+                <ul className="mt-2 list-inside list-disc space-y-1 text-xs">
+                  {open.slice(0, 5).map((item) => (
+                    <li key={item.id}>{item.title}</li>
+                  ))}
+                </ul>
+              )}
+              {project.decisions[0] && (
+                <p className="mt-2 text-xs">最新决策：{project.decisions[0].title}</p>
+              )}
+            </article>
+          );
+        })}
+        <article className="rounded-lg border border-border p-3">
+          <h4 className="text-sm font-medium">全局记忆</h4>
+          <p className="mt-1 text-xs text-foreground-muted">
+            {knowledge.data?.globalMemory.length ?? 0} 条跨项目决策
+          </p>
+          {knowledge.data?.globalMemory[0] && (
+            <p className="mt-2 text-xs">最新记录：{knowledge.data.globalMemory[0].title}</p>
+          )}
+        </article>
+      </div>
+    </section>
+  );
+}
+
 const ProjectAccessSettings = observer(function ProjectAccessSettings({
   record,
 }: {
@@ -571,7 +699,7 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
   const [linked, setLinked] = useState(record.projectIds);
   const [saving, setSaving] = useState(false);
   const projects = Array.from(getProjectManagerStore().projects.values()).filter(
-    (project) => !project.data?.archivedAt
+    (project) => !project.data?.archivedAt && !isMainAgentHostProject(project.id)
   );
   return (
     <div className="max-w-lg space-y-3">
@@ -580,9 +708,7 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
         value={access.mode}
         onValueChange={(value) =>
           setAccess(
-            value === 'selected'
-              ? { mode: 'selected', projectIds: [record.projectId] }
-              : { mode: 'all' }
+            value === 'selected' ? { mode: 'selected', projectIds: linked } : { mode: 'all' }
           )
         }
       >

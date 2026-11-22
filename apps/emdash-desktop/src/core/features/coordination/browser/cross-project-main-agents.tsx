@@ -10,6 +10,7 @@ import { taskViewDef } from '@core/features/tasks/contributions/views';
 import { useNavigate, useViewParams } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
 import { useCoordinators } from '../api/browser/use-coordinators';
+import { isMainAgentHostProject } from '../api/main-agent-host';
 
 export function CrossProjectMainAgents() {
   const query = useCoordinators();
@@ -117,9 +118,8 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false);
   const projects = Array.from(getProjectManagerStore().projects.values()).filter(
-    (project) => !project.data?.archivedAt
+    (project) => !project.data?.archivedAt && !isMainAgentHostProject(project.id)
   );
-  const compatibilityProjectId = projects[0]?.id || '';
   return (
     <form
       data-testid="cross-project-agent-form"
@@ -134,7 +134,6 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
               name,
               purpose,
               lifecycle: { kind: lifecycleKind, state: 'active' },
-              projectId: compatibilityProjectId,
               projectIds,
               ...(agent !== 'inherit' && { primary: { agent } }),
             })
@@ -219,13 +218,13 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
       <Button
         data-testid="create-cross-project-agent"
         type="submit"
-        disabled={saving || !name.trim() || !compatibilityProjectId}
+        disabled={saving || !name.trim()}
       >
         创建工作区
       </Button>
       {!projects.length && (
-        <p role="alert" className="text-destructive text-xs">
-          当前版本需要至少一个已有项目作为隐藏兼容工作目录；它不会自动成为关联项目。
+        <p className="text-xs text-foreground-muted">
+          当前没有业务项目，仍可创建主任务；需要修改仓库时再关联或导入项目。
         </p>
       )}
     </form>

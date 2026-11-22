@@ -164,6 +164,36 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     },
     ({ query }) => dispatch({ kind: 'list_projects', ...(query && { query }) })
   );
+
+  server.registerTool(
+    'get_main_agent_context',
+    {
+      description:
+        'Main agent: read the current workspace plus linked-project requirements, project decisions and global memory in one snapshot before planning work.',
+      annotations: { readOnlyHint: true },
+    },
+    () => dispatch({ kind: 'get_main_agent_context' })
+  );
+
+  server.registerTool(
+    'import_project',
+    {
+      description:
+        'Main agent: clone a repository that is not yet in Emdash, register it as a visible project and link it to this workspace. Reuse request_id when retrying.',
+      inputSchema: {
+        request_id: z.uuid(),
+        repository_url: z.string().min(1),
+        name: z.string().trim().min(1).max(100).optional(),
+      },
+    },
+    ({ request_id, repository_url, name }) =>
+      dispatch({
+        kind: 'import_project',
+        requestId: request_id,
+        repositoryUrl: repository_url,
+        ...(name && { name }),
+      })
+  );
   server.registerTool(
     'get_task_status',
     {

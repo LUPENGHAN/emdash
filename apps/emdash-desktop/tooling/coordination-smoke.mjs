@@ -35,6 +35,22 @@ await git(
   'Initial baseline'
 );
 const baseline = await git('rev-parse', 'HEAD');
+const importRepository = join(profile, 'organization-repository');
+await mkdir(importRepository);
+const importGit = async (...args) =>
+  (await promisify(execFile)('git', args, { cwd: importRepository })).stdout.trim();
+await importGit('init', '-b', 'main');
+await writeFile(join(importRepository, 'README.md'), 'Organization repository acceptance\n');
+await importGit('add', 'README.md');
+await importGit(
+  '-c',
+  'user.name=Emdash test',
+  '-c',
+  'user.email=test@example.invalid',
+  'commit',
+  '-m',
+  'Initial organization baseline'
+);
 const wrapper = join(profile, 'fake-claude');
 await writeFile(
   wrapper,
@@ -224,11 +240,11 @@ try {
 
   await page.addScriptTag({
     type: 'module',
-    content: `import { prepareCoordinator, coordinatorSnapshot, createReplacementMain } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
-      Object.assign(window, { prepareCoordinator, coordinatorSnapshot, createReplacementMain });`,
+    content: `import { prepareStandaloneCoordinator, seedMainAgentKnowledge, coordinatorSnapshot, createReplacementMain } from '/@fs${join(appRoot, 'tooling/acceptance/task-delegation-browser.ts')}';
+      Object.assign(window, { prepareStandaloneCoordinator, seedMainAgentKnowledge, coordinatorSnapshot, createReplacementMain });`,
   });
-  await page.waitForFunction(() => typeof window.prepareCoordinator === 'function');
-  const coordinator = await page.evaluate((input) => window.prepareCoordinator(input), {
+  await page.waitForFunction(() => typeof window.prepareStandaloneCoordinator === 'function');
+  const coordinator = await page.evaluate((input) => window.prepareStandaloneCoordinator(input), {
     wrapper,
     mainWrapper,
     repository,
@@ -237,9 +253,15 @@ try {
   await page
     .getByTestId('main-agent-workspaces')
     .getByRole('button')
-    .filter({ hasText: /Main agent|主任务/ })
+    .filter({ hasText: '独立验收主任务' })
     .first()
     .click();
+  assert.equal(coordinator.projectId, '__emdash_main_agent_host__');
+  assert.equal(await page.getByText('Emdash 主任务管理', { exact: true }).count(), 0);
+  await page.evaluate(
+    (projectId) => window.seedMainAgentKnowledge(projectId),
+    coordinator.targetProjectId
+  );
   await page.getByTestId('coordinator-tasks-tab').waitFor();
   assert.ok(
     !(await readdir(capture)).includes('main-session.json'),
@@ -264,6 +286,7 @@ try {
   const args = {
     name: 'Coordinated implementation',
     prompt: 'Simulated implementation',
+    project_id: coordinator.targetProjectId,
     agent: 'claude',
     effort: 'high',
     connection: 'official',
@@ -293,6 +316,23 @@ try {
   const created = JSON.parse(await call(client, 'create_task', args));
   const duplicate = JSON.parse(await call(client, 'create_task', args));
   assert.equal(created.task_id, duplicate.task_id);
+  const mainContext = JSON.parse(await call(client, 'get_main_agent_context', {}));
+  assert.equal(mainContext.projects[0].id, coordinator.targetProjectId);
+  assert.equal(mainContext.projects[0].requirements[0].title, '验证项目 TODO 聚合');
+  assert.equal(mainContext.projects[0].decisions[0].title, '验证项目决策聚合');
+  assert.equal(mainContext.globalMemory[0].title, '验证全局记忆聚合');
+  const importArgs = {
+    request_id: 'ea9fcf9d-c865-4492-bdb0-6a4bc6f2162a',
+    repository_url: importRepository,
+    name: '组织协作仓库',
+  };
+  const importedProject = JSON.parse(await call(client, 'import_project', importArgs));
+  const repeatedImport = JSON.parse(await call(client, 'import_project', importArgs));
+  assert.equal(importedProject.id, importArgs.request_id);
+  assert.equal(repeatedImport.id, importedProject.id);
+  await page.getByText('组织协作仓库', { exact: true }).waitFor();
+  const importedContext = JSON.parse(await call(client, 'get_main_agent_context', {}));
+  assert.ok(importedContext.projects.some((project) => project.id === importedProject.id));
   const spawned = await waitForCapture(created.conversation_id);
   assert.equal(spawned.effort, 'high');
   assert.equal(spawned.cliEffort, 'high');
@@ -345,6 +385,9 @@ try {
   await page.getByTestId('coordinator-tasks-tab').click();
   await page.getByText('验证独立 Task 全流程', { exact: true }).waitFor();
   await page.getByText('派活前检查点', { exact: true }).waitFor();
+  await page.getByText('验证项目 TODO 聚合', { exact: true }).waitFor();
+  await page.getByText('最新决策：验证项目决策聚合', { exact: true }).waitFor();
+  await page.getByText('最新记录：验证全局记忆聚合', { exact: true }).waitFor();
   await page.getByText('Simulated task result', { exact: true }).waitFor();
   await page.getByTestId('coordinator-accept-result').waitFor();
   await page.waitForFunction(async (id) => {
@@ -438,6 +481,8 @@ try {
           'opening a fresh main agent does not start its process',
           'idempotent delegation and result submission',
           'workspace work item persisted independently from code tasks',
+          'linked project requirements, decisions and global memory aggregated in UI and MCP context',
+          'idempotent repository clone, Emdash project registration and main-workspace linking',
           'idempotent checkpoint creation and ongoing workspace pause/resume lifecycle',
           'result delivered through ACP and explicitly acknowledged',
           'changes requested and versioned result accepted',

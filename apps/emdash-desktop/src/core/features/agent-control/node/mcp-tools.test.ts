@@ -470,6 +470,19 @@ describe('registerAgentControlTools task tools', () => {
     const { tool, dispatch } = registeredTools();
     await tool('list_projects')?.handler({ query: 'backend' });
     expect(dispatch).toHaveBeenLastCalledWith({ kind: 'list_projects', query: 'backend' });
+    await tool('get_main_agent_context')?.handler({});
+    expect(dispatch).toHaveBeenLastCalledWith({ kind: 'get_main_agent_context' });
+    await tool('import_project')?.handler({
+      request_id: 'd2622699-b760-4f90-a3ba-e96814f62cbb',
+      repository_url: 'https://github.com/example/backend.git',
+      name: 'backend',
+    });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: 'import_project',
+      requestId: 'd2622699-b760-4f90-a3ba-e96814f62cbb',
+      repositoryUrl: 'https://github.com/example/backend.git',
+      name: 'backend',
+    });
     await tool('list_tasks')?.handler({ project_id: 'other', include_archived: false });
     expect(dispatch).toHaveBeenLastCalledWith({
       kind: 'list_tasks',

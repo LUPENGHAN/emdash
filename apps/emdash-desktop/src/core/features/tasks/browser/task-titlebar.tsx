@@ -143,6 +143,7 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
   if (!taskStore || !taskPayload) return null;
 
   const isRemoteProject = projectContext?.project.type === 'ssh';
+  const isCoordinationTask = taskPayload.type === 'coordination';
   return (
     <Titlebar
       leftSlot={
@@ -150,13 +151,17 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
           {/* Phones show just the task; the project list is one tap away. */}
           {compact ? null : (
             <>
-              <button
-                type="button"
-                className="text-sm text-foreground-passive hover:text-foreground"
-                onClick={() => navigate(projectViewDef({ projectId }))}
-              >
-                {projectName}
-              </button>
+              {isCoordinationTask ? (
+                <span className="text-sm text-foreground-passive">主任务工作区</span>
+              ) : (
+                <button
+                  type="button"
+                  className="text-sm text-foreground-passive hover:text-foreground"
+                  onClick={() => navigate(projectViewDef({ projectId }))}
+                >
+                  {projectName}
+                </button>
+              )}
               <span className="text-sm text-foreground-passive">/</span>
             </>
           )}

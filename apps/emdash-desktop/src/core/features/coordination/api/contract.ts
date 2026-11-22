@@ -116,7 +116,7 @@ export const coordinationContract = defineContract({
     input: z.object({
       id: z.uuid(),
       name: z.string().trim().min(1).max(100),
-      projectId: z.string().min(1),
+      projectId: z.string().min(1).optional(),
       projectIds: z.array(z.string().min(1)),
       primary: agentSelectionSchema.optional(),
       delegationDefaults: agentSelectionSchema.optional(),

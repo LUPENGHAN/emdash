@@ -1,5 +1,6 @@
 import { observable, runInAction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
+import { MAIN_AGENT_HOST_PROJECT_ID } from '@core/features/coordination/api/main-agent-host';
 import { taskManagerStoreToken } from '@core/features/tasks/contributions/browser/project-store-tokens';
 import {
   workbenchSidebarSchema,
@@ -241,6 +242,17 @@ describe('SidebarStore project ordering', () => {
     );
 
     expect(store.orderedProjects.map((project) => project.id)).toEqual(['new', 'old']);
+  });
+
+  it('keeps the internal main-agent management project out of the project sidebar', () => {
+    const store = new SidebarStore(
+      projectManager([
+        { id: MAIN_AGENT_HOST_PROJECT_ID, createdAt: '2026-01-02T00:00:00.000Z' },
+        { id: 'business', createdAt: '2026-01-01T00:00:00.000Z' },
+      ])
+    );
+
+    expect(store.orderedProjects.map((project) => project.id)).toEqual(['business']);
   });
 
   it('places projects missing from a saved manual order first', () => {

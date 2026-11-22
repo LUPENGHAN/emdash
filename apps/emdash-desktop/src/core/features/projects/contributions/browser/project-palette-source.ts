@@ -1,3 +1,4 @@
+import { isMainAgentHostProject } from '@core/features/coordination/api/main-agent-host';
 import type { ProjectStore } from '@core/features/projects/api/browser/stores/project';
 import {
   asAvailableProject,
@@ -17,12 +18,13 @@ export async function searchProjectPaletteEntities(
   getClient: GetProjectSearchClient = getSearchClient
 ): Promise<SearchItem[]> {
   const client = await getClient();
-  return client.searchPaletteEntities({
+  const items = await client.searchPaletteEntities({
     kind: 'project',
     query,
     context,
     limit: PROJECT_SOURCE_LIMIT,
   });
+  return items.filter((item) => !isMainAgentHostProject(item.id));
 }
 
 export function getIdleProjectPaletteEntities(
@@ -34,6 +36,7 @@ export function getIdleProjectPaletteEntities(
   const matches: SearchItem[] = [];
   const stores = projectStores ?? getProjectManagerStore().projects.values();
   for (const projectStore of stores) {
+    if (isMainAgentHostProject(projectStore.id)) continue;
     const projectContext = asAvailableProject(projectStore);
     if (!projectContext || projectContext.project.id === context.projectId) continue;
     matches.push({

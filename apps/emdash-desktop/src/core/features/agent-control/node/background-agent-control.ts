@@ -3,6 +3,7 @@ import type { HostRef } from '@emdash/core/primitives/host/api';
 import { defineVersionedSchema } from '@emdash/core/primitives/versioned-schema/api';
 import { KeyedMutex } from '@emdash/shared/concurrency';
 import { z } from 'zod';
+import { isMainAgentHostProject } from '@core/features/coordination/api/main-agent-host';
 import type { Conversation } from '@core/primitives/conversations/api';
 import type { Task } from '@core/primitives/tasks/api';
 import type { AgentCaller, AgentControlAction, AgentControlResult } from '../api';
@@ -165,6 +166,7 @@ export class BackgroundAgentControl {
       case 'list_projects': {
         const projects = [];
         for (const project of await this.deps.projects()) {
+          if (isMainAgentHostProject(project.id)) continue;
           if (action.query && !project.name.toLowerCase().includes(action.query.toLowerCase()))
             continue;
           if (await this.deps.access.mayAccessProject(caller, project.id, 'read'))
