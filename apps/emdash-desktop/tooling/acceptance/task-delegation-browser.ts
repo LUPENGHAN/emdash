@@ -295,7 +295,7 @@ export async function prepareAdditionalProject(input: {
 }
 
 export async function allCoordinatorSnapshots() {
-  return (await getCoordinationClient()).list();
+  return (await getCoordinationClient()).list({});
 }
 
 export function openBaselineFixtureSettings(projectId: string) {

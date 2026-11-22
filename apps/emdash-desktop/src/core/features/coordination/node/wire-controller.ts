@@ -37,7 +37,7 @@ export function createCoordinationWireController(service: CoordinatorService) {
     open: ({ id }) => service.open(id),
     bindConversation: ({ id, conversationId }) => service.bindConversation(id, conversationId),
     selectionOptions: ({ id, selection }) => service.selectionOptions(id, selection),
-    list: () => service.list(),
+    list: (options) => service.list(options),
     getByTask: ({ taskId }) => service.getByTask(taskId),
     openProject: ({ projectId }) => service.openProject(projectId),
     update: ({ id, ...patch }) => service.update(id, patch),
@@ -65,6 +65,9 @@ export function createCoordinationWireController(service: CoordinatorService) {
       service.recordLivePromotion(coordinatorId, input),
     checkpoint: ({ id, requestId, title }) => service.checkpoint(id, requestId, title),
     setLifecycleState: ({ id, action, note }) => service.setLifecycleState(id, action, note),
+    completeAndArchive: ({ id, note }) => service.completeAndArchive(id, note),
+    trash: ({ id }) => service.trash(id),
+    restoreTrash: ({ id }) => service.restoreTrash(id),
     review: ({ id, taskId, accepted, note, resultVersion }) =>
       service.review(id, taskId, accepted, note, resultVersion),
     retryDelivery: ({ id }) => service.deliverPending(id),

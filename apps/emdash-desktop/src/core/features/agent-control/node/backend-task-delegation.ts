@@ -156,7 +156,11 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
         };
       const agentId = request.providerId ?? caller.providerId;
       const plugin = getPlugin(agentId);
-      const type = request.ui === 'chat' ? 'acp' : 'pty';
+      // Delegated code tasks always run in a visible terminal. Structured chat is
+      // still available for coordination workspaces and manually-created
+      // conversations, but task dispatch must not hide its startup prompt or
+      // transport behind ACP state.
+      const type = ids.role === 'coordination' && request.ui === 'chat' ? 'acp' : 'pty';
       if (type === 'acp' && plugin.capabilities.acp.kind !== 'supported')
         throw new Error('This agent does not support structured chat. Select terminal explicitly.');
       const saved = request.prompt ? await deps.getAgentSettings(agentId) : undefined;
@@ -230,13 +234,18 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
           workspace,
         },
       };
-      if (params.taskConfig.initialConversation)
+      if (params.taskConfig.initialConversation) {
+        const receiptRequest =
+          ids.role === 'coordination' ? supplied : { ...supplied, ui: undefined };
+        const receiptDefaults =
+          ids.role === 'coordination' || !defaults ? defaults : { ...defaults, ui: undefined };
         params.selectionSnapshot = freezeDelegationSelection(
           params.taskConfig.initialConversation,
-          supplied,
-          defaults,
+          receiptRequest,
+          receiptDefaults,
           saved
         );
+      }
       return params;
     },
     findTask: async (id, projectId) => {

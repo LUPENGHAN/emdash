@@ -159,7 +159,7 @@ export const workspaceCompletionReportSchema = z.object({
 export type WorkspaceCompletionReport = z.infer<typeof workspaceCompletionReportSchema>;
 
 export type Coordinator = {
-  version: '11';
+  version: '12';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -189,6 +189,7 @@ export type Coordinator = {
   livePromotions: Record<string, LivePromotion>;
   migratedFromId?: string;
   supersededById?: string;
+  deletedAt?: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -216,6 +217,51 @@ export type TakeoverPreview = {
   ownerId: string | null;
   ownerName: string | null;
 };
+
+export type CoordinatorActionAvailability = {
+  completeAndArchive: { available: boolean; reason?: string };
+  trash: { available: boolean; reason?: string };
+};
+
+export function getCoordinatorActionAvailability(
+  record: Coordinator
+): CoordinatorActionAvailability {
+  const unfinishedTasks = Object.values(record.tasks).filter(
+    (task) => !['done', 'cancelled'].includes(task.state)
+  );
+  const unresolvedWorkItems = Object.values(record.workItems).filter(
+    (item) => !['done', 'deferred', 'cancelled'].includes(item.state)
+  );
+  const undeliveredResults = record.events.filter((event) => event.state !== 'acknowledged');
+  const deletedReason = record.deletedAt ? '该工作区已在废纸篓中。' : undefined;
+  const completeReason =
+    deletedReason ??
+    (record.lifecycle.kind !== 'finite'
+      ? '长期工作区不使用“完成并归档”。'
+      : record.lifecycle.state === 'archived'
+        ? '该工作区已经归档。'
+        : record.lifecycle.state === 'completed'
+          ? '该工作区已经完成，可直接归档。'
+          : unfinishedTasks.length
+            ? `还有 ${unfinishedTasks.length} 个执行任务未结束。`
+            : unresolvedWorkItems.length
+              ? `还有 ${unresolvedWorkItems.length} 个工作项未处理。`
+              : undefined);
+  const trashReason =
+    deletedReason ??
+    (unfinishedTasks.length
+      ? `还有 ${unfinishedTasks.length} 个执行任务未结束。`
+      : undeliveredResults.length
+        ? `还有 ${undeliveredResults.length} 个任务结果未确认。`
+        : undefined);
+  return {
+    completeAndArchive: {
+      available: !completeReason,
+      ...(completeReason && { reason: completeReason }),
+    },
+    trash: { available: !trashReason, ...(trashReason && { reason: trashReason }) },
+  };
+}
 
 const coordinatorV1 = z.object({
   version: z.literal('1'),
@@ -436,5 +482,39 @@ export const coordinatorRecord = defineVersionedSchema()
       optimizationSuggestions: {},
       livePromotions: {},
     })
+  )
+  .version(
+    '12',
+    coordinatorV8.extend({
+      version: z.literal('12'),
+      documentMigration: z
+        .object({
+          id: z.string(),
+          fingerprint: z.string(),
+          source: documentStorageSchema,
+          target: documentStorageSchema,
+          files: z.array(managementDocumentSchema),
+          copied: z.array(z.object({ path: z.string(), revision: z.string() })),
+          phase: z.enum(['prepared', 'copying', 'verified', 'complete', 'cancelled']),
+          error: z.string().optional(),
+        })
+        .optional(),
+      documentStorageHistory: z.array(documentStorageSchema).optional(),
+      purpose: z.string().max(20_000),
+      lifecycle: workspaceLifecycleSchema,
+      workItems: z.record(z.string(), workspaceWorkItemSchema),
+      checkpoints: z.array(workspaceCheckpointSchema),
+      completionReport: workspaceCompletionReportSchema.optional(),
+      projectImports: z.record(z.string(), workspaceProjectImportSchema).optional(),
+      optimizationRuns: z.record(z.string(), optimizationRunSchema),
+      optimizationSuggestions: z.record(z.string(), optimizationSuggestionSchema),
+      livePromotions: z.record(z.string(), livePromotionSchema),
+      migratedFromId: z.string().optional(),
+      supersededById: z.string().optional(),
+      deletedAt: z.number().optional(),
+      createdAt: z.number(),
+      updatedAt: z.number(),
+    }),
+    (record) => ({ ...record, version: '12' as const })
   )
   .build();

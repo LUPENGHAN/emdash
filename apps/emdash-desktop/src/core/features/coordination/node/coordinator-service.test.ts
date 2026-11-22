@@ -509,11 +509,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('11');
+    expect((await test.service.ensureProject('project')).version).toBe('12');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('11');
+    expect(test.records.get(record.id)?.version).toBe('12');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -669,6 +669,62 @@ describe('main agent coordination', () => {
     expect((await test.service.setLifecycleState(record.id, 'restore')).lifecycle.state).toBe(
       'completed'
     );
+  });
+
+  it('completes and archives a finite workspace atomically', async () => {
+    const test = setup();
+    const record = await test.service.createCrossProject({
+      id: 'complete-and-archive',
+      name: '一次性工作',
+      purpose: '完成后离开当前列表',
+      lifecycle: { kind: 'finite', state: 'active' },
+      projectId: 'project',
+      projectIds: [],
+    });
+    const workItemId = '3f573bed-17f7-43a6-b266-b3fff3e8ccfd';
+    await test.service.addWorkItem(record.id, { requestId: workItemId, title: '验收' });
+    await expect(test.service.completeAndArchive(record.id)).rejects.toThrow('工作项');
+    expect(test.records.get(record.id)?.lifecycle.state).toBe('active');
+    await test.service.updateWorkItem(record.id, workItemId, { state: 'done' });
+    const archived = await test.service.completeAndArchive(record.id, '本轮验收通过');
+    expect(archived.lifecycle).toMatchObject({
+      kind: 'finite',
+      state: 'archived',
+      archivedFrom: 'completed',
+      completionNote: '本轮验收通过',
+    });
+    expect(archived.completionReport?.summary).toBe('本轮验收通过');
+    expect((await test.service.setLifecycleState(record.id, 'restore')).lifecycle.state).toBe(
+      'completed'
+    );
+  });
+
+  it('moves only inactive workspaces to recoverable trash', async () => {
+    const test = setup();
+    const main = await assigned(test);
+    await expect(test.service.trash(main.id)).rejects.toThrow('执行任务');
+    expect(test.records.get(main.id)?.deletedAt).toBeUndefined();
+    const stored = test.records.get(main.id)!;
+    stored.tasks['worker-task'].state = 'done';
+    stored.events.push({
+      id: 'result-event',
+      taskId: 'worker-task',
+      version: 1,
+      result,
+      state: 'pending',
+    });
+    test.records.set(main.id, stored);
+    await expect(test.service.trash(main.id)).rejects.toThrow('任务结果');
+    stored.events[0].state = 'acknowledged';
+    test.records.set(main.id, stored);
+    const trashed = await test.service.trash(main.id);
+    expect(trashed.deletedAt).toEqual(expect.any(Number));
+    expect(await test.service.list()).toEqual([]);
+    expect(await test.service.list({ includeDeleted: true })).toHaveLength(1);
+    await expect(test.service.open(main.id)).rejects.toThrow('Trash');
+    const restored = await test.service.restoreTrash(main.id);
+    expect(restored.deletedAt).toBeUndefined();
+    expect(await test.service.list()).toHaveLength(1);
   });
 
   it('runs a user-triggered experience optimization through validation and experience review', async () => {
@@ -1290,7 +1346,7 @@ it('preserves a legacy main checkout until its separate document migration runs'
   vi.mocked(test.resources.prepare).mockClear();
   vi.mocked(test.resources.create).mockClear();
   const reopened = await new CoordinatorService(test.deps).open(first.id);
-  expect(reopened.version).toBe('11');
+  expect(reopened.version).toBe('12');
   expect(reopened.params?.workspaceConfig.git).toEqual(saved.params.workspaceConfig.git);
   expect(reopened.taskId).toBe(first.taskId);
   expect(reopened.conversationId).toBe(first.conversationId);

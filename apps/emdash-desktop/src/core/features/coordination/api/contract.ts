@@ -170,7 +170,10 @@ export const coordinationContract = defineContract({
     input: z.object({ id: z.string(), selection: agentSelectionSchema }),
     output: z.custom<ResolvedAgentSelection>(),
   }),
-  list: procedure({ input: z.void(), output: z.array(z.custom<Coordinator>()) }),
+  list: procedure({
+    input: z.object({ includeDeleted: z.boolean().optional() }),
+    output: z.array(z.custom<Coordinator>()),
+  }),
   getByTask: procedure({
     input: z.object({ taskId: z.string() }),
     output: z.custom<Coordinator | null>(),
@@ -182,6 +185,7 @@ export const coordinationContract = defineContract({
   update: procedure({
     input: z.object({
       id: z.string(),
+      name: z.string().trim().min(1).max(100).optional(),
       primary: agentSelectionSchema.optional(),
       delegationDefaults: agentSelectionSchema.optional(),
       projectAccess: projectAccessSchema.optional(),
@@ -280,6 +284,15 @@ export const coordinationContract = defineContract({
       action: z.enum(['complete', 'pause', 'resume', 'archive', 'restore']),
       note: z.string().max(20_000).optional(),
     }),
+    output: z.custom<Coordinator>(),
+  }),
+  completeAndArchive: procedure({
+    input: z.object({ id: z.string(), note: z.string().max(20_000).optional() }),
+    output: z.custom<Coordinator>(),
+  }),
+  trash: procedure({ input: z.object({ id: z.string() }), output: z.custom<Coordinator>() }),
+  restoreTrash: procedure({
+    input: z.object({ id: z.string() }),
     output: z.custom<Coordinator>(),
   }),
   review: procedure({

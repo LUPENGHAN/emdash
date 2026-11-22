@@ -2,14 +2,16 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   defaultLivePaths,
   fulfillLiveBackupRequest,
   inspectLiveSource,
   liveBackupRequestPath,
   readLiveState,
+  signalLiveChildGroup,
   type LiveSupervisorState,
+  waitForLiveChildGroupExit,
   writeLiveState,
 } from './supervisor';
 
@@ -99,5 +101,35 @@ describe('live supervisor state', () => {
     expect(readFileSync(join(destination!, 'profile', 'settings.json'), 'utf8')).toContain('zh-CN');
     expect(readFileSync(join(destination!, 'manifest.json'), 'utf8')).toContain('abc123');
     expect(existsSync(liveBackupRequestPath(statePath))).toBe(false);
+  });
+
+  it('signals the whole live runtime process group', () => {
+    const signal = vi.fn();
+    const directKill = vi.fn(() => true);
+    signalLiveChildGroup({ pid: 4321, kill: directKill }, 'SIGTERM', signal);
+    expect(signal).toHaveBeenCalledWith(-4321, 'SIGTERM');
+    expect(directKill).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the direct child when its process group is already gone', () => {
+    const missing = Object.assign(new Error('gone'), { code: 'ESRCH' });
+    const directKill = vi.fn(() => true);
+    signalLiveChildGroup(
+      { pid: 4321, kill: directKill },
+      'SIGTERM',
+      vi.fn(() => {
+        throw missing;
+      })
+    );
+    expect(directKill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('accepts Darwin EPERM after a detached group leader exits', async () => {
+    const inaccessible = Object.assign(new Error('not permitted'), { code: 'EPERM' });
+    const signal = vi.fn(() => {
+      throw inaccessible;
+    });
+    await expect(waitForLiveChildGroupExit(4321, signal)).resolves.toBeUndefined();
+    expect(signal).toHaveBeenCalledWith(-4321, 0);
   });
 });

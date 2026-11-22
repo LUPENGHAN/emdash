@@ -26,6 +26,7 @@ import {
   taskResultSchema,
   agentSelectionSchema,
   coordinatorRecord,
+  getCoordinatorActionAvailability,
   type AgentSelection,
   type AssignedTask,
   type Coordinator,
@@ -116,12 +117,13 @@ export class CoordinatorService {
   private readonly deliveries = new KeyedMutex();
   private readonly ownership = new KeyedMutex();
   constructor(private readonly deps: Dependencies) {}
-  async list(): Promise<Coordinator[]> {
+  async list(options: { includeDeleted?: boolean } = {}): Promise<Coordinator[]> {
     const records: Coordinator[] = [];
     for (const [id, value] of Object.entries(await this.deps.store.getAll())) {
       if (!value) continue;
       try {
-        records.push(this.parseRecord(value));
+        const record = this.parseRecord(value);
+        if (options.includeDeleted || !record.deletedAt) records.push(record);
       } catch (error) {
         this.deps.reportError?.(error, id);
       }
@@ -134,7 +136,7 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '11',
+        version: '12',
         id,
         kind: 'project',
         name: '主任务',
@@ -206,7 +208,7 @@ export class CoordinatorService {
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '11',
+        version: '12',
         id,
         name,
         kind: 'cross-project',
@@ -503,6 +505,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   async open(id: string): Promise<Coordinator> {
     return this.locks.runExclusive(id, async () => {
       let record = await this.get(id);
+      if (record.deletedAt) throw new Error('Restore this workspace from Trash before opening it.');
       await this.deps.assertProjectAvailable(record.projectId);
       const runtime = this.deps.resources();
       const state = await runtime.findTask(record.taskId, record.projectId);
@@ -932,6 +935,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   async update(
     id: string,
     patch: {
+      name?: string;
       primary?: AgentSelection;
       delegationDefaults?: AgentSelection;
       projectAccess?: ProjectAccess;
@@ -940,6 +944,9 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   ): Promise<Coordinator> {
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
+      if (record.deletedAt) throw new Error('Restore this workspace from Trash before editing it.');
+      const name = patch.name?.trim();
+      if (patch.name !== undefined && !name) throw new Error('Name the main agent workspace.');
       if (patch.projectAccess?.mode === 'selected')
         for (const projectId of patch.projectAccess.projectIds)
           await this.deps.assertProjectAvailable(projectId);
@@ -952,7 +959,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         const resolved = await this.deps.resolveSelection(selection);
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
-      const next = { ...record, ...patch };
+      const next = { ...record, ...patch, ...(name && { name }) };
       await this.save(next);
       if (patch.projectAccess) this.deps.onSchedulingChange?.();
       return next;
@@ -1270,46 +1277,9 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   ): Promise<Coordinator> {
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
+      if (record.deletedAt) throw new Error('Restore this workspace from Trash first.');
       if (action === 'complete') {
-        if (record.lifecycle.kind !== 'finite')
-          throw new Error('Ongoing main agents use checkpoints instead of completion.');
-        if (Object.values(record.tasks).some((task) => !['done', 'cancelled'].includes(task.state)))
-          throw new Error('Finish or cancel active tasks before completing this main agent.');
-        if (
-          Object.values(record.workItems).some(
-            (item) => !['done', 'deferred', 'cancelled'].includes(item.state)
-          )
-        )
-          throw new Error(
-            'Resolve, defer or cancel open work items before completing this main agent.'
-          );
-        record.lifecycle.state = 'completed';
-        record.lifecycle.completedAt = Date.now();
-        record.lifecycle.completionNote = note?.trim() || undefined;
-        const workItems = Object.values(record.workItems);
-        record.completionReport = {
-          generatedAt: Date.now(),
-          summary: note?.trim() || record.purpose || `${record.name} 已按完成条件结束。`,
-          linkedProjectIds: [...record.projectIds],
-          workItems: {
-            total: workItems.length,
-            done: workItems.filter((item) => item.state === 'done').length,
-            deferred: workItems.filter((item) => item.state === 'deferred').length,
-            cancelled: workItems.filter((item) => item.state === 'cancelled').length,
-          },
-          tasks: Object.values(record.tasks).map((task) => ({
-            taskId: task.taskId,
-            name: task.name,
-            projectId: task.projectId,
-            state: task.state,
-            summary: task.result?.summary,
-            commits: task.result?.commits ?? [],
-            checks: task.result?.checks ?? [],
-            unresolved: task.result?.unresolved ?? [],
-            prUrls: task.result?.prUrls ?? [],
-          })),
-          checkpoints: [...record.checkpoints],
-        };
+        this.completeFinite(record, note);
       } else if (action === 'pause' || action === 'resume') {
         if (record.lifecycle.kind !== 'ongoing')
           throw new Error('Only an ongoing main agent can be paused or resumed.');
@@ -1331,6 +1301,80 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       await this.save(record);
       return record;
     });
+  }
+  async completeAndArchive(id: string, note?: string): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      const availability = getCoordinatorActionAvailability(record).completeAndArchive;
+      if (!availability.available) throw new Error(availability.reason);
+      this.completeFinite(record, note);
+      record.lifecycle.archivedFrom = 'completed';
+      record.lifecycle.state = 'archived';
+      await this.save(record);
+      return record;
+    });
+  }
+  async trash(id: string): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      if (record.deletedAt) return record;
+      const availability = getCoordinatorActionAvailability(record).trash;
+      if (!availability.available) throw new Error(availability.reason);
+      record.deletedAt = Date.now();
+      await this.save(record);
+      return record;
+    });
+  }
+  async restoreTrash(id: string): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      if (!record.deletedAt) return record;
+      record.deletedAt = undefined;
+      await this.save(record);
+      return record;
+    });
+  }
+  private completeFinite(record: Coordinator, note?: string): void {
+    if (record.lifecycle.kind !== 'finite')
+      throw new Error('Ongoing main agents use checkpoints instead of completion.');
+    if (Object.values(record.tasks).some((task) => !['done', 'cancelled'].includes(task.state)))
+      throw new Error('Finish or cancel active tasks before completing this main agent.');
+    if (
+      Object.values(record.workItems).some(
+        (item) => !['done', 'deferred', 'cancelled'].includes(item.state)
+      )
+    )
+      throw new Error(
+        'Resolve, defer or cancel open work items before completing this main agent.'
+      );
+    const now = Date.now();
+    record.lifecycle.state = 'completed';
+    record.lifecycle.completedAt = now;
+    record.lifecycle.completionNote = note?.trim() || undefined;
+    const workItems = Object.values(record.workItems);
+    record.completionReport = {
+      generatedAt: now,
+      summary: note?.trim() || record.purpose || `${record.name} 已按完成条件结束。`,
+      linkedProjectIds: [...record.projectIds],
+      workItems: {
+        total: workItems.length,
+        done: workItems.filter((item) => item.state === 'done').length,
+        deferred: workItems.filter((item) => item.state === 'deferred').length,
+        cancelled: workItems.filter((item) => item.state === 'cancelled').length,
+      },
+      tasks: Object.values(record.tasks).map((task) => ({
+        taskId: task.taskId,
+        name: task.name,
+        projectId: task.projectId,
+        state: task.state,
+        summary: task.result?.summary,
+        commits: task.result?.commits ?? [],
+        checks: task.result?.checks ?? [],
+        unresolved: task.result?.unresolved ?? [],
+        prUrls: task.result?.prUrls ?? [],
+      })),
+      checkpoints: [...record.checkpoints],
+    };
   }
   async selectionOptions(id: string, selection: AgentSelection): Promise<ResolvedAgentSelection> {
     const record = await this.get(id);

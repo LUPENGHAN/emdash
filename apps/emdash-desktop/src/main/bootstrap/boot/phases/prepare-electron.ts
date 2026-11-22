@@ -1,5 +1,6 @@
 import { app } from 'electron';
 import devIcon from '@/assets/images/emdash/emdash-dev.png?asset';
+import { IS_LIVE } from '@core/primitives/app-identity/api/app-identity';
 import { initializeFileLogger, registerProcessErrorLogging } from '@main/host/file-logger';
 import { registerAppScheme } from '@main/host/protocol';
 import { log } from '@main/lib/logger';
@@ -16,7 +17,10 @@ export async function prepareElectron(config: AppConfig, signals: BootSignals): 
     if (signals.windowPhaseReady) void showMainWindow();
   });
 
-  if (!config.isDev && !app.requestSingleInstanceLock()) {
+  // Ordinary development profiles may run side by side. The durable live
+  // channel is different: it owns real user data and must never allow an old
+  // or packaged instance to open that profile concurrently during a restart.
+  if ((!config.isDev || IS_LIVE) && !app.requestSingleInstanceLock()) {
     app.quit();
     throw new BootAborted('Another application instance is already running');
   }

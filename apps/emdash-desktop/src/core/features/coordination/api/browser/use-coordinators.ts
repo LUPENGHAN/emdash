@@ -6,7 +6,7 @@ export function useCoordinators() {
   const client = useQueryClient();
   const query = useQuery({
     queryKey: ['coordinators'],
-    queryFn: async () => (await getCoordinationClient()).list(),
+    queryFn: async () => (await getCoordinationClient()).list({ includeDeleted: true }),
   });
   useEffect(() => {
     let disposed = false;

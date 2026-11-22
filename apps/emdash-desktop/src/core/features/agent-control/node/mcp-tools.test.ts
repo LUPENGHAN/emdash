@@ -158,6 +158,12 @@ it('carries explicit supplier, model and effort through task and conversation to
   );
 });
 
+it('does not expose structured chat as a delegated task transport', () => {
+  const task = registeredTools().tool('create_task')!;
+  expect(Object.keys(task.config.inputSchema ?? {})).not.toContain('ui');
+  expect(task.config.description).toContain('visible terminal');
+});
+
 function requirement(id: string, extra: Partial<Requirement> = {}): Requirement {
   return {
     id,

@@ -16,7 +16,7 @@ export type LaunchTuiConversationInput = {
   taskId: string;
   conversationId: string;
   initialSize?: { cols: number; rows: number };
-  hiddenContext?: string;
+  promptPrefix?: string;
   database: LaunchTuiConversationDb;
   telemetry: Pick<TelemetryService, 'capture'>;
   taskSessions: Pick<TaskSessionManager, 'getTask'>;
@@ -34,7 +34,7 @@ export async function launchTuiConversation({
   taskId,
   conversationId,
   initialSize,
-  hiddenContext,
+  promptPrefix,
   database,
   telemetry,
   taskSessions,
@@ -70,8 +70,10 @@ export async function launchTuiConversation({
       conversation,
       mode: isFirstSpawn ? 'start' : 'resume',
       initialSize,
+      // A terminal has no hidden prompt channel. Coordination instructions are
+      // deliberately part of the first visible CLI prompt.
       initialPrompt:
-        initialPrompt && hiddenContext ? `${hiddenContext}\n\n${initialPrompt}` : initialPrompt,
+        initialPrompt && promptPrefix ? `${promptPrefix}\n\n${initialPrompt}` : initialPrompt,
     });
 
     if (launched.outcome !== 'attached') {

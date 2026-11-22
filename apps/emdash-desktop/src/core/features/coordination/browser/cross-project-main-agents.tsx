@@ -1,5 +1,15 @@
-import { Button, Input, Select, toast } from '@emdash/ui/react/primitives';
-import { Bot, ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { Button, ContextMenu, Input, Select, toast } from '@emdash/ui/react/primitives';
+import {
+  Archive,
+  ArchiveRestore,
+  Bot,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 import { when } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
@@ -7,10 +17,12 @@ import { PROVIDER_CAPABLE_AGENTS } from '@core/features/model-providers/api';
 import { getProjectManagerStore } from '@core/features/projects/api/browser/stores/project-selectors';
 import { getTaskManagerStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
+import { useOpenModal } from '@core/manifests/browser/modal-api';
 import { useNavigate, useViewParams } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
 import { useCoordinators } from '../api/browser/use-coordinators';
 import { isMainAgentHostProject } from '../api/main-agent-host';
+import { getCoordinatorActionAvailability, type Coordinator } from '../api/types';
 
 const workspaceFilterLabels = {
   current: '当前工作区',
@@ -19,16 +31,19 @@ const workspaceFilterLabels = {
   project: '项目专用',
   completed: '已完成',
   archived: '已归档',
+  trash: '废纸篓',
   all: '全部',
 } as const;
 
+type WorkspaceFilter = keyof typeof workspaceFilterLabels;
+
 export function CrossProjectMainAgents() {
   const query = useCoordinators();
-  const [filter, setFilter] = useState<
-    'current' | 'finite' | 'ongoing' | 'project' | 'completed' | 'archived' | 'all'
-  >('current');
+  const [filter, setFilter] = useState<WorkspaceFilter>('current');
   const records =
     query.data?.filter((record) => {
+      if (filter === 'trash') return Boolean(record.deletedAt);
+      if (record.deletedAt) return false;
       if (filter === 'all') return true;
       if (filter === 'current') return record.lifecycle.state !== 'archived';
       if (filter === 'finite') return record.lifecycle.kind === 'finite';
@@ -40,7 +55,60 @@ export function CrossProjectMainAgents() {
   const { navigate } = useNavigate();
   const active = useViewParams(taskViewDef);
   const [opening, setOpening] = useState<string>();
+  const [acting, setActing] = useState<string>();
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<string>();
+  const [draftName, setDraftName] = useState('');
+  const openConfirm = useOpenModal('confirmActionModal');
+
+  const openWorkspace = (record: Coordinator) => {
+    if (record.deletedAt) return;
+    setOpening(record.id);
+    void getCoordinationClient()
+      .then((client) => client.open({ id: record.id }))
+      .then(async (opened) => {
+        await when(() => !!getTaskManagerStore(opened.projectId), { timeout: 20000 });
+        const manager = getTaskManagerStore(opened.projectId);
+        if (!manager) throw new Error('主任务工作区的兼容项目不可用。');
+        await manager.loadTasks();
+        navigate(taskViewDef({ projectId: opened.projectId, taskId: opened.taskId }));
+      })
+      .catch((error) =>
+        toast.error('无法打开主任务工作区', {
+          description: String(error),
+        })
+      )
+      .finally(() => setOpening(undefined));
+  };
+
+  const runAction = async (
+    id: string,
+    successMessage: string,
+    action: (client: Awaited<ReturnType<typeof getCoordinationClient>>) => Promise<unknown>
+  ): Promise<boolean> => {
+    setActing(id);
+    try {
+      await action(await getCoordinationClient());
+      await query.refetch();
+      toast.success(successMessage);
+      return true;
+    } catch (error) {
+      toast.error('操作失败', { description: String(error) });
+      return false;
+    } finally {
+      setActing(undefined);
+    }
+  };
+
+  const trashWorkspace = async (record: Coordinator, displayName: string) => {
+    const outcome = await openConfirm({
+      title: '移到废纸篓？',
+      description: `“${displayName}”将从工作区列表移到废纸篓，可随时恢复。关联项目、任务、决策和记忆不会被删除。`,
+      confirmLabel: '移到废纸篓',
+    });
+    if (!outcome.success) return;
+    await runAction(record.id, '已移到废纸篓', (client) => client.trash({ id: record.id }));
+  };
   return (
     <section className="space-y-1 px-2 pb-3" data-testid="main-agent-workspaces">
       <div className="flex items-center justify-between px-2 py-1">
@@ -59,7 +127,10 @@ export function CrossProjectMainAgents() {
         <label htmlFor="main-workspace-filter" className="mb-1 block text-xs text-foreground-muted">
           显示范围
         </label>
-        <Select.Root value={filter} onValueChange={(value) => value && setFilter(value as typeof filter)}>
+        <Select.Root
+          value={filter}
+          onValueChange={(value) => value && setFilter(value as typeof filter)}
+        >
           <Select.Trigger id="main-workspace-filter" data-testid="main-workspace-filter">
             <Select.Value>{workspaceFilterLabels[filter]}</Select.Value>
           </Select.Trigger>
@@ -70,6 +141,7 @@ export function CrossProjectMainAgents() {
             <Select.Item value="project">项目专用</Select.Item>
             <Select.Item value="completed">已完成</Select.Item>
             <Select.Item value="archived">已归档</Select.Item>
+            <Select.Item value="trash">废纸篓</Select.Item>
             <Select.Item value="all">全部</Select.Item>
           </Select.Content>
         </Select.Root>
@@ -87,61 +159,163 @@ export function CrossProjectMainAgents() {
         const projectName = getProjectManagerStore().projects.get(record.projectId)?.name;
         const displayName =
           record.kind === 'project' && projectName ? `${projectName} 主任务` : record.name;
+        const availability = getCoordinatorActionAvailability(record);
+        if (editing === record.id) {
+          return (
+            <form
+              key={record.id}
+              className="flex min-h-9 items-center gap-1 rounded-lg px-2 py-1"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void runAction(record.id, '工作区已重命名', (client) =>
+                  client.update({ id: record.id, name: draftName })
+                ).then((succeeded) => {
+                  if (succeeded) setEditing(undefined);
+                });
+              }}
+            >
+              <Input
+                autoFocus
+                aria-label="工作区名称"
+                value={draftName}
+                maxLength={100}
+                onChange={(event) => setDraftName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setEditing(undefined);
+                }}
+              />
+              <Button type="submit" size="xs" disabled={!draftName.trim() || acting === record.id}>
+                保存
+              </Button>
+              <Button type="button" size="xs" variant="ghost" onClick={() => setEditing(undefined)}>
+                取消
+              </Button>
+            </form>
+          );
+        }
         return (
-          <button
-            key={record.id}
-            type="button"
-            aria-current={active?.taskId === record.taskId ? 'page' : undefined}
-            disabled={opening === record.id}
-            className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-background-tertiary-1 aria-[current=page]:bg-background-tertiary-2"
-            onClick={() => {
-              setOpening(record.id);
-              void getCoordinationClient()
-                .then((client) => client.open({ id: record.id }))
-                .then(async (opened) => {
-                  await when(() => !!getTaskManagerStore(opened.projectId), { timeout: 20000 });
-                  const manager = getTaskManagerStore(opened.projectId);
-                  if (!manager) throw new Error('主任务工作区的兼容项目不可用。');
-                  await manager.loadTasks();
-                  navigate(taskViewDef({ projectId: opened.projectId, taskId: opened.taskId }));
-                })
-                .catch((error) =>
-                  toast.error('无法打开主任务工作区', {
-                    description: String(error),
-                  })
-                )
-                .finally(() => setOpening(undefined));
-            }}
-          >
-            <Bot className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate">{displayName}</span>
-              <span className="block truncate text-[11px] text-foreground-muted">
-                {record.lifecycle.kind === 'finite' ? '一次性' : '长期'} ·{' '}
-                {record.lifecycle.state === 'active'
-                  ? '进行中'
-                  : record.lifecycle.state === 'paused'
-                    ? '已暂停'
-                    : record.lifecycle.state === 'completed'
-                      ? '已完成'
-                      : record.lifecycle.state === 'archived'
-                        ? '已归档'
-                        : '待处理'}
-              </span>
-            </span>
-            {Object.values(record.tasks).filter((task) =>
-              ['blocked', 'review', 'changes_requested'].includes(task.state)
-            ).length > 0 && (
-              <span className="rounded-full bg-background-tertiary-2 px-1.5 text-[11px]">
-                {
-                  Object.values(record.tasks).filter((task) =>
-                    ['blocked', 'review', 'changes_requested'].includes(task.state)
-                  ).length
-                }
-              </span>
-            )}
-            <ChevronRight className="size-3.5 shrink-0 text-foreground-muted" />
-          </button>
+          <ContextMenu.Root key={record.id}>
+            <ContextMenu.Trigger>
+              <button
+                type="button"
+                aria-current={active?.taskId === record.taskId ? 'page' : undefined}
+                aria-disabled={record.deletedAt ? true : undefined}
+                disabled={opening === record.id || acting === record.id}
+                className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-background-tertiary-1 disabled:opacity-60 aria-[current=page]:bg-background-tertiary-2"
+                onClick={() => openWorkspace(record)}
+              >
+                <Bot className="size-4 shrink-0" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{displayName}</span>
+                  <span className="block truncate text-[11px] text-foreground-muted">
+                    {record.lifecycle.kind === 'finite' ? '一次性' : '长期'} ·{' '}
+                    {record.deletedAt
+                      ? '废纸篓'
+                      : record.lifecycle.state === 'active'
+                        ? '进行中'
+                        : record.lifecycle.state === 'paused'
+                          ? '已暂停'
+                          : record.lifecycle.state === 'completed'
+                            ? '已完成'
+                            : record.lifecycle.state === 'archived'
+                              ? '已归档'
+                              : '待处理'}
+                  </span>
+                </span>
+                {Object.values(record.tasks).filter((task) =>
+                  ['blocked', 'review', 'changes_requested'].includes(task.state)
+                ).length > 0 && (
+                  <span className="rounded-full bg-background-tertiary-2 px-1.5 text-[11px]">
+                    {
+                      Object.values(record.tasks).filter((task) =>
+                        ['blocked', 'review', 'changes_requested'].includes(task.state)
+                      ).length
+                    }
+                  </span>
+                )}
+                <ChevronRight className="size-3.5 shrink-0 text-foreground-muted" />
+              </button>
+            </ContextMenu.Trigger>
+            <ContextMenu.Content finalFocus={false}>
+              {record.deletedAt ? (
+                <ContextMenu.Item
+                  onClick={() =>
+                    void runAction(record.id, '工作区已恢复', (client) =>
+                      client.restoreTrash({ id: record.id })
+                    )
+                  }
+                >
+                  <ArchiveRestore className="size-4" />
+                  恢复
+                </ContextMenu.Item>
+              ) : (
+                <>
+                  <ContextMenu.Item onClick={() => openWorkspace(record)}>
+                    <Bot className="size-4" />
+                    打开
+                  </ContextMenu.Item>
+                  <ContextMenu.Item
+                    onClick={() => {
+                      setDraftName(record.name);
+                      setEditing(record.id);
+                    }}
+                  >
+                    <Pencil className="size-4" />
+                    重命名
+                  </ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  {record.lifecycle.kind === 'finite' &&
+                    !['completed', 'archived'].includes(record.lifecycle.state) && (
+                      <ContextMenu.Item
+                        disabled={!availability.completeAndArchive.available}
+                        title={availability.completeAndArchive.reason}
+                        onClick={() =>
+                          void runAction(record.id, '工作区已完成并归档', (client) =>
+                            client.completeAndArchive({ id: record.id })
+                          )
+                        }
+                      >
+                        <CheckCircle2 className="size-4" />
+                        完成并归档
+                      </ContextMenu.Item>
+                    )}
+                  {record.lifecycle.state === 'archived' ? (
+                    <ContextMenu.Item
+                      onClick={() =>
+                        void runAction(record.id, '工作区已恢复', (client) =>
+                          client.setLifecycleState({ id: record.id, action: 'restore' })
+                        )
+                      }
+                    >
+                      <ArchiveRestore className="size-4" />
+                      恢复
+                    </ContextMenu.Item>
+                  ) : (
+                    <ContextMenu.Item
+                      onClick={() =>
+                        void runAction(record.id, '工作区已归档', (client) =>
+                          client.setLifecycleState({ id: record.id, action: 'archive' })
+                        )
+                      }
+                    >
+                      <Archive className="size-4" />
+                      仅归档
+                    </ContextMenu.Item>
+                  )}
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item
+                    variant="destructive"
+                    disabled={!availability.trash.available}
+                    title={availability.trash.reason}
+                    onClick={() => void trashWorkspace(record, displayName)}
+                  >
+                    <Trash2 className="size-4" />
+                    删除…
+                  </ContextMenu.Item>
+                </>
+              )}
+            </ContextMenu.Content>
+          </ContextMenu.Root>
         );
       })}
     </section>
@@ -212,7 +386,10 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
         placeholder="这项工作要实现什么？"
         onChange={(event) => setPurpose(event.target.value)}
       />
-      <label htmlFor="cross-project-agent-lifecycle" className="block text-xs text-foreground-muted">
+      <label
+        htmlFor="cross-project-agent-lifecycle"
+        className="block text-xs text-foreground-muted"
+      >
         工作区生命周期
       </label>
       <Select.Root

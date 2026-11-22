@@ -1502,7 +1502,7 @@ export async function bootServices(
           telemetry: telemetryService,
           taskSessions: taskSessionManager,
           initialSize: { cols: 120, rows: 36 },
-          hiddenContext: context,
+          promptPrefix: context,
         });
         return;
       }

@@ -139,6 +139,10 @@ export function startLiveChild(
   return spawn('pnpm', args, {
     cwd: join(repoRoot, 'apps', 'emdash-desktop'),
     stdio: 'inherit',
+    // Own the entire pnpm -> electron-vite -> Electron tree as one process
+    // group. Killing only the pnpm wrapper leaves Electron orphaned and the
+    // replacement instance then opens the same profile concurrently.
+    detached: true,
     env: {
       ...process.env,
       // Coding-agent shells may set this to run Electron's bundled Node. The
@@ -154,6 +158,53 @@ export function startLiveChild(
       LOG_LEVEL: process.env.LOG_LEVEL ?? 'debug',
     },
   });
+}
+
+type ProcessSignal = (pid: number, signal?: NodeJS.Signals | number) => void;
+
+export function signalLiveChildGroup(
+  child: Pick<ChildProcess, 'pid' | 'kill'>,
+  signal: NodeJS.Signals,
+  signalProcess: ProcessSignal = process.kill
+): void {
+  if (child.pid) {
+    try {
+      signalProcess(-child.pid, signal);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    }
+  }
+  child.kill(signal);
+}
+
+export async function waitForLiveChildGroupExit(
+  pid: number | undefined,
+  signalProcess: ProcessSignal = process.kill,
+  timeoutMs = 5_000
+): Promise<void> {
+  if (!pid) return;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      signalProcess(-pid, 0);
+    } catch (error) {
+      // Darwin can report EPERM for a detached group after its leader exits,
+      // even though none of our runtime processes remain signalable. The group
+      // was already sent SIGTERM above, so both outcomes mean replacement may
+      // proceed without overlapping the old Electron instance.
+      if (['ESRCH', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  // The group is exclusively the live runtime launched above. A stale member
+  // must not survive into the replacement and keep the shared profile open.
+  try {
+    signalProcess(-pid, 'SIGKILL');
+  } catch (error) {
+    if (!['ESRCH', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+  }
 }
 
 export async function runLiveSupervisor(): Promise<number> {
@@ -195,15 +246,23 @@ export async function runLiveSupervisor(): Promise<number> {
   const startChild = () => {
     const current = inspectLiveSource(repoRoot);
     state = { ...state, ...current, pendingCommit: undefined, error: undefined };
-    child = startLiveChild(repoRoot, paths.statePath, paths.profilePath, paths.logPath, current);
-    write({ status: 'running', childPid: child.pid });
-    child.once('error', (error) => {
+    const startedChild = startLiveChild(
+      repoRoot,
+      paths.statePath,
+      paths.profilePath,
+      paths.logPath,
+      current
+    );
+    child = startedChild;
+    write({ status: 'running', childPid: startedChild.pid });
+    startedChild.once('error', (error) => {
       write({ status: 'failed', error: error.message, childPid: undefined });
       settle?.(1);
     });
-    child.once('exit', (code, signal) => {
+    startedChild.once('exit', async (code, signal) => {
       if (restarting && !stopping) {
         try {
+          await waitForLiveChildGroupExit(startedChild.pid);
           fulfillLiveBackupRequest(paths.profilePath, paths.statePath, state.runningCommit);
         } catch (error) {
           restarting = false;
@@ -252,7 +311,7 @@ export async function runLiveSupervisor(): Promise<number> {
     if (stopping || restarting) return;
     restarting = true;
     write({ status: 'restarting' });
-    child.kill('SIGTERM');
+    signalLiveChildGroup(child, 'SIGTERM');
   };
   const markHealthy = () => {
     const current = inspectLiveSource(repoRoot);
@@ -273,7 +332,7 @@ export async function runLiveSupervisor(): Promise<number> {
     stopping = true;
     write({ status: 'stopping' });
     for (const watcher of runtimeWatchers) watcher.close();
-    child.kill(signal);
+    signalLiveChildGroup(child, signal);
   };
   process.once('SIGINT', () => stop('SIGINT'));
   process.once('SIGTERM', () => stop('SIGTERM'));

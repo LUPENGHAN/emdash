@@ -266,12 +266,13 @@ it('persists effective selection values and their sources across changed default
   expect(getDefaults).not.toHaveBeenCalled();
 });
 
-it('records ACP native preferences and explicit adapter defaults without attributing them to the main agent', async () => {
+it('forces delegated work into a terminal even when a caller requests structured chat', async () => {
   const t = await setup();
+  const getAcpOptions = vi.fn(async () => ({ model: 'native-code', effort: 'high' }));
   const service = createBackendTaskDelegation({
     ...t.dependencies,
     getAgentSettings: async () => ({}),
-    getAcpOptions: async () => ({ model: 'native-code', effort: 'high' }),
+    getAcpOptions,
   });
   const params: PreparedTaskDelegation = await service.resources.prepare(
     t.caller,
@@ -287,20 +288,25 @@ it('records ACP native preferences and explicit adapter defaults without attribu
   expect(params.selectionSnapshot).toMatchObject({
     values: {
       agent: 'claude',
-      transport: 'acp',
+      transport: 'pty',
       modelSource: null,
-      model: 'native-code',
+      model: null,
       effort: null,
     },
     sources: {
       agent: 'caller',
-      transport: 'request',
+      transport: 'adapter-default',
       modelSource: 'adapter-default',
-      model: 'agent-default',
+      model: 'adapter-default',
       effort: 'request',
     },
   });
-  expect(params.taskConfig.initialConversation?.options?.effort).toBeUndefined();
+  expect(params.taskConfig.initialConversation).toMatchObject({
+    type: 'pty',
+    initialPrompt: 'Check',
+  });
+  expect(params.taskConfig.initialConversation?.initialQueue).toBeUndefined();
+  expect(getAcpOptions).not.toHaveBeenCalled();
 });
 
 it('preserves resources after activation failure and reuses a fresh project attachment', async () => {

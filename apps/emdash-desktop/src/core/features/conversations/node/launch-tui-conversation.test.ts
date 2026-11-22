@@ -32,6 +32,7 @@ describe('launchTuiConversation', () => {
       projectId: 'project-1',
       taskId: 'task-1',
       conversationId: 'conversation-1',
+      promptPrefix: 'Visible coordination instructions',
       database: database as never,
       telemetry: { capture },
       taskSessions: { getTask: resolveTask },
@@ -40,7 +41,7 @@ describe('launchTuiConversation', () => {
     expect(ensureSession).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: 'start',
-        initialPrompt: 'hello',
+        initialPrompt: 'Visible coordination instructions\n\nhello',
       })
     );
     // The resume handle is host truth: the runtime reports it into the index and

@@ -563,7 +563,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'create_task',
     {
       description:
-        "Create a git worktree through Emdash, as a task in the target project: use this instead of `git worktree add` (or a worktree tool of your own), so the worktree lands where Emdash keeps them and the user can see and review its code in Emdash. Returns the worktree's path and branch; work there yourself, or pass `prompt` to start an agent in it. Task creation and startup run in the background. Reuse request_id when retrying.",
+        "Create a git worktree through Emdash, as a task in the target project: use this instead of `git worktree add` (or a worktree tool of your own), so the worktree lands where Emdash keeps them and the user can see and review its code in Emdash. Returns the worktree's path and branch; work there yourself, or pass `prompt` to start an agent in a visible terminal. Task creation and startup run in the background. Reuse request_id when retrying.",
       inputSchema: {
         depends_on: z
           .array(z.string().min(1))
@@ -632,7 +632,6 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
           .nullable()
           .optional()
           .describe('Supported reasoning effort; null follows the adapter default'),
-        ui: z.enum(['terminal', 'chat']).optional(),
       },
     },
     ({
@@ -650,7 +649,6 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       supplier_id,
       connection,
       effort,
-      ui,
     }) =>
       dispatch({
         kind: 'create_task',
@@ -673,7 +671,6 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         ...(supplier_id && { supplierId: supplier_id }),
         ...(connection && { connection }),
         ...(effort !== undefined && { effort }),
-        ...(ui && { ui }),
       })
   );
 
