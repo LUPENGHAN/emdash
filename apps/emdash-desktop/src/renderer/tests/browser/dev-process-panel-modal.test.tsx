@@ -3,7 +3,7 @@ import '@renderer/index.css';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DevProcessPanelModal } from './DevProcessPanelModal';
+import { DevProcessPanelModal } from '@core/features/dev-perf/browser/DevProcessPanelModal';
 
 const mocks = vi.hoisted(() => ({
   processSnapshot: vi.fn(),
@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   setVerboseSpawnLogging: vi.fn(),
 }));
 
-vi.mock('../api/browser/client', () => ({
+vi.mock('@core/features/dev-perf/api/browser/client', () => ({
   getDevPerfClient: async () => mocks,
 }));
 

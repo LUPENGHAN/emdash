@@ -50,7 +50,7 @@ export type DeleteTaskInput = {
   taskId: string;
   deleteWorktree?: boolean;
   deleteBranch?: boolean;
-  /** Internal-only escape hatch used by Main Agent permanent deletion. */
+  /** Internal-only escape hatch used by permanent main task workspace deletion. */
   allowCoordination?: boolean;
   /**
    * Explicit, declinable, default-on cascade (spec §7.2): mark the task's conversation
@@ -93,7 +93,7 @@ export async function deleteTask(
   if (task.type === 'coordination' && !input.allowCoordination) {
     return err({
       type: 'task-protected',
-      message: 'The project main agent cannot be deleted as an ordinary task.',
+      message: 'The project main task workspace cannot be deleted as an ordinary task.',
     });
   }
   if (projectIsBeingDeleted(db, task.projectId)) {

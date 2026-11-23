@@ -184,6 +184,7 @@ import {
   getProjectById,
   getProjectByPath,
 } from '@core/features/projects/node/operations/getProjects';
+import { renameProject } from '@core/features/projects/node/operations/renameProject';
 import { createProjectAttachmentAdapter } from '@core/features/projects/node/project-attachment-adapter';
 import { createProjectAttachmentManager } from '@core/features/projects/node/project-attachment-manager';
 import { migrateAppWorktreeRootToLocalHostDefault } from '@core/features/projects/node/settings/migrations/app-worktree-root';
@@ -770,7 +771,7 @@ export async function bootServices(
         if (id.startsWith('result:')) {
           const main = await coordinationRuntime.service?.getByTask(taskId);
           if (!main || !coordinationRuntime.service)
-            throw new Error('The responsible main agent is unavailable.');
+            throw new Error('The responsible main task workspace is unavailable.');
           return coordinationRuntime.service.resolveResultEventForUser(
             main.id,
             id.slice('result:'.length)
@@ -807,9 +808,10 @@ export async function bootServices(
       if (action.kind === 'get_main_agent_context') {
         await assertActiveAgentCaller(caller);
         const service = coordinationRuntime.service;
-        if (!service) throw new Error('Main agent coordination is starting.');
+        if (!service) throw new Error('Main task workspace coordination is starting.');
         const main = await service.getByTask(caller.taskId);
-        if (!main) throw new Error('Only a main-agent conversation can read this context.');
+        if (!main)
+          throw new Error('Only a main task workspace conversation can read this context.');
         const projectIds: string[] = [];
         for (const projectId of main.projectIds) {
           if (await service.mayAccessProject(caller, projectId, 'read')) projectIds.push(projectId);
@@ -849,9 +851,9 @@ export async function bootServices(
       if (action.kind === 'cancel_project_import') {
         await assertActiveAgentCaller(caller);
         const service = coordinationRuntime.service;
-        if (!service) throw new Error('Main agent coordination is starting.');
+        if (!service) throw new Error('Main task workspace coordination is starting.');
         const main = await service.getByTask(caller.taskId);
-        if (!main) throw new Error('Only a main-agent conversation can cancel an import.');
+        if (!main) throw new Error('Only a main task workspace conversation can cancel an import.');
         projectImportControllers.get(`${main.id}:${action.requestId}`)?.abort();
         const record = await service.updateProjectImport(main.id, action.requestId, {
           state: 'cancelled',
@@ -862,9 +864,9 @@ export async function bootServices(
       if (action.kind === 'import_project' || action.kind === 'retry_project_import') {
         await assertActiveAgentCaller(caller);
         const service = coordinationRuntime.service;
-        if (!service) throw new Error('Main agent coordination is starting.');
+        if (!service) throw new Error('Main task workspace coordination is starting.');
         let main = await service.getByTask(caller.taskId);
-        if (!main) throw new Error('Only a main-agent conversation can import a project.');
+        if (!main) throw new Error('Only a main task workspace conversation can import a project.');
         const saved = main.projectImports?.[action.requestId];
         const url =
           action.kind === 'import_project' ? action.repositoryUrl.trim() : saved?.repositoryUrl;
@@ -1016,9 +1018,10 @@ export async function bootServices(
         action.kind === 'set_main_agent_state'
       ) {
         const service = coordinationRuntime.service;
-        if (!service) throw new Error('Main agent coordination is starting.');
+        if (!service) throw new Error('Main task workspace coordination is starting.');
         const main = await service.getByTask(caller.taskId);
-        if (!main) throw new Error('Only a main-agent conversation can change its workspace.');
+        if (!main)
+          throw new Error('Only a main task workspace conversation can change its workspace.');
         const record =
           action.kind === 'add_work_item'
             ? await service.addWorkItem(main.id, {
@@ -1082,10 +1085,10 @@ export async function bootServices(
         action.kind === 'write_management_document'
       ) {
         const service = coordinationRuntime.service;
-        if (!service) throw new Error('Main agent coordination is starting.');
+        if (!service) throw new Error('Main task workspace coordination is starting.');
         const id =
           action.coordinatorId ?? (await service.getTaskCoordination(caller.taskId))?.coordinatorId;
-        if (!id) throw new Error('Choose a main agent document source.');
+        if (!id) throw new Error('Choose a main task workspace document source.');
         return {
           text: JSON.stringify(
             action.kind === 'write_management_document'
@@ -1103,9 +1106,11 @@ export async function bootServices(
         };
       }
       if (action.kind === 'cancel_pending_task') {
-        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        if (!coordinationRuntime.service)
+          throw new Error('Main task workspace coordination is starting.');
         const main = await coordinationRuntime.service.getByTask(caller.taskId);
-        if (!main) throw new Error('Only a main agent can cancel a planned task.');
+        if (!main)
+          throw new Error('Only a main task workspace conversation can cancel a planned task.');
         const record = await coordinationRuntime.service.cancelPendingTask(
           main.id,
           action.taskId,
@@ -1116,9 +1121,10 @@ export async function bootServices(
         };
       }
       if (action.kind === 'take_over_task') {
-        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        if (!coordinationRuntime.service)
+          throw new Error('Main task workspace coordination is starting.');
         const main = await coordinationRuntime.service.getByTask(caller.taskId);
-        if (!main) throw new Error('Only a main agent can take over a task.');
+        if (!main) throw new Error('Only a main task workspace conversation can take over a task.');
         const record = await coordinationRuntime.service.takeOverTask(
           main.id,
           action.taskId,
@@ -1134,7 +1140,8 @@ export async function bootServices(
         };
       }
       if (action.kind === 'submit_task_result') {
-        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        if (!coordinationRuntime.service)
+          throw new Error('Main task workspace coordination is starting.');
         const receipt = await coordinationRuntime.service.submit(
           caller,
           action.taskId ?? caller.taskId,
@@ -1144,16 +1151,18 @@ export async function bootServices(
         return { text: JSON.stringify(receipt) };
       }
       if (action.kind === 'acknowledge_task_results') {
-        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        if (!coordinationRuntime.service)
+          throw new Error('Main task workspace coordination is starting.');
         await coordinationRuntime.service.acknowledge(caller, action.eventIds);
         return { text: 'Result events acknowledged.' };
       }
       if (action.kind === 'review_task_result') {
-        if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+        if (!coordinationRuntime.service)
+          throw new Error('Main task workspace coordination is starting.');
         const record = await coordinationRuntime.service.getByTask(caller.taskId);
         if (!record?.tasks[action.taskId])
           throw new Error(
-            'Only a conversation in the responsible main agent can review this task.'
+            'Only a conversation in the responsible main task workspace can review this task.'
           );
         await coordinationRuntime.service.review(
           record.id,
@@ -1562,12 +1571,14 @@ export async function bootServices(
       );
     },
     getBlocker: async (taskId) => {
-      if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+      if (!coordinationRuntime.service)
+        throw new Error('Main task workspace coordination is starting.');
       return coordinationRuntime.service.dependencyGate(taskId);
     },
     onCreated: async (taskId) => coordinationRuntime.service?.markTaskCreated(taskId),
     recoveryContext: async (params, fallback) => {
-      if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+      if (!coordinationRuntime.service)
+        throw new Error('Main task workspace coordination is starting.');
       const context = await coordinationRuntime.service.recoveryContext(params.id, fallback);
       const actual = await resolveAgentCaller(
         db,
@@ -1605,10 +1616,13 @@ export async function bootServices(
     getBranchDefaults: () => appSettingsService.get('project'),
     authorize: async (caller, targetProjectId, request) => {
       await assertActiveAgentCaller(caller);
-      if (!coordinationRuntime.service) throw new Error('Main agent coordination is starting.');
+      if (!coordinationRuntime.service)
+        throw new Error('Main task workspace coordination is starting.');
       const main = await coordinationRuntime.service.getByTask(caller.taskId);
       if (main?.kind === 'cross-project' && !request?.projectId)
-        throw new Error('Specify project_id when a cross-project main agent delegates code work.');
+        throw new Error(
+          'Specify project_id when a cross-project main task workspace delegates code work.'
+        );
       if (
         !(await coordinationRuntime.service.mayAccessProject(caller, targetProjectId, 'delegate'))
       )
@@ -1645,6 +1659,7 @@ export async function bootServices(
   appScope.add(() => {
     delegationDrainStopped = true;
   });
+  const mainTaskWorkspaceStorageName = 'Emdash 主任务资料库';
   let mainAgentHostProjectPromise: Promise<string> | undefined;
   const ensureMainAgentHostProject = () => {
     if (mainAgentHostProjectPromise) return mainAgentHostProjectPromise;
@@ -1665,7 +1680,7 @@ export async function bootServices(
         const readme = join(repositoryPath, 'README.md');
         await writeFile(
           readme,
-          '# Emdash 主任务管理仓库\n\n此仓库由 Emdash 自动管理，用于隔离顶层主任务的工作树和管理文档。\n',
+          '# Emdash 主任务资料库\n\n此仓库由 Emdash 自动维护，用于保存顶层主任务工作区的独立工作树和工作区文档。\n',
           { flag: 'wx' }
         ).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== 'EEXIST') throw error;
@@ -1680,11 +1695,13 @@ export async function bootServices(
           'user.email=emdash@local',
           'commit',
           '-m',
-          'chore: initialize main agent workspace',
+          'chore: initialize main task workspace',
         ]);
       };
       const existing = await getProjectById(db, MAIN_AGENT_HOST_PROJECT_ID);
       if (existing) {
+        if (existing.name === 'Emdash 主任务管理')
+          await renameProject(db, existing.id, mainTaskWorkspaceStorageName);
         await seedRepository();
         return existing.id;
       }
@@ -1695,13 +1712,13 @@ export async function bootServices(
           type: 'local',
           id: MAIN_AGENT_HOST_PROJECT_ID,
           path: repositoryPath,
-          name: 'Emdash 主任务管理',
+          name: mainTaskWorkspaceStorageName,
           initGitRepository: true,
         }
       );
       if (!created.success)
         throw new Error(
-          `无法创建主任务管理仓库：${'message' in created.error ? created.error.message : created.error.type}`
+          `无法创建主任务资料库：${'message' in created.error ? created.error.message : created.error.type}`
         );
       await seedRepository();
       return created.data.id;
@@ -1740,12 +1757,12 @@ export async function bootServices(
           )
         )
         .limit(1);
-      if (!task?.workspaceId) throw new Error('The management workspace is unavailable.');
+      if (!task?.workspaceId) throw new Error('The workspace document checkout is unavailable.');
       const identity = await workspaceIdentity.resolve(task.workspaceId);
-      if (!identity) throw new Error('The management workspace host is unavailable.');
+      if (!identity) throw new Error('The workspace document host is unavailable.');
       const runtime = await runtimes.client(identity.host);
       if (!runtime.success)
-        throw new Error(`The management workspace host is unavailable: ${runtime.error.type}`);
+        throw new Error(`The workspace document host is unavailable: ${runtime.error.type}`);
       return {
         workspaceId: task.workspaceId,
         root: hostFileRef(identity.host, hostPathFromNative(identity.path)),
@@ -1814,13 +1831,15 @@ export async function bootServices(
       if (event.taskId) agentMessageEvents.emit(undefined, { taskId: event.taskId });
     },
     reportError: (error, id) =>
-      log.warn('Could not restore main agent state', { id, error: String(error) }),
-    deliver: async (record, eventId, text, hiddenContext) => {
-      if (!record.params)
-        throw new Error('Open the main agent and configure its session before automatic delivery.');
-      await taskDelegation.service?.resources.activate(record.taskId, record.projectId);
+      log.warn('Could not restore main task workspace state', { id, error: String(error) }),
+    deliver: async (record, eventId, text, hiddenContext, conversationId, taskId, projectId) => {
+      await taskDelegation.service?.resources.activate(
+        taskId ?? record.taskId,
+        projectId ?? record.projectId
+      );
+      const targetConversationId = conversationId ?? record.conversationId;
       const target = await resolveConversationRuntimeTarget(
-        record.conversationId,
+        targetConversationId,
         workspaceIdentity,
         db,
         async (agentId, override) => (await effectiveAgentConfig(agentId, override))?.env,
@@ -1831,13 +1850,15 @@ export async function bootServices(
         throw new Error('Automatic result delivery requires a structured chat session.');
       const runtime = await runtimes.client(target.host);
       if (!runtime.success)
-        throw new Error(`The main agent host is unavailable: ${runtime.error.type}`);
+        throw new Error(`The main task workspace host is unavailable: ${runtime.error.type}`);
       const attached = await runtime.data.acp.attach(target.acpInput);
       if (!attached.success)
-        throw new Error(`Could not attach the main agent: ${JSON.stringify(attached.error)}`);
+        throw new Error(
+          `Could not attach the main task workspace: ${JSON.stringify(attached.error)}`
+        );
       const delivered = await runtime.data.acp.sendPrompt(
         {
-          conversationId: record.conversationId,
+          conversationId: targetConversationId,
           promptId: eventId,
           placement: 'queue',
           prompt: { text, origin: 'background', hiddenContext },
@@ -2018,7 +2039,7 @@ export async function bootServices(
   // workspaces are materialized only when the user explicitly opens one.
   void coordinatorService
     .recover()
-    .catch((error) => log.warn('Could not restore main agents', { error: String(error) }));
+    .catch((error) => log.warn('Could not restore main task workspaces', { error: String(error) }));
   const delegationRecoveryTimer = setTimeout(scheduleDelegations, 1000);
   appScope.add(() => clearTimeout(delegationRecoveryTimer));
   const searchService = createSearchService({
@@ -2413,16 +2434,21 @@ export async function bootServices(
   const projectDeletion: ProjectDeletionDependencies = {
     beforeDelete: async (projectId) => {
       if (projectId === MAIN_AGENT_HOST_PROJECT_ID)
-        throw new Error('Emdash 内部主任务管理仓库不能删除；如有损坏，应用会自动修复。');
+        throw new Error('Emdash 内部主任务资料库不能删除；如有损坏，应用会自动修复。');
       const references = await coordinatorService.documentStorageReferences(projectId);
       const names: string[] = [];
       for (const reference of references) {
         const owner = await getProjectById(db, reference.projectId);
-        if (owner) names.push(reference.name === 'Main agent' ? owner.name : reference.name);
+        if (owner)
+          names.push(
+            ['Main agent', 'Main Agent', '主 Agent'].includes(reference.name)
+              ? owner.name
+              : reference.name
+          );
       }
       if (names.length)
         throw new Error(
-          `This project stores management documents or a pending migration for: ${[...new Set(names)].join(', ')}. Move those documents or cancel the pending setup before deleting this project. Archiving preserves the files.`
+          `This project stores workspace documents or a pending migration for: ${[...new Set(names)].join(', ')}. Move those documents or cancel the pending setup before deleting this project. Archiving preserves the files.`
         );
     },
     db,

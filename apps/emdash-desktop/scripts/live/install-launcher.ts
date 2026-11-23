@@ -160,11 +160,9 @@ export function installLiveLauncher(repoRoot: string, targetPath = LAUNCHER_PATH
     writeFileSync(join(contents, 'Info.plist'), launcherInfoPlist());
     if (existsSync(iconSource)) cpSync(iconSource, join(resources, 'EmdashLive.icns'));
 
-    execFileSync(
-      'xcrun',
-      ['swiftc', swiftPath, '-framework', 'AppKit', '-o', executable],
-      { stdio: 'inherit' }
-    );
+    execFileSync('xcrun', ['swiftc', swiftPath, '-framework', 'AppKit', '-o', executable], {
+      stdio: 'inherit',
+    });
     chmodSync(executable, 0o755);
     execFileSync('codesign', ['--force', '--deep', '--sign', '-', bundle], {
       stdio: 'inherit',

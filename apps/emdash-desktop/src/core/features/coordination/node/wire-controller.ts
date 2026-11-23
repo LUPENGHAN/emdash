@@ -35,7 +35,9 @@ export function createCoordinationWireController(service: CoordinatorService) {
     updateProjectImport: ({ id, requestId, ...patch }) =>
       service.updateProjectImport(id, requestId, patch),
     open: ({ id }) => service.open(id),
-    bindConversation: ({ id, conversationId }) => service.bindConversation(id, conversationId),
+    bindConversation: ({ id, conversationId, autoResume }) =>
+      service.bindConversation(id, conversationId, autoResume),
+    updateResultRoutingPolicy: ({ id, policy }) => service.updateResultRoutingPolicy(id, policy),
     selectionOptions: ({ id, selection }) => service.selectionOptions(id, selection),
     list: (options) => service.list(options),
     getByTask: ({ taskId }) => service.getByTask(taskId),

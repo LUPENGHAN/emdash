@@ -7,6 +7,7 @@ import {
   Popover,
   Select,
   Switch,
+  Tabs,
   toast,
 } from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -71,80 +72,102 @@ export function ProvidersSettingsPage() {
   const providers = value?.providers ?? [];
   const apis = providers.filter((provider) => !provider.account);
   const [editing, setEditing] = useState<ModelProvider | 'new' | null>(null);
+  const [tab, setTab] = useState<'models' | 'providers' | 'routing' | 'defaults'>('models');
 
   const saveProviders = (next: ModelProvider[]) => update({ providers: next });
 
   return (
-    <div className="space-y-8 pb-4">
+    <div className="space-y-5 pb-4">
       <PageLayout.Header
         sticky
-        title="Providers"
-        description="Configure providers once. Anthropic Messages, OpenAI Chat Completions and Responses share the local router. Credentials stay in secure storage."
+        title="模型与路由"
+        description="统一管理模型、服务源、实时路由和 Agent 默认选择。密钥只保存在系统安全存储中。"
       />
-      <GatewayModelsPanel />
-      <GatewayProvidersPanel />
-      <section className="space-y-3">
-        <h3 className="text-sm font-medium text-foreground">Your providers</h3>
-        {apis.length === 0 && !editing ? (
-          <p className="text-sm text-foreground-muted">No providers yet.</p>
-        ) : null}
-        <ul className="flex flex-col gap-2">
-          {apis.map((provider) =>
-            editing !== 'new' && editing?.id === provider.id ? (
-              <li key={provider.id}>
-                <ProviderForm
-                  initial={provider}
-                  onCancel={() => setEditing(null)}
-                  onSaved={(saved) => {
-                    saveProviders(providers.map((p) => (p.id === saved.id ? saved : p)));
-                    setEditing(null);
-                  }}
-                />
-              </li>
-            ) : (
-              <li key={provider.id}>
-                <ProviderRow
-                  provider={provider}
-                  onEdit={() => setEditing(provider)}
-                  onDelete={async () => {
-                    const confirmed = await openModal('confirmActionModal', {
-                      title: `Delete ${provider.name}?`,
-                      description:
-                        'Its key is removed from the keychain. Agents and conversations set to it will not start (they never fall back to your own login) until you pick another source: under Agent defaults below, or with “Restart with another provider…” on the conversation.',
-                      confirmLabel: 'Delete',
-                    });
-                    if (!confirmed.success) return;
-                    await (
-                      await getAgentsClient()
-                    ).clearModelProviderKey({ providerId: provider.id });
-                    for (const protocol of PROVIDER_PROTOCOLS)
-                      await (
-                        await getAgentsClient()
-                      ).clearModelProviderKey({ providerId: provider.id, protocol });
-                    saveProviders(providers.filter((p) => p.id !== provider.id));
-                  }}
-                />
-              </li>
-            )
-          )}
-        </ul>
-        {editing === 'new' ? (
-          <ProviderForm
-            onCancel={() => setEditing(null)}
-            onSaved={(saved) => {
-              saveProviders([...providers, saved]);
-              setEditing(null);
-            }}
-          />
-        ) : !editing ? (
-          <Button variant="secondary" onClick={() => setEditing('new')}>
-            Add provider
-          </Button>
-        ) : null}
-        {!editing ? <ProviderTransfer providers={apis} /> : null}
-      </section>
-      <OfficialAccounts providers={providers} saveProviders={saveProviders} />
-      <AgentDefaults />
+      <Tabs.Root value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
+        <Tabs.List className="max-w-full overflow-x-auto" aria-label="模型与路由设置">
+          <Tabs.Tab value="models">模型</Tabs.Tab>
+          <Tabs.Tab value="providers">服务源</Tabs.Tab>
+          <Tabs.Tab value="routing">路由状态</Tabs.Tab>
+          <Tabs.Tab value="defaults">Agent 默认</Tabs.Tab>
+        </Tabs.List>
+        <Tabs.Panel value="models" className="pt-4">
+          <GatewayModelsPanel />
+        </Tabs.Panel>
+        <Tabs.Panel value="routing" className="pt-4">
+          <GatewayProvidersPanel />
+        </Tabs.Panel>
+        <Tabs.Panel value="defaults" className="pt-4">
+          <AgentDefaults />
+        </Tabs.Panel>
+        <Tabs.Panel value="providers" className="space-y-6 pt-4">
+          <section className="space-y-3">
+            <div>
+              <h2 className="text-base font-medium text-foreground">API 服务源</h2>
+              <p className="text-xs text-foreground-muted">
+                服务源只描述连接、协议、密钥和可发现模型；一个服务源可以被多个目录模型复用。
+              </p>
+            </div>
+            {apis.length === 0 && !editing ? (
+              <p className="text-sm text-foreground-muted">还没有 API 服务源。</p>
+            ) : null}
+            <ul className="flex flex-col gap-2">
+              {apis.map((provider) =>
+                editing !== 'new' && editing?.id === provider.id ? (
+                  <li key={provider.id}>
+                    <ProviderForm
+                      initial={provider}
+                      onCancel={() => setEditing(null)}
+                      onSaved={(saved) => {
+                        saveProviders(providers.map((p) => (p.id === saved.id ? saved : p)));
+                        setEditing(null);
+                      }}
+                    />
+                  </li>
+                ) : (
+                  <li key={provider.id}>
+                    <ProviderRow
+                      provider={provider}
+                      onEdit={() => setEditing(provider)}
+                      onDelete={async () => {
+                        const confirmed = await openModal('confirmActionModal', {
+                          title: `删除“${provider.name}”？`,
+                          description:
+                            '系统会删除其安全存储密钥。引用它的 Agent 和会话不会回退到个人登录；选择其它来源前将无法启动。',
+                          confirmLabel: '删除',
+                        });
+                        if (!confirmed.success) return;
+                        await (
+                          await getAgentsClient()
+                        ).clearModelProviderKey({ providerId: provider.id });
+                        for (const protocol of PROVIDER_PROTOCOLS)
+                          await (
+                            await getAgentsClient()
+                          ).clearModelProviderKey({ providerId: provider.id, protocol });
+                        saveProviders(providers.filter((p) => p.id !== provider.id));
+                      }}
+                    />
+                  </li>
+                )
+              )}
+            </ul>
+            {editing === 'new' ? (
+              <ProviderForm
+                onCancel={() => setEditing(null)}
+                onSaved={(saved) => {
+                  saveProviders([...providers, saved]);
+                  setEditing(null);
+                }}
+              />
+            ) : !editing ? (
+              <Button variant="secondary" onClick={() => setEditing('new')}>
+                添加服务源
+              </Button>
+            ) : null}
+            {!editing ? <ProviderTransfer providers={apis} /> : null}
+          </section>
+          <OfficialAccounts providers={providers} saveProviders={saveProviders} />
+        </Tabs.Panel>
+      </Tabs.Root>
     </div>
   );
 }
@@ -173,15 +196,15 @@ function ProviderRow({
         <p className="truncate text-xs text-foreground-muted">{describeProvider(provider)}</p>
         <p className="truncate text-xs text-foreground-muted">
           Local router · {provider.models.length} models ·{' '}
-          {keyStatus?.hasKey ? 'key saved' : 'no key'} · for{' '}
+          {keyStatus?.hasKey ? '已保存密钥' : '未保存密钥'} · 支持{' '}
           {agents.length > 0 ? agents.map((agent) => AGENT_NAMES[agent]).join(', ') : 'no agent'}
         </p>
       </div>
       <Button size="sm" variant="ghost" onClick={onEdit}>
-        Edit
+        编辑
       </Button>
       <Button size="sm" variant="ghost" onClick={() => void onDelete()}>
-        Delete
+        删除
       </Button>
     </div>
   );
@@ -325,7 +348,7 @@ function ProviderForm({
   const bulkContextInvalid = bulkContext.trim() !== '' && parseContextWindow(bulkContext) === null;
   const defaultModelsUrl = hasBaseUrl
     ? providerModelsUrl({ ...draft, modelsUrl: undefined })
-    : 'Filled in from the base URL';
+    : '根据基础 URL 自动生成';
   const listed = [...new Set([...upstream, ...selected])].filter((model) =>
     model.toLowerCase().includes(filter.trim().toLowerCase())
   );
@@ -336,7 +359,7 @@ function ProviderForm({
 
   const fetchModels = async () => {
     setBusy(true);
-    setTestState('Connecting…');
+    setTestState('正在连接…');
     const result = await (
       await getAgentsClient()
     ).listModelProviderModels({
@@ -359,9 +382,9 @@ function ProviderForm({
     setBusy(false);
     if (result.success) {
       setUpstream(result.data);
-      setTestState(`Connected · ${result.data.length} models upstream`);
+      setTestState(`连接成功 · 上游返回 ${result.data.length} 个模型`);
     } else {
-      setTestState(`Failed: ${result.error.message}`);
+      setTestState(`连接失败：${result.error.message}`);
     }
   };
 
@@ -381,7 +404,7 @@ function ProviderForm({
       await queryClient.invalidateQueries({ queryKey: keyStatusQueryKey(id) });
       onSaved(draft);
     } catch (error) {
-      toast.error(`Could not save the provider: ${String(error)}`);
+      toast.error(`无法保存服务源：${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -390,18 +413,18 @@ function ProviderForm({
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border p-3">
       <Field.Root>
-        <Field.Label>Name</Field.Label>
+        <Field.Label>名称</Field.Label>
         <Input value={name} placeholder="DeepSeek" onChange={(e) => setName(e.target.value)} />
       </Field.Root>
       <Field.Root>
-        <Field.Label>Protocol</Field.Label>
+        <Field.Label>协议</Field.Label>
         <Select.Root
           value={protocol}
           onValueChange={(next) => next && setProtocol(next as ProviderProtocol | 'multi')}
         >
           <Select.Trigger appearance="input" className="w-full">
             <Select.Value>
-              {protocol === 'multi' ? 'Multiple protocols' : PROVIDER_PROTOCOL_LABELS[protocol]}
+              {protocol === 'multi' ? '多协议' : PROVIDER_PROTOCOL_LABELS[protocol]}
             </Select.Value>
           </Select.Trigger>
           <Select.Content align="start" width="trigger">
@@ -410,31 +433,29 @@ function ProviderForm({
                 {PROVIDER_PROTOCOL_LABELS[candidate]}
               </Select.Item>
             ))}
-            <Select.Item value="multi">Multiple protocols</Select.Item>
+            <Select.Item value="multi">多协议</Select.Item>
           </Select.Content>
         </Select.Root>
         <Field.Description>
-          Claude Code needs Anthropic Messages and Codex needs OpenAI Responses; OpenCode, Pi and Oh
-          My Pi use any of them.
+          Claude Code 需要 Anthropic Messages，Codex 需要 OpenAI Responses；OpenCode、Pi 和 Oh My Pi
+          可使用任一兼容协议。
         </Field.Description>
       </Field.Root>
       <Field.Root>
-        <Field.Label>Base URL</Field.Label>
+        <Field.Label>基础 URL</Field.Label>
         <Input
           value={baseUrl}
           placeholder="https://api.example.com"
           onChange={(event) => setBaseUrl(event.target.value)}
         />
         {protocol === 'multi' ? (
-          <Field.Description>
-            Shared base for enabled protocols. Override individual URLs below when needed.
-          </Field.Description>
+          <Field.Description>已启用协议默认共用此地址；需要时可在下方分别覆盖。</Field.Description>
         ) : null}
       </Field.Root>
       {protocol === 'multi' ? (
         <>
           <div className="space-y-3">
-            <p className="text-sm font-medium">Protocol URLs</p>
+            <p className="text-sm font-medium">协议 URL</p>
             {PROVIDER_PROTOCOLS.map((candidate) => (
               <div key={candidate} className="space-y-2">
                 <label className="flex items-center gap-2 text-xs">
@@ -457,7 +478,7 @@ function ProviderForm({
                   <Input
                     aria-label={PROVIDER_PROTOCOL_LABELS[candidate] + ' URL'}
                     value={endpoints[candidate] ?? ''}
-                    placeholder="Use Base URL"
+                    placeholder="使用基础 URL"
                     onChange={(event) =>
                       setEndpoints((current) => ({ ...current, [candidate]: event.target.value }))
                     }
@@ -467,7 +488,7 @@ function ProviderForm({
             ))}
           </div>
           <Field.Root>
-            <Field.Label>Default launch protocol</Field.Label>
+            <Field.Label>默认启动协议</Field.Label>
             <Select.Root
               value={preferredProtocol ?? 'auto'}
               onValueChange={(value) =>
@@ -476,11 +497,11 @@ function ProviderForm({
             >
               <Select.Trigger appearance="input">
                 <Select.Value>
-                  {preferredProtocol ? PROVIDER_PROTOCOL_LABELS[preferredProtocol] : 'Automatic'}
+                  {preferredProtocol ? PROVIDER_PROTOCOL_LABELS[preferredProtocol] : '自动'}
                 </Select.Value>
               </Select.Trigger>
               <Select.Content>
-                <Select.Item value="auto">Automatic</Select.Item>
+                <Select.Item value="auto">自动</Select.Item>
                 {PROVIDER_PROTOCOLS.filter((candidate) =>
                   Object.hasOwn(activeEndpoints, candidate)
                 ).map((candidate) => (
@@ -491,14 +512,14 @@ function ProviderForm({
               </Select.Content>
             </Select.Root>
             <Field.Description>
-              Used by new OpenCode, Pi and Oh My Pi sessions. Claude Code uses Messages; Codex uses
-              Responses. Changing this setting requires restarting existing sessions.
+              用于新的 OpenCode、Pi 和 Oh My Pi 会话。Claude Code 固定使用 Messages，Codex 固定使用
+              Responses；修改后已有会话需要重启。
             </Field.Description>
           </Field.Root>
         </>
       ) : null}
       <Field.Root>
-        <Field.Label>Default API key</Field.Label>
+        <Field.Label>默认 API 密钥</Field.Label>
         <div className="flex gap-2">
           <Input
             type="text"
@@ -512,28 +533,28 @@ function ProviderForm({
             variant="secondary"
             disabled={!apiKey}
             onClick={() =>
-              void copyTextToClipboard(apiKey).catch(() => toast.error('Could not copy the key.'))
+              void copyTextToClipboard(apiKey).catch(() => toast.error('无法复制密钥。'))
             }
           >
-            Copy
+            复制
           </Button>
         </div>
         <Field.Description>
-          Shared by all protocols unless overridden below. Keys are visible and stored encrypted.
+          所有协议默认共用；可在下方单独覆盖。密钥以明文输入，但会加密保存。
         </Field.Description>
       </Field.Root>
       {PROVIDER_PROTOCOLS.filter((candidate) =>
         protocol === 'multi' ? Object.hasOwn(activeEndpoints, candidate) : candidate === protocol
       ).map((candidate) => (
         <Field.Root key={candidate}>
-          <Field.Label>{PROVIDER_PROTOCOL_LABELS[candidate]} API key</Field.Label>
+          <Field.Label>{PROVIDER_PROTOCOL_LABELS[candidate]} API 密钥</Field.Label>
           <div className="flex gap-2">
             <Input
               type="text"
               aria-label={PROVIDER_PROTOCOL_LABELS[candidate] + ' API key'}
               autoComplete="off"
               value={protocolKeys[candidate] ?? ''}
-              placeholder="Use default API key"
+              placeholder="使用默认 API 密钥"
               onChange={(event) =>
                 setProtocolKeys((current) => ({ ...current, [candidate]: event.target.value }))
               }
@@ -544,22 +565,22 @@ function ProviderForm({
               disabled={!protocolKeys[candidate] && !apiKey}
               onClick={() =>
                 void copyTextToClipboard(protocolKeys[candidate] || apiKey).catch(() =>
-                  toast.error('Could not copy the key.')
+                  toast.error('无法复制密钥。')
                 )
               }
             >
-              Copy
+              复制
             </Button>
           </div>
         </Field.Root>
       ))}
       {storedKeys.error ? (
         <p role="alert" className="text-destructive text-xs">
-          Could not load saved keys.
+          无法加载已保存的密钥。
         </p>
       ) : null}
       <Field.Root>
-        <Field.Label>Models URL</Field.Label>
+        <Field.Label>模型列表 URL</Field.Label>
         <div className="flex gap-2">
           <div className="min-w-0 flex-1">
             <Input
@@ -574,17 +595,17 @@ function ProviderForm({
             disabled={busy || !hasBaseUrl}
             onClick={() => void fetchModels()}
           >
-            Fetch models
+            获取模型
           </Button>
         </div>
         <Field.Description>
-          {testState ?? 'Leave empty to use the usual models endpoint shown above.'}
+          {testState ?? '留空时使用上方推导出的标准模型列表地址。'}
         </Field.Description>
       </Field.Root>
       <Field.Root>
         <Field.Label>
-          Upstream model suggestions ({selected.length} added
-          {upstream.length ? ` of ${upstream.length}` : ''})
+          上游模型候选（已加入 {selected.length} 个
+          {upstream.length ? ` / 共 ${upstream.length} 个` : ''}）
         </Field.Label>
         {upstream.length > 0 || selected.length > 0 ? (
           <>
@@ -592,7 +613,7 @@ function ProviderForm({
               <div className="min-w-0 flex-1">
                 <Input
                   value={filter}
-                  placeholder="Filter"
+                  placeholder="筛选模型"
                   onChange={(e) => setFilter(e.target.value)}
                 />
               </div>
@@ -601,14 +622,14 @@ function ProviderForm({
                 variant="ghost"
                 onClick={() => setSelected((current) => [...new Set([...current, ...listed])])}
               >
-                Add all shown
+                加入当前结果
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={() => setSelected((current) => current.filter((m) => !listed.includes(m)))}
               >
-                Remove all shown
+                移除当前结果
               </Button>
             </div>
             <div className="flex gap-2">
@@ -616,7 +637,7 @@ function ProviderForm({
                 <Input
                   value={bulkContext}
                   placeholder="1m"
-                  aria-label="Context window for selected models"
+                  aria-label="所选模型的上下文窗口"
                   aria-invalid={bulkContextInvalid}
                   onChange={(event) => setBulkContext(event.target.value)}
                 />
@@ -631,7 +652,7 @@ function ProviderForm({
                   )
                 }
               >
-                Apply to selected
+                应用于已选模型
               </Button>
             </div>
             <ul className="max-h-60 overflow-y-auto rounded-md border border-border py-1">
@@ -659,7 +680,7 @@ function ProviderForm({
                           )
                         }
                       />
-                      Reasoning
+                      推理
                     </label>
                   ) : null}
                   {selected.includes(model) && speaksResponses ? (
@@ -677,7 +698,7 @@ function ProviderForm({
                           )
                         }
                       />
-                      Web search (Codex)
+                      网页搜索（Codex）
                     </label>
                   ) : null}
                   {selected.includes(model) && speaksResponses ? (
@@ -698,7 +719,7 @@ function ProviderForm({
                     <div className="w-24 shrink-0">
                       <Input
                         value={contexts[model] ?? ''}
-                        placeholder="Context"
+                        placeholder="上下文"
                         aria-label={`Context window of ${model}`}
                         aria-invalid={
                           (contexts[model] ?? '').trim() !== '' &&
@@ -716,20 +737,18 @@ function ProviderForm({
           </>
         ) : (
           <Field.Description>
-            Fetch the upstream models, or type model ids below. Publish agent-facing aliases in
-            Gateway models; these suggestions do not change published routes.
+            可从上游获取模型，也可在下方手动输入模型
+            ID。这里仅维护服务源的发现列表，不会直接改变模型目录或路由。
           </Field.Description>
         )}
         {selected.length > 0 ? (
           <Field.Description>
-            Context: the model's context window, e.g. 1m or 256k. Codex, OpenCode, Pi, Oh My Pi and
-            Claude Code use it. Leave it blank to keep the default. Reasoning: Pi, Oh My Pi and
-            Codex offer reasoning efforts for the model; turn it off for models that reject them.
+            上下文示例：1m 或 256k；留空则沿用默认值。推理开关用于控制是否向模型提供推理强度选项。
           </Field.Description>
         ) : null}
         {speaksResponses ? (
           <div className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-foreground">Codex reasoning efforts</span>
+            <span className="text-xs font-medium text-foreground">Codex 推理强度</span>
             <CodexEffortPicker
               value={providerEfforts}
               onChange={(next) =>
@@ -737,24 +756,21 @@ function ProviderForm({
               }
             />
             <Field.Description>
-              Codex offers these efforts on this provider&apos;s models. Pick the ones the provider
-              accepts: it may reject the others with an error.
+              只保留该服务源实际接受的推理强度；不支持的值可能被上游直接拒绝。
             </Field.Description>
           </div>
         ) : null}
         {speaksResponses ? (
           <Field.Description>
-            In one Codex conversation, stay with models from the same vendor. Some models return
-            encrypted reasoning that models from other vendors cannot read, and the conversation
-            then fails with &quot;encrypted history requires an owned session&quot;. Start a new
-            conversation to switch.
+            同一 Codex
+            会话内应使用同一厂商模型。跨厂商切换可能无法读取加密推理历史；需要切换时请新建会话。
           </Field.Description>
         ) : null}
         <div className="flex gap-2">
           <div className="min-w-0 flex-1">
             <Input
               value={manualModel}
-              placeholder="Add a model id by hand"
+              placeholder="手动添加模型 ID"
               onChange={(e) => setManualModel(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && manualModel.trim()) {
@@ -773,7 +789,7 @@ function ProviderForm({
               setManualModel('');
             }}
           >
-            Add
+            添加
           </Button>
         </div>
       </Field.Root>
@@ -782,7 +798,7 @@ function ProviderForm({
       ) : null}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={onCancel}>
-          Cancel
+          取消
         </Button>
         <Button
           size="sm"
@@ -796,7 +812,7 @@ function ProviderForm({
           }
           onClick={() => void save()}
         >
-          Save
+          保存服务源
         </Button>
       </div>
     </div>
@@ -838,11 +854,10 @@ function OfficialAccounts({
   return (
     <section className="space-y-3">
       <div>
-        <h3 className="text-sm font-medium text-foreground">Official accounts</h3>
+        <h3 className="text-sm font-medium text-foreground">官方账号</h3>
         <p className="text-xs text-foreground-muted">
-          More Claude or ChatGPT accounts to run Claude Code or Codex on, picked like a provider.
-          Each keeps its own sign-in; sessions, settings, skills and MCP servers stay shared, so a
-          conversation can resume on another account. Your usual login stays the default.
+          可添加更多 Claude 或 ChatGPT 账号供 Claude Code、Codex
+          使用。每个账号独立登录，但会话、设置、技能和 MCP 服务仍然共享；常用登录保持为默认账号。
         </p>
       </div>
       {accounts.length > 0 ? (
@@ -858,10 +873,10 @@ function OfficialAccounts({
                 }
                 onDelete={async () => {
                   const confirmed = await openModal('confirmActionModal', {
-                    title: `Remove ${account.name}?`,
+                    title: `移除“${account.name}”？`,
                     description:
-                      'Emdash stops offering it; conversations set to it will not start until you pick another source. Its sign-in stays on this computer (in ~/.emdash/accounts); sign out there with the agent’s own logout if you want it gone.',
-                    confirmLabel: 'Remove',
+                      'Emdash 将不再提供此账号，引用它的会话在选择其它来源前无法启动。登录数据仍保留在本机；如需清除，请使用对应 Agent 的退出登录功能。',
+                    confirmLabel: '移除',
                   });
                   if (!confirmed.success) return;
                   saveProviders(providers.filter((p) => p.id !== account.id));
@@ -895,10 +910,10 @@ function OfficialAccounts({
           </div>
           <div className="min-w-0 flex-1">
             <Field.Root>
-              <Field.Label>Name</Field.Label>
+              <Field.Label>名称</Field.Label>
               <Input
                 value={name}
-                placeholder="Work account"
+                placeholder="工作账号"
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') add();
@@ -907,15 +922,15 @@ function OfficialAccounts({
             </Field.Root>
           </div>
           <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
-            Cancel
+            取消
           </Button>
           <Button size="sm" variant="primary" disabled={!name.trim()} onClick={add}>
-            Add
+            添加
           </Button>
         </div>
       ) : (
         <Button variant="secondary" onClick={() => setAdding(true)}>
-          Add account
+          添加账号
         </Button>
       )}
     </section>
@@ -948,10 +963,10 @@ function OfficialAccountRow({
       await getAgentsClient()
     ).openOfficialAccountLogin({ providerId: account.id });
     if (result.opened) {
-      toast.success('Finish signing in in the Terminal window, then press Refresh.');
+      toast.success('请在终端窗口完成登录，然后点击“刷新”。');
     } else {
       await navigator.clipboard.writeText(result.command).catch(() => undefined);
-      toast.success(`Run this in a terminal (copied): ${result.command}`);
+      toast.success(`请在终端运行以下命令（已复制）：${result.command}`);
     }
   };
 
@@ -978,40 +993,40 @@ function OfficialAccountRow({
         <p className="truncate text-xs text-foreground-muted">
           {AGENT_NAMES[agent]} · {OFFICIAL_ACCOUNT_LABELS[agent]} ·{' '}
           {!status ? (
-            'checking…'
+            '检查中…'
           ) : status.signedIn ? (
             <span translate="no">
-              {status.email ?? 'signed in'}
+              {status.email ?? '已登录'}
               {status.plan ? ` (${status.plan})` : ''}
             </span>
           ) : (
-            'not signed in'
+            '未登录'
           )}
         </p>
       </div>
       <Button size="sm" variant="ghost" onClick={() => void signIn()}>
-        {status?.signedIn ? 'Sign in again' : 'Sign in'}
+        {status?.signedIn ? '重新登录' : '登录'}
       </Button>
       <Button size="sm" variant="ghost" disabled={isFetching} onClick={() => void refetch()}>
-        Refresh
+        刷新
       </Button>
       <Button size="sm" variant="ghost" onClick={() => setRenaming(account.name)}>
-        Rename
+        重命名
       </Button>
       <Button size="sm" variant="ghost" onClick={() => void onDelete()}>
-        Remove
+        移除
       </Button>
     </div>
   );
 }
 
 const CLAUDE_ROLE_ROWS: { role: keyof Omit<ClaudeModelRoles, 'names'>; label: string }[] = [
-  { role: 'model', label: 'Default' },
+  { role: 'model', label: '默认' },
   { role: 'opus', label: 'Opus' },
   { role: 'sonnet', label: 'Sonnet' },
   { role: 'haiku', label: 'Haiku' },
   { role: 'fable', label: 'Fable' },
-  { role: 'subagent', label: 'Subagents' },
+  { role: 'subagent', label: '子 Agent' },
 ];
 const UNSET = '__unset__';
 
@@ -1064,7 +1079,7 @@ function CodexEffortPicker({
         );
       })}
       <div className="flex items-center gap-1 text-xs text-foreground-muted">
-        Default
+        默认
         <Select.Root
           value={value.default}
           disabled={readOnly}
@@ -1118,16 +1133,16 @@ function ModelEffortsButton({
             size="sm"
             variant="ghost"
             className="h-7 shrink-0 px-2 text-xs"
-            title={reasoning ? undefined : 'Reasoning is off for this model'}
-            aria-label={`Codex efforts of ${model}`}
+            title={reasoning ? undefined : '此模型已关闭推理能力'}
+            aria-label={`${model} 的 Codex 推理强度`}
           />
         }
       >
-        {summary ? <span translate="no">{summary}</span> : 'Efforts'}
+        {summary ? <span translate="no">{summary}</span> : '推理强度'}
       </Popover.Trigger>
       <Popover.Content align="end" className="flex w-80 flex-col gap-3 p-3">
         <label className="flex items-center justify-between gap-2 text-xs text-foreground">
-          Use the provider&apos;s efforts
+          跟随服务源的推理强度
           <Switch
             checked={!own}
             onCheckedChange={(follow) => onChange(follow ? undefined : inherited)}
@@ -1175,7 +1190,7 @@ function ClaudeModelRolesField({
   return (
     <Field.Root>
       <div className="flex items-center justify-between gap-2">
-        <Field.Label>Claude Code models</Field.Label>
+        <Field.Label>Claude Code 模型角色</Field.Label>
         <div className="flex min-w-0 items-center gap-2">
           {soleModel ? null : (
             <Select.Root
@@ -1187,7 +1202,7 @@ function ClaudeModelRolesField({
                   {target ? (
                     <span className="truncate font-mono text-xs">{target}</span>
                   ) : (
-                    <span className="text-foreground-passive">Model</span>
+                    <span className="text-foreground-passive">选择模型</span>
                   )}
                 </Select.Value>
               </Select.Trigger>
@@ -1210,7 +1225,7 @@ function ClaudeModelRolesField({
               onChange(claudeRolesForEveryRole(value, target));
             }}
           >
-            Use for every role
+            应用于所有角色
           </Button>
         </div>
       </div>
@@ -1235,14 +1250,14 @@ function ClaudeModelRolesField({
                       <span className="truncate font-mono text-xs">{current}</span>
                     ) : (
                       <span className="text-foreground-passive">
-                        {role === 'model' || role === 'subagent' ? 'Not set' : 'Follow default'}
+                        {role === 'model' || role === 'subagent' ? '未设置' : '跟随默认模型'}
                       </span>
                     )}
                   </Select.Value>
                 </Select.Trigger>
                 <Select.Content align="start" width="trigger">
                   <Select.Item value={UNSET}>
-                    {role === 'model' || role === 'subagent' ? 'Not set' : 'Follow default'}
+                    {role === 'model' || role === 'subagent' ? '未设置' : '跟随默认模型'}
                   </Select.Item>
                   {models.map((model) => (
                     <Select.Item key={model} value={model}>
@@ -1254,8 +1269,8 @@ function ClaudeModelRolesField({
               {alias ? (
                 <Input
                   value={value.names?.[alias] ?? ''}
-                  placeholder="Name in /model"
-                  aria-label={`${label} display name`}
+                  placeholder="在 /model 中显示的名称"
+                  aria-label={`${label} 的显示名称`}
                   disabled={!current}
                   onChange={(e) =>
                     onChange({ ...value, names: { ...value.names, [alias]: e.target.value } })
@@ -1269,10 +1284,9 @@ function ClaudeModelRolesField({
         })}
       </div>
       <Field.Description>
-        Only conversations running Claude Code on this provider use these. Default applies when the
-        conversation picks no model. An alias left on Follow default uses the conversation's model
-        when that is not a Claude model. Models with a 1m context get Claude Code's 1M window;
-        another context set on the conversation's model sizes it.
+        这些设置只影响通过当前服务源运行的 Claude Code
+        会话。会话未选择模型时使用“默认”；别名设为“跟随默认模型”时，
+        会优先使用会话所选模型。上下文窗口仍以目录模型中保存的数值为准。
       </Field.Description>
     </Field.Root>
   );
@@ -1283,10 +1297,9 @@ function AgentDefaults() {
   return (
     <section className="space-y-3">
       <div>
-        <h3 className="text-sm font-medium text-foreground">Agent defaults</h3>
+        <h2 className="text-base font-medium text-foreground">Agent 默认设置</h2>
         <p className="text-xs text-foreground-muted">
-          New conversations use these; pick another source when creating one, or restart a
-          conversation on another source from its tab menu.
+          新会话使用这里的默认值；创建时仍可临时选择其它来源，已有会话需通过重启明确切换。
         </p>
       </div>
       <div className="flex flex-col divide-y divide-border rounded-md border border-border">
@@ -1328,7 +1341,7 @@ export const AgentDefaultRow = observer(function AgentDefaultRow({ agentId }: { 
       );
       await updateAsync(next);
     } catch (error) {
-      toast.error('Could not save agent defaults', { description: String(error) });
+      toast.error('无法保存 Agent 默认设置', { description: String(error) });
     }
   };
   const save = (value: ModelSourceValue) => {
@@ -1350,7 +1363,7 @@ export const AgentDefaultRow = observer(function AgentDefaultRow({ agentId }: { 
           showReset={false}
         />
         <Field.Root>
-          <Field.Label>Default model effort</Field.Label>
+          <Field.Label>默认模型强度</Field.Label>
           <Select.Root
             value={config?.effort ?? 'inherit'}
             disabled={isSaving || (!config?.effort && Object.keys(effortOptions).length === 0)}
@@ -1359,18 +1372,18 @@ export const AgentDefaultRow = observer(function AgentDefaultRow({ agentId }: { 
                 void persist({ ...config, effort: value === 'inherit' ? undefined : value });
             }}
           >
-            <Select.Trigger aria-label={`Default model effort for ${AGENT_NAMES[agentId]}`}>
+            <Select.Trigger aria-label={`${AGENT_NAMES[agentId]} 的默认模型强度`}>
               <Select.Value>
                 {config?.effort
                   ? (effortOptions[config.effort]?.label ?? config.effort)
-                  : 'Follow model / agent default'}
+                  : '跟随模型或 Agent 默认值'}
               </Select.Value>
             </Select.Trigger>
             <Select.Content>
-              <Select.Item value="inherit">Follow model / agent default</Select.Item>
+              <Select.Item value="inherit">跟随模型或 Agent 默认值</Select.Item>
               {config?.effort && !effortOptions[config.effort] && (
                 <Select.Item value={config.effort} disabled>
-                  {config.effort} (unavailable)
+                  {config.effort}（不可用）
                 </Select.Item>
               )}
               {Object.entries(effortOptions).map(([id, option]) => (
@@ -1382,8 +1395,8 @@ export const AgentDefaultRow = observer(function AgentDefaultRow({ agentId }: { 
           </Select.Root>
           <Field.Description>
             {Object.keys(effortOptions).length > 0
-              ? 'Applies to new sessions. The selected model must support this effort.'
-              : 'This agent has no default effort integration.'}
+              ? '应用于新会话；所选模型必须支持对应推理强度。'
+              : '此 Agent 暂不支持配置默认推理强度。'}
           </Field.Description>
         </Field.Root>
       </div>

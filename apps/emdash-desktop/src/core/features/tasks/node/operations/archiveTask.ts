@@ -20,7 +20,7 @@ export async function archiveTask(
     .limit(1);
   if (!task) return;
   if (task.type === 'coordination')
-    throw new Error('The project main agent cannot be archived as an ordinary task.');
+    throw new Error('The project main task workspace cannot be archived as an ordinary task.');
 
   await db
     .update(tasks)

@@ -1,7 +1,7 @@
 import { defineContract, procedure } from '@emdash/wire/rpc';
 import { z } from 'zod';
 import type { ModelProvider } from '@core/features/model-providers/api';
-import { gatewayModelSchema, type GatewayModel } from './model-catalog';
+import { publishedGatewayModelSchema, type PublishedGatewayModel } from './model-catalog';
 
 export type GatewayAccount = {
   id: string;
@@ -32,7 +32,7 @@ export type GatewayUsage = {
   status: 'complete' | 'missing';
 };
 export type GatewayStatus = {
-  models?: GatewayModel[];
+  models?: PublishedGatewayModel[];
   state: 'stopped' | 'starting' | 'ready' | 'failed';
   error?: string;
   providers: ModelProvider[];
@@ -44,13 +44,16 @@ export const modelGatewayDomain = 'modelGateway' as const;
 const empty = z.void();
 export const modelGatewayContract = defineContract({
   status: procedure({ input: empty, output: z.custom<GatewayStatus>() }),
-  migrationPreview: procedure({ input: empty, output: z.array(gatewayModelSchema) }),
+  migrationPreview: procedure({ input: empty, output: z.array(publishedGatewayModelSchema) }),
   testModel: procedure({
     input: z.object({ alias: z.string().min(1), agent: z.enum(['claude', 'codex']) }),
     output: z.object({ ok: z.boolean(), status: z.number() }),
   }),
   saveModels: procedure({
-    input: z.object({ models: z.array(gatewayModelSchema) }),
+    input: z.object({
+      models: z.array(publishedGatewayModelSchema),
+      ignoredSourceIds: z.array(z.string().min(1)).default([]),
+    }),
     output: empty,
   }),
   start: procedure({ input: empty, output: z.custom<GatewayStatus>() }),

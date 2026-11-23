@@ -52,7 +52,7 @@ export function DeleteMainAgentModal({ id, name }: DeleteMainAgentModalArgs) {
       </Dialog.Header>
       <Dialog.Body className="flex flex-col gap-4 pt-0">
         <p className="text-sm text-foreground-muted">
-          “{name}”的主任务、主对话、管理 worktree 和管理分支将被永久删除，无法恢复。
+          “{name}”的主任务、对话、工作区文档 worktree 和文档分支将被永久删除，无法恢复。
           关联项目的需求、决策、项目记忆和全局记忆会保留。
         </p>
 
@@ -60,8 +60,12 @@ export function DeleteMainAgentModal({ id, name }: DeleteMainAgentModalArgs) {
           <div className="rounded-md border border-border px-3 py-2 text-sm">
             <p className="font-medium">本次清理</p>
             <ul className="mt-1 list-disc space-y-1 pl-5 text-foreground-muted">
-              <li>主任务工作区和主对话</li>
-              <li>{preview.mainTask?.hasWorktree ? '管理 worktree 和管理分支' : '管理任务记录'}</li>
+              <li>主任务工作区和全部对话</li>
+              <li>
+                {preview.mainTask?.hasWorktree
+                  ? '工作区文档 worktree 和文档分支'
+                  : '工作区文档记录'}
+              </li>
               <li>
                 {deleteChildren
                   ? `${preview.childTasks.length} 个真实子任务及其对话和 worktree`

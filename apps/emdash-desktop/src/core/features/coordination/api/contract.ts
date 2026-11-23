@@ -22,6 +22,7 @@ import {
 import {
   agentSelectionSchema,
   projectAccessSchema,
+  resultRoutingPolicySchema,
   workspaceLifecycleSchema,
   workspaceWorkItemSchema,
   type Coordinator,
@@ -164,7 +165,15 @@ export const coordinationContract = defineContract({
   }),
   open: procedure({ input: z.object({ id: z.string() }), output: z.custom<Coordinator>() }),
   bindConversation: procedure({
-    input: z.object({ id: z.string(), conversationId: z.string().min(1) }),
+    input: z.object({
+      id: z.string(),
+      conversationId: z.string().min(1).optional(),
+      autoResume: z.boolean(),
+    }),
+    output: z.custom<Coordinator>(),
+  }),
+  updateResultRoutingPolicy: procedure({
+    input: z.object({ id: z.string(), policy: resultRoutingPolicySchema }),
     output: z.custom<Coordinator>(),
   }),
   selectionOptions: procedure({

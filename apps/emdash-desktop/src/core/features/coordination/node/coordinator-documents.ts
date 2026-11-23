@@ -85,11 +85,11 @@ export class CoordinatorDocuments {
       throw new Error('Document storage setup is incomplete. Retry its saved project.');
     if (config?.kind === 'none')
       throw new Error(
-        'Management document Git history is not applicable to this directory project.'
+        'Workspace document Git history is not applicable to this directory project.'
       );
     if (config?.kind !== 'management')
       throw new Error(
-        'This main agent needs document migration before using management documents. Its original workspace is preserved.'
+        'This main task workspace needs document migration before using workspace documents. Its original workspace is preserved.'
       );
     const storage = await this.resolve(record);
     const head = (
@@ -123,7 +123,7 @@ export class CoordinatorDocuments {
         'The document or its parent folder is unavailable. Create parent folders in the file tree first.'
       );
     if (!containsAbsolute(canonicalRoot.data.path, canonicalPath.data.path))
-      throw new Error('Document links must stay inside the management workspace.');
+      throw new Error('Document links must stay inside the workspace document checkout.');
     return canonicalPath.data.path;
   }
   async create(record: Coordinator, input: string): Promise<DocumentWorkspace> {
@@ -206,9 +206,9 @@ export class CoordinatorDocuments {
     const storage = await this.storage(record);
     const saved = record.documentPushTarget;
     if (!saved)
-      throw new Error('Configure a personal fork for management documents before pushing.');
+      throw new Error('Configure a personal fork for workspace documents before pushing.');
     if (storage.revision.toLowerCase() !== expectedRevision.toLowerCase())
-      throw new Error('The management branch changed. Refresh documents before pushing.');
+      throw new Error('The workspace document branch changed. Refresh documents before pushing.');
     const target = await this.pushTarget(record, saved.remote);
     if (target.fingerprint !== saved.fingerprint)
       throw new Error(
@@ -228,7 +228,9 @@ export class CoordinatorDocuments {
     const selected = documentCommitSchema.parse(input);
     const storage = await this.storage(record);
     if (storage.revision.toLowerCase() !== selected.expectedRevision.toLowerCase())
-      throw new Error('The management branch changed. Refresh documents before committing.');
+      throw new Error(
+        'The workspace document branch changed. Refresh documents before committing.'
+      );
     const paths = [];
     for (const path of new Set(selected.paths)) {
       const target = this.path(storage.root, path);
@@ -275,7 +277,7 @@ export class CoordinatorDocuments {
       });
       if (!base.success || base.data.oid.toLowerCase() !== requested.toLowerCase())
         throw new Error(
-          'The requested document version is outside this management branch history.'
+          'The requested document version is outside this workspace document branch history.'
         );
       const snapshot = await storage.runtime.git.checkout.getFile({
         checkout: storage.root.path,

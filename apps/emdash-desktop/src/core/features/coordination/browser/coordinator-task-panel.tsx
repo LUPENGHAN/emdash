@@ -1,6 +1,7 @@
 import {
   Button,
   Checkbox,
+  Combobox,
   Input,
   Select,
   Sheet,
@@ -8,8 +9,10 @@ import {
   toast,
 } from '@emdash/ui/react/primitives';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { FileText, LayoutDashboard, MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { getConversationsForTask } from '@core/features/conversations/api/browser/conversation-selectors';
 import { sendToConversation } from '@core/features/conversations/api/browser/send-to-conversation';
 import { openFileInTaskEditor } from '@core/features/editor/api/browser/open-file-in-file-editor';
@@ -62,7 +65,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
   children: ReactNode;
 }) {
   const [view, setView] = useMemento(coordinatorViewMemento);
-  const { tab } = view;
+  const tab = view.tab === 'settings' ? 'tasks' : view.tab;
   const setTab = (tab: typeof view.tab) => setView({ version: '1', tab });
   const composition = useTaskComposition();
   const queryClient = useQueryClient();
@@ -72,18 +75,21 @@ const CoordinatorContent = observer(function CoordinatorContent({
     queryFn: async () => (await getCoordinationClient()).getByTask({ taskId }),
   });
   const { navigate } = useNavigate();
-  const primaryId = record?.conversationId;
-  const primaryType = primaryId
-    ? getConversationsForTask(taskId)?.conversations.get(primaryId)?.data.type
-    : undefined;
+  const [titlebarSlot, setTitlebarSlot] = useState<Element | null>(null);
   useEffect(() => {
-    if (tab !== 'conversation' || !primaryId || !primaryType) return;
-    composition.paneLayout.open(
-      primaryType === 'acp' ? 'acp-chat' : 'conversation',
-      { conversationId: primaryId },
-      { preview: false }
-    );
-  }, [composition, primaryId, primaryType, tab]);
+    const connect = () => {
+      const slot = document.querySelector('[data-coordinator-view-switcher-slot]');
+      if (!slot) return false;
+      setTitlebarSlot(slot);
+      return true;
+    };
+    if (connect()) return;
+    const observer = new MutationObserver(() => {
+      if (connect()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     let disposed = false;
     let unsubscribe: (() => void) | undefined;
@@ -116,41 +122,20 @@ const CoordinatorContent = observer(function CoordinatorContent({
       data-testid="coordinator-panel"
       data-task-id={taskId}
     >
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-        <Button
-          data-testid="coordinator-conversation-tab"
-          variant={tab === 'conversation' ? 'secondary' : 'ghost'}
-          onClick={() => setTab('conversation')}
-        >
-          对话
-        </Button>
-        <Button
-          data-testid="coordinator-tasks-tab"
-          variant={tab === 'tasks' ? 'secondary' : 'ghost'}
-          onClick={() => setTab('tasks')}
-        >
-          概览
-        </Button>
-        <Button
-          data-testid="coordinator-documents-tab"
-          variant={tab === 'documents' ? 'secondary' : 'ghost'}
-          onClick={() => {
-            setTab('documents');
-            composition.chrome.commands.openSidebarTab('files');
-            const path = composition.editorView.openFilePaths.at(-1);
-            if (record && path) void openFileInTaskEditor(record.projectId, taskId, path);
-          }}
-        >
-          文档
-        </Button>
-        <Button
-          data-testid="coordinator-settings-tab"
-          variant={tab === 'settings' ? 'secondary' : 'ghost'}
-          onClick={() => setTab('settings')}
-        >
-          设置
-        </Button>
-      </div>
+      {titlebarSlot &&
+        createPortal(
+          <CoordinatorViewSwitcher
+            tab={tab}
+            onSelect={(next) => {
+              setTab(next);
+              if (next !== 'documents') return;
+              composition.chrome.commands.openSidebarTab('files');
+              const path = composition.editorView.openFilePaths.at(-1);
+              if (record && path) void openFileInTaskEditor(record.projectId, taskId, path);
+            }}
+          />,
+          titlebarSlot
+        )}
       {tab === 'documents' ? (
         record ? (
           <CoordinatorDocumentsPanel record={record}>{children}</CoordinatorDocumentsPanel>
@@ -163,12 +148,6 @@ const CoordinatorContent = observer(function CoordinatorContent({
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {!record ? (
             <p>正在加载主任务工作区…</p>
-          ) : tab === 'settings' ? (
-            <div className="space-y-6">
-              <ProjectAccessSettings record={record} />
-              <WorkspaceMigrationSettings record={record} />
-              <MainConversationSettings record={record} />
-            </div>
           ) : (
             <>
               <WorkspaceOverview
@@ -180,6 +159,19 @@ const CoordinatorContent = observer(function CoordinatorContent({
                 }
                 onChanged={() => queryClient.invalidateQueries({ queryKey: key })}
               />
+              <section className="my-5 max-w-2xl space-y-5 rounded-lg border border-border p-4">
+                <h2 className="text-sm font-medium">工作区设置</h2>
+                <ProjectAccessSettings record={record} />
+                <ResultNotificationSettings record={record} />
+                <details>
+                  <summary className="cursor-pointer text-sm text-foreground-muted">
+                    高级设置
+                  </summary>
+                  <div className="mt-4">
+                    <WorkspaceMigrationSettings record={record} />
+                  </div>
+                </details>
+              </section>
               <TakeOverTaskForm record={record} />
               {Object.values(record.tasks).length === 0 && (
                 <p className="mt-4 text-sm text-foreground-muted">
@@ -281,7 +273,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
               ))}
               {record.events.some((event) => event.error && event.state === 'pending') && (
                 <div className="space-y-2">
-                  <p>有结果已保存，正在等待通知 Main Agent。</p>
+                  <p>有结果已保存，正在等待通知工作区的结果通知会话。</p>
                   <Button
                     onClick={() => {
                       void getCoordinationClient()
@@ -302,6 +294,57 @@ const CoordinatorContent = observer(function CoordinatorContent({
     </div>
   );
 });
+
+function CoordinatorViewSwitcher({
+  tab,
+  onSelect,
+}: {
+  tab: 'conversation' | 'tasks' | 'documents';
+  onSelect(tab: 'conversation' | 'tasks' | 'documents'): void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="主任务工作区视图"
+      className="flex items-center gap-0.5 rounded-md bg-background-tertiary-1 p-0.5"
+      data-testid="coordinator-view-switcher"
+    >
+      <Button
+        type="button"
+        size="xs"
+        variant={tab === 'tasks' ? 'secondary' : 'ghost'}
+        aria-pressed={tab === 'tasks'}
+        data-testid="coordinator-tasks-tab"
+        onClick={() => onSelect('tasks')}
+      >
+        <LayoutDashboard className="size-3.5" />
+        概览
+      </Button>
+      <Button
+        type="button"
+        size="xs"
+        variant={tab === 'conversation' ? 'secondary' : 'ghost'}
+        aria-pressed={tab === 'conversation'}
+        data-testid="coordinator-conversation-tab"
+        onClick={() => onSelect('conversation')}
+      >
+        <MessageSquare className="size-3.5" />
+        对话
+      </Button>
+      <Button
+        type="button"
+        size="xs"
+        variant={tab === 'documents' ? 'secondary' : 'ghost'}
+        aria-pressed={tab === 'documents'}
+        data-testid="coordinator-documents-tab"
+        onClick={() => onSelect('documents')}
+      >
+        <FileText className="size-3.5" />
+        文档
+      </Button>
+    </div>
+  );
+}
 
 const workItemStateLabels = {
   open: '待开始',
@@ -563,7 +606,7 @@ function WorkspaceOverview({
               )}
               {['failed', 'cancelled'].includes(item.state) && (
                 <p className="mt-2 text-xs text-foreground-muted">
-                  Main Agent 可使用相同 request_id 调用
+                  工作区中的任意对话可使用相同 request_id 调用
                   retry_project_import；URL、名称和目录会保持不变。
                 </p>
               )}
@@ -800,7 +843,7 @@ function WorkspaceOptimizations({
         const manager = getConversationsForTask(record.taskId);
         const conversation = manager?.conversations.get(record.conversationId)?.data;
         if (!manager || !conversation) {
-          toast.info('优化已保存，打开 Main Agent 对话后即可继续。');
+          toast.info('优化已保存，打开结果通知会话后即可继续。');
           return;
         }
         await sendToConversation(
@@ -816,7 +859,7 @@ function WorkspaceOptimizations({
           ].join('\n')
         );
       },
-      suggestionId ? '优化建议已交给 Main Agent' : '体验优化已创建'
+      suggestionId ? '优化建议已交给主任务工作区' : '体验优化已创建'
     );
     setProblem('');
     setOpen(false);
@@ -830,17 +873,17 @@ function WorkspaceOptimizations({
             体验优化
           </h3>
           <p className="text-xs text-foreground-muted">
-            由你手动触发，Main Agent 调查、实施、验证并应用到实时开发版。
+            由你手动触发，主任务工作区中的对话负责调查、实施、验证并应用到实时开发版。
           </p>
         </div>
         <Button variant="secondary" onClick={() => setOpen(true)}>
-          让 Main Agent 优化此处
+          交给工作区优化
         </Button>
       </div>
 
       {runs.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border p-3 text-sm text-foreground-muted">
-          还没有体验优化。发现不好用的地方时，可以直接交给 Main Agent 处理。
+          还没有体验优化。发现不好用的地方时，可以直接交给主任务工作区处理。
         </p>
       ) : (
         <div className="space-y-2">
@@ -890,7 +933,7 @@ function WorkspaceOptimizations({
                   disabled={saving}
                   onClick={() => createRun(suggestion.id, suggestion.proposedOutcome)}
                 >
-                  让 Main Agent 处理
+                  交给工作区处理
                 </Button>
                 <Button
                   size="sm"
@@ -920,7 +963,7 @@ function WorkspaceOptimizations({
         <Sheet.Content side="right" className="gap-0 p-0">
           <Sheet.Header showCloseButton={false}>
             <div>
-              <Sheet.Title>让 Main Agent 优化此处</Sheet.Title>
+              <Sheet.Title>交给主任务工作区优化</Sheet.Title>
               <p className="mt-1 text-xs text-foreground-muted">
                 描述哪里不好用，或者希望达到什么结果。
               </p>
@@ -1002,7 +1045,7 @@ function WorkspaceOptimizations({
           <Sheet.Footer>
             <Sheet.Close render={<Button variant="secondary" />}>取消</Sheet.Close>
             <Button disabled={saving || !problem.trim()} onClick={() => createRun()}>
-              交给 Main Agent
+              交给工作区
             </Button>
           </Sheet.Footer>
         </Sheet.Content>
@@ -1324,72 +1367,113 @@ const ProjectAccessSettings = observer(function ProjectAccessSettings({
   const projects = Array.from(getProjectManagerStore().projects.values()).filter(
     (project) => !project.data?.archivedAt && !isMainAgentHostProject(project.id)
   );
+  const options = projects.map((project) => ({
+    value: project.id,
+    label: project.name || '未命名仓库',
+  }));
+  const selectedLinked = options.filter((project) => linked.includes(project.value));
+  const selectedAccess =
+    access.mode === 'selected'
+      ? options.filter((project) => access.projectIds.includes(project.value))
+      : [];
   return (
     <div className="max-w-lg space-y-3">
-      <p className="text-sm font-medium">项目访问与关联</p>
-      <Select.Root
-        value={access.mode}
-        onValueChange={(value) =>
-          setAccess(
-            value === 'selected' ? { mode: 'selected', projectIds: linked } : { mode: 'all' }
-          )
+      <p className="text-sm font-medium">关联仓库</p>
+      <p className="text-xs text-foreground-muted">
+        搜索并选择这项工作涉及的仓库。打开工作区不会启动 Agent。
+      </p>
+      <Combobox.Root
+        items={options}
+        multiple
+        value={selectedLinked}
+        onValueChange={(next) => setLinked(next.map((project) => project.value))}
+        isItemEqualToValue={(project, selected) => project.value === selected.value}
+        filter={(project, query) =>
+          project.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
         }
       >
-        <Select.Trigger data-testid="coordinator-project-access">
-          <Select.Value>
-            {access.mode === 'all' ? '所有可访问的 Emdash 项目' : '仅所选项目'}
-          </Select.Value>
-        </Select.Trigger>
-        <Select.Content>
-          <Select.Item data-testid="coordinator-access-all" value="all">
-            所有可访问的 Emdash 项目
-          </Select.Item>
-          <Select.Item data-testid="coordinator-access-selected" value="selected">
-            仅所选项目
-          </Select.Item>
-        </Select.Content>
-      </Select.Root>
-      <p className="text-xs text-foreground-muted">
-        关联项目用于组织上下文；允许项目控制发现和派活。Task worker 只获得明确授予的项目访问权。
-      </p>
-      <div className="space-y-2">
-        {projects.map((project) => (
-          <div key={project.id} className="flex items-center gap-3 text-sm">
-            <span className="min-w-0 flex-1 truncate">{project.name}</span>
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={linked.includes(project.id)}
-                onChange={(event) =>
-                  setLinked(
-                    event.target.checked
-                      ? [...linked, project.id]
-                      : linked.filter((id) => id !== project.id)
-                  )
-                }
-              />{' '}
-              已关联
-            </label>
-            {access.mode === 'selected' && (
-              <label className="flex items-center gap-1">
-                <input
-                  type="checkbox"
-                  checked={access.projectIds.includes(project.id)}
-                  onChange={(event) =>
-                    setAccess({
-                      mode: 'selected',
-                      projectIds: event.target.checked
-                        ? [...access.projectIds, project.id]
-                        : access.projectIds.filter((id) => id !== project.id),
-                    })
-                  }
-                />{' '}
-                允许访问
-              </label>
-            )}
-          </div>
-        ))}
-      </div>
+        <Combobox.Chips aria-label="搜索并选择关联仓库" data-testid="coordinator-linked-projects">
+          {selectedLinked.map((project) => (
+            <Combobox.Chip key={project.value}>{project.label}</Combobox.Chip>
+          ))}
+          <Combobox.ChipsInput placeholder="搜索仓库并选择…" />
+        </Combobox.Chips>
+        <Combobox.Content className="min-w-(--anchor-width)">
+          <Combobox.List>
+            <Combobox.Collection>
+              {(project: (typeof options)[number]) => (
+                <Combobox.Item key={project.value} value={project}>
+                  {project.label}
+                </Combobox.Item>
+              )}
+            </Combobox.Collection>
+            <Combobox.Empty>没有匹配的仓库</Combobox.Empty>
+          </Combobox.List>
+        </Combobox.Content>
+      </Combobox.Root>
+      <details>
+        <summary className="cursor-pointer text-xs text-foreground-muted">仓库访问权限</summary>
+        <div className="mt-3 space-y-3">
+          <Select.Root
+            value={access.mode}
+            onValueChange={(value) =>
+              setAccess(
+                value === 'selected' ? { mode: 'selected', projectIds: linked } : { mode: 'all' }
+              )
+            }
+          >
+            <Select.Trigger data-testid="coordinator-project-access">
+              <Select.Value>
+                {access.mode === 'all' ? '所有可访问的 Emdash 项目' : '仅所选项目'}
+              </Select.Value>
+            </Select.Trigger>
+            <Select.Content>
+              <Select.Item data-testid="coordinator-access-all" value="all">
+                所有可访问的 Emdash 项目
+              </Select.Item>
+              <Select.Item data-testid="coordinator-access-selected" value="selected">
+                仅所选项目
+              </Select.Item>
+            </Select.Content>
+          </Select.Root>
+          {access.mode === 'selected' && (
+            <Combobox.Root
+              items={options}
+              multiple
+              value={selectedAccess}
+              onValueChange={(next) =>
+                setAccess({ mode: 'selected', projectIds: next.map((project) => project.value) })
+              }
+              isItemEqualToValue={(project, selected) => project.value === selected.value}
+              filter={(project, query) =>
+                project.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
+              }
+            >
+              <Combobox.Chips aria-label="搜索并选择允许访问的仓库">
+                {selectedAccess.map((project) => (
+                  <Combobox.Chip key={project.value}>{project.label}</Combobox.Chip>
+                ))}
+                <Combobox.ChipsInput placeholder="搜索允许访问的仓库…" />
+              </Combobox.Chips>
+              <Combobox.Content className="min-w-(--anchor-width)">
+                <Combobox.List>
+                  <Combobox.Collection>
+                    {(project: (typeof options)[number]) => (
+                      <Combobox.Item key={project.value} value={project}>
+                        {project.label}
+                      </Combobox.Item>
+                    )}
+                  </Combobox.Collection>
+                  <Combobox.Empty>没有匹配的仓库</Combobox.Empty>
+                </Combobox.List>
+              </Combobox.Content>
+            </Combobox.Root>
+          )}
+          <p className="text-xs text-foreground-muted">
+            执行任务仍只获得下发时明确授予的仓库权限。
+          </p>
+        </div>
+      </details>
       <Button
         data-testid="coordinator-save-access"
         disabled={saving}
@@ -1466,61 +1550,58 @@ function WorkspaceMigrationSettings({ record }: { record: Coordinator }) {
   );
 }
 
-const MainConversationSettings = observer(function MainConversationSettings({
+const ResultNotificationSettings = observer(function ResultNotificationSettings({
   record,
 }: {
   record: Coordinator;
 }) {
-  const [selected, setSelected] = useState(record.conversationId);
+  const [policy, setPolicy] = useState(record.resultRoutingPolicy ?? 'origin-auto');
   const [saving, setSaving] = useState(false);
-  const conversations = Array.from(
-    getConversationsForTask(record.taskId)?.conversations.values() ?? []
-  );
   useEffect(() => {
-    setSelected(record.conversationId);
-  }, [record.conversationId]);
+    setPolicy(record.resultRoutingPolicy ?? 'origin-auto');
+  }, [record.resultRoutingPolicy]);
   return (
     <div className="max-w-lg space-y-3">
-      <p className="text-sm font-medium">结果通知会话</p>
+      <p className="text-sm font-medium">任务结果通知</p>
       <p className="text-xs text-foreground-muted">
-        同一主任务工作区中的所有会话都有相同协调权限；这里只决定任务结果自动唤醒哪个会话。
+        下发任务时会固定它的返回位置，不会把结果发给工作区里的其他对话。手动接管或来源不可用的任务会回到工作区收件箱。
       </p>
       <Select.Root
-        value={selected}
+        value={policy}
         onValueChange={(value) => {
-          if (value) setSelected(value);
+          if (value === 'origin-auto' || value === 'origin-notify' || value === 'workspace') {
+            setPolicy(value);
+          }
         }}
       >
-        <Select.Trigger data-testid="coordinator-main-conversation">
+        <Select.Trigger data-testid="coordinator-result-routing-policy">
           <Select.Value>
-            {conversations.find((conversation) => conversation.data.id === selected)?.data.title ??
-              '当前通知会话不可用'}
+            {policy === 'origin-auto'
+              ? '返回下发对话并自动继续'
+              : policy === 'origin-notify'
+                ? '返回下发对话，仅通知'
+                : '只进入工作区收件箱'}
           </Select.Value>
         </Select.Trigger>
         <Select.Content>
-          {!conversations.some(
-            (conversation) => conversation.data.id === record.conversationId
-          ) && <Select.Item value={record.conversationId}>当前通知会话不可用</Select.Item>}
-          {conversations.map(({ data }) => (
-            <Select.Item key={data.id} value={data.id}>
-              {data.title} · {data.providerId}
-            </Select.Item>
-          ))}
+          <Select.Item value="origin-auto">返回下发对话并自动继续</Select.Item>
+          <Select.Item value="origin-notify">返回下发对话，仅通知</Select.Item>
+          <Select.Item value="workspace">只进入工作区收件箱</Select.Item>
         </Select.Content>
       </Select.Root>
       <Button
-        data-testid="coordinator-bind-main"
-        disabled={saving || selected === record.conversationId}
+        data-testid="coordinator-save-result-routing"
+        disabled={saving || policy === (record.resultRoutingPolicy ?? 'origin-auto')}
         onClick={() => {
           setSaving(true);
           void getCoordinationClient()
-            .then((client) => client.bindConversation({ id: record.id, conversationId: selected }))
-            .then(() => toast.success('结果通知会话已更新'))
-            .catch((error) => toast.error('无法更新结果通知会话', { description: String(error) }))
+            .then((client) => client.updateResultRoutingPolicy({ id: record.id, policy }))
+            .then(() => toast.success('任务结果通知方式已保存'))
+            .catch((error) => toast.error('无法更新结果通知', { description: String(error) }))
             .finally(() => setSaving(false));
         }}
       >
-        设为结果通知会话
+        保存通知方式
       </Button>
     </div>
   );

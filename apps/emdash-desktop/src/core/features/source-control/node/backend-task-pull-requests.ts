@@ -65,7 +65,7 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
     if (!row || row.tasks.archivedAt || row.projects.archivedAt)
       throw new Error('The PR task, project or workspace is unavailable or archived.');
     if (row.tasks.type === 'coordination' || row.workspaces.config?.git.kind === 'management')
-      throw new Error('Management documents cannot be used as a code pull request source.');
+      throw new Error('Workspace documents cannot be used as a code pull request source.');
     if (row.workspaces.kind !== 'worktree')
       throw new Error('Choose a code task with its own Git worktree for this PR.');
     return { id: row.tasks.id, projectId: row.tasks.projectId, workspaceId: row.workspaces.id };
@@ -160,7 +160,9 @@ export function createBackendTaskPullRequests(deps: Dependencies) {
       if (!target) throw new Error('The PR task or project is unavailable.');
       if (intent === 'control') await task(taskId);
       if (caller && !(await deps.access.mayAccessTask(caller, target, intent)))
-        throw new Error('Only this task or its current responsible main agent can create its PR.');
+        throw new Error(
+          'Only this task or a member of its responsible main task workspace can create its PR.'
+        );
       // A worker with cross-project grants may control child tasks, but may open PRs only for itself.
       if (caller && caller.taskId !== taskId && intent === 'control') {
         const [source] = await deps.db

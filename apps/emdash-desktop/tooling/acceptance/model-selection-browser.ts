@@ -48,15 +48,28 @@ export async function configureSelectionFixture(input: {
     models: [
       {
         id: 'shared',
-        alias: 'shared-code',
-        name: 'Shared code model',
-        enabled: true,
+        primaryAlias: 'shared-code',
+        legacyAliases: [],
+        displayName: 'Shared code model',
+        state: 'active',
         revision: 1,
-        providerId: 'selection-a',
-        protocolModels: { anthropic: { upstreamModel: 'upstream-a' } },
-        protocolPolicy: { mode: 'auto' },
+        sources: [
+          {
+            id: 'selection-a-source',
+            providerId: 'selection-a',
+            enabled: true,
+            protocolModels: { anthropic: { upstreamModel: 'upstream-a' } },
+            protocolPolicy: { mode: 'auto' },
+          },
+        ],
+        activeSourceByProtocol: {
+          anthropic: 'selection-a-source',
+          'openai-chat': 'selection-a-source',
+          'openai-responses': 'selection-a-source',
+        },
       },
     ],
+    ignoredSourceIds: [],
   });
   for (const [id, effort] of [
     ['claude', 'high'],
@@ -152,15 +165,28 @@ export async function changeSelectionDefaultsFixture(mainId: string) {
     models: [
       {
         id: 'shared',
-        alias: 'shared-code',
-        name: 'Shared code model',
-        enabled: true,
+        primaryAlias: 'shared-code',
+        legacyAliases: [],
+        displayName: 'Shared code model',
+        state: 'active',
         revision: current.revision,
-        providerId: 'selection-b',
-        protocolModels: { 'openai-chat': { upstreamModel: 'catalog-b' } },
-        protocolPolicy: { mode: 'auto' },
+        sources: [
+          {
+            id: 'selection-b-source',
+            providerId: 'selection-b',
+            enabled: true,
+            protocolModels: { 'openai-chat': { upstreamModel: 'catalog-b' } },
+            protocolPolicy: { mode: 'auto' },
+          },
+        ],
+        activeSourceByProtocol: {
+          anthropic: 'selection-b-source',
+          'openai-chat': 'selection-b-source',
+          'openai-responses': 'selection-b-source',
+        },
       },
     ],
+    ignoredSourceIds: [],
   });
 }
 

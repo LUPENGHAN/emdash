@@ -68,7 +68,7 @@ describe('archiveTask', () => {
     mocks.selectLimit.mockResolvedValueOnce([{ id: 'main-agent', type: 'coordination' }]);
     await expect(
       archiveTask(db, taskSessions, 'project-1', 'main-agent', { capture: mocks.capture })
-    ).rejects.toThrow('main agent');
+    ).rejects.toThrow('main task workspace');
     expect(mocks.updateSet).not.toHaveBeenCalled();
     expect(mocks.teardownTask).not.toHaveBeenCalled();
   });

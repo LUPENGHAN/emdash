@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react';
-import { AgentProcessMonitorButton } from '@core/features/dev-perf/browser/agent-process-monitor-button';
+import { AgentProcessMonitorButton } from '@core/features/dev-perf/contributions/browser/agent-process-monitor-button';
 import { UsageStatsButton } from '@core/features/usage-stats/contributions/browser/usage-stats-button';
 import { LiveRestartButton } from '@core/features/workbench/browser/live-restart-button';
 import { SidebarRecoveryControls } from '@core/features/workbench/browser/sidebar-recovery-controls';

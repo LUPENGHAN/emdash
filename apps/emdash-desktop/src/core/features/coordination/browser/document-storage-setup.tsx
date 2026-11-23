@@ -49,7 +49,7 @@ export const DocumentStorageSetup = observer(function DocumentStorageSetup({
   };
   return (
     <div className="space-y-3 p-4" data-testid="document-storage-setup">
-      <p>选择一个 Git 仓库，用于保存这个主任务工作区的管理文档。</p>
+      <p>选择一个 Git 仓库，用于保存这个主任务工作区的工作区文档。</p>
       <p className="text-sm text-foreground-muted">
         文档使用独立分支；对话、目录文件和代码基线均保持原位。
       </p>

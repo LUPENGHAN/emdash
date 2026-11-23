@@ -1211,7 +1211,7 @@
     "Machine details sections": "机器详情分区",
     "Machine-level defaults applied to workspaces on this host. Stored in the host's emdash data directory; edits made to the file directly show up here live.": "应用于此主机上所有工作区的机器级默认设置，保存在主机的 emdash 数据目录中；直接编辑文件也会实时显示在这里。",
     "Machines": "机器",
-    "Main agent delegation default": "主 Agent 派活默认",
+    "Main agent delegation default": "主任务工作区派活默认",
     "Manage Azure resources and run cloud operations through natural language": "用自然语言管理 Azure 资源并执行云操作",
     "Manage Neon Postgres databases, branches, migrations, and queries": "管理 Neon Postgres 数据库、分支、迁移和查询",
     "Manage Prisma Postgres databases, migrations, and connection strings": "管理 Prisma Postgres 数据库、迁移和连接字符串",

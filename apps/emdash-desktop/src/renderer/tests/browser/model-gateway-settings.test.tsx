@@ -5,13 +5,13 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
-import type { GatewayModel } from '@core/features/model-gateway/api/model-catalog';
+import type { PublishedGatewayModel } from '@core/features/model-gateway/api/model-catalog';
 import { GatewayModelsPanel } from '@core/features/model-gateway/contributions/browser/models-panel';
 import { GatewayProvidersPanel } from '@core/features/model-gateway/contributions/browser/providers-panel';
 import { ThemeProvider } from '@core/primitives/theme/browser/theme-provider';
 
 const mocks = vi.hoisted(() => ({
-  models: [] as GatewayModel[],
+  models: [] as PublishedGatewayModel[],
   preview: vi.fn(),
   save: vi.fn(),
   testRoute: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock('@core/features/settings/api/browser/use-app-settings-key', () => ({
   useAppSettingsKey: (key: string) => ({
     value:
       key === 'gatewayModels'
-        ? { version: 1, models: mocks.models }
+        ? { version: 2, models: mocks.models, ignoredSourceIds: [] }
         : {
             providers: [
               {
@@ -62,19 +62,31 @@ beforeEach(async () => {
   mocks.preview.mockResolvedValue([
     {
       id: 'preview',
-      alias: 'fast',
-      name: 'Fast model',
-      enabled: true,
+      primaryAlias: 'fast',
+      legacyAliases: [],
+      displayName: 'Fast model',
+      state: 'active',
       revision: 1,
-      providerId: 'p',
-      protocolModels: {
-        anthropic: { upstreamModel: 'physical' },
-        'openai-chat': { upstreamModel: 'physical' },
+      sources: [
+        {
+          id: 'source:preview',
+          providerId: 'p',
+          enabled: true,
+          protocolModels: {
+            anthropic: { upstreamModel: 'physical' },
+            'openai-chat': { upstreamModel: 'physical' },
+          },
+          protocolPolicy: { mode: 'auto' },
+        },
+      ],
+      activeSourceByProtocol: {
+        anthropic: 'source:preview',
+        'openai-chat': 'source:preview',
+        'openai-responses': 'source:preview',
       },
-      protocolPolicy: { mode: 'auto' },
     },
   ]);
-  mocks.save.mockImplementation(async ({ models }: { models: GatewayModel[] }) => {
+  mocks.save.mockImplementation(async ({ models }: { models: PublishedGatewayModel[] }) => {
     mocks.models = models;
   });
   host = document.createElement('div');
@@ -100,60 +112,65 @@ afterEach(async () => {
 });
 it('previews and edits protocol mappings before explicitly publishing the catalog', async () => {
   await act(async () => {
-    await page.getByRole('button', { name: 'Preview models from providers' }).click();
+    await page.getByRole('button', { name: '发现来源' }).click();
   });
   await act(async () => {
-    await page.getByText('Fast model · fast', { exact: true }).click();
+    await page.getByRole('button', { name: '作为新模型导入' }).click();
+  });
+  await act(async () => {
+    await page.getByRole('button', { name: /Fast model/ }).click();
   });
   expect(mocks.save).not.toHaveBeenCalled();
   await act(async () => {
-    await page.getByLabelText('Display name', { exact: true }).fill('Coding model');
+    await page.getByLabelText('显示名称', { exact: true }).fill('Coding model');
   });
   await act(async () => {
     await page.getByRole('checkbox', { name: 'OpenAI Chat Completions', exact: true }).click();
   });
   await act(async () => {
-    await page.getByRole('button', { name: 'Publish reviewed models' }).click();
+    await page.getByRole('button', { name: '保存模型目录' }).click();
   });
   expect(mocks.save).toHaveBeenCalledWith({
     models: [
       expect.objectContaining({
-        alias: 'fast',
-        name: 'Coding model',
-        protocolModels: { anthropic: { upstreamModel: 'physical' } },
-        protocolPolicy: { mode: 'auto' },
+        primaryAlias: 'fast',
+        displayName: 'Coding model',
+        sources: [
+          expect.objectContaining({
+            protocolModels: { anthropic: { upstreamModel: 'physical' } },
+          }),
+        ],
       }),
     ],
+    ignoredSourceIds: [],
   });
   await act(async () => {
-    await page.getByText('Coding model · fast', { exact: true }).click();
+    await page.getByRole('button', { name: /Coding model/ }).click();
   });
-  await expect.element(page.getByLabelText('Model alias', { exact: true })).toBeDisabled();
-  await expect.element(page.getByRole('button', { name: 'Test Codex route' })).toBeDisabled();
-  await expect
-    .element(page.getByText('Codex gateway models require a native OpenAI Responses route.'))
-    .toBeVisible();
+  await expect.element(page.getByLabelText('公开别名', { exact: true })).toBeEnabled();
+  await expect.element(page.getByRole('button', { name: '测试 Codex 路由' })).toBeDisabled();
   await act(async () => {
-    await page.getByRole('button', { name: 'Test Claude route' }).click();
+    await page.getByRole('button', { name: '测试 Claude 路由' }).click();
   });
   expect(mocks.testRoute).toHaveBeenCalledWith({ alias: 'fast', agent: 'claude' });
-  await expect
-    .element(page.getByRole('status'))
-    .toHaveTextContent('Received a valid protocol response.');
+  await expect.element(page.getByRole('status')).toHaveTextContent('协议响应有效');
   await page.screenshot({ element: host, path: '/tmp/emdash-gateway-model-settings.png' });
 });
 it('keeps drafts and shows the error when publishing fails', async () => {
   await act(async () => {
-    await page.getByRole('button', { name: 'Preview models from providers' }).click();
+    await page.getByRole('button', { name: '发现来源' }).click();
+  });
+  await act(async () => {
+    await page.getByRole('button', { name: '作为新模型导入' }).click();
   });
   mocks.save.mockRejectedValueOnce(new Error('Secure model settings are unavailable'));
   await act(async () => {
-    await page.getByRole('button', { name: 'Publish reviewed models' }).click();
+    await page.getByRole('button', { name: '保存模型目录' }).click();
   });
   await expect
     .element(page.getByRole('alert'))
     .toHaveTextContent('Secure model settings are unavailable');
-  await expect.element(page.getByRole('button', { name: 'Discard changes' })).toBeEnabled();
+  await expect.element(page.getByRole('button', { name: '放弃更改' })).toBeEnabled();
 });
 
 it('displays reported cache reads and writes and labels legacy usage', async () => {
@@ -186,12 +203,12 @@ it('displays reported cache reads and writes and labels legacy usage', async () 
       </QueryClientProvider>
     )
   );
-  await act(async () => page.getByRole('button', { name: 'Router usage' }).click());
-  const table = page.getByRole('table', { name: 'Gateway request usage' });
-  await expect.element(table.getByRole('columnheader', { name: 'Cache read' })).toBeVisible();
-  await expect.element(table.getByRole('columnheader', { name: 'Cache write' })).toBeVisible();
+  await act(async () => page.getByRole('button', { name: '路由用量' }).click());
+  const table = page.getByRole('table', { name: '网关请求用量' });
+  await expect.element(table.getByRole('columnheader', { name: '缓存读取' })).toBeVisible();
+  await expect.element(table.getByRole('columnheader', { name: '缓存写入' })).toBeVisible();
   const current = table.getByRole('row', { name: /current/ });
   await expect.element(current.getByRole('cell', { name: '0', exact: true })).toBeVisible();
   await expect.element(current.getByRole('cell', { name: '2048', exact: true })).toBeVisible();
-  await expect.element(table.getByText('Legacy cached (1024)')).toBeVisible();
+  await expect.element(table.getByText('旧版缓存统计（1024）')).toBeVisible();
 });

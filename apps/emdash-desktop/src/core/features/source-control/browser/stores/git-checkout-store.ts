@@ -366,7 +366,7 @@ export class GitCheckoutStore {
     if (isManagementBranch(this.branchName ?? ''))
       return err({
         type: 'git_error' as const,
-        message: 'Use the main agent Documents page to push its configured management branch.',
+        message: 'Use the main task workspace documents view to push its document branch.',
       });
     const client = await getSourceControlClient();
     // Null push remote (no remotes) degrades to a push without an explicit
@@ -390,7 +390,7 @@ export class GitCheckoutStore {
     if (isManagementBranch(this.branchName ?? ''))
       return err({
         type: 'git_error' as const,
-        message: 'Use the main agent Documents page to push its configured management branch.',
+        message: 'Use the main task workspace documents view to push its document branch.',
       });
     const repository = getGitRepositoryStore(this.projectId);
     const pushRemote = repository?.pushRemote;

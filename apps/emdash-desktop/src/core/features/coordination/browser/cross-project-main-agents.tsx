@@ -3,23 +3,28 @@ import {
   Combobox,
   ContextMenu,
   Dialog,
+  DropdownMenu,
   Input,
+  MicroLabel,
   Select,
+  Tooltip,
   toast,
 } from '@emdash/ui/react/primitives';
 import {
   Archive,
   ArchiveRestore,
+  ArrowDownAZ,
   Bot,
   CheckCircle2,
   ChevronRight,
+  ListFilter,
   Pencil,
   Plus,
   Trash2,
 } from 'lucide-react';
 import { when } from 'mobx';
 import { observer } from 'mobx-react-lite';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getProjectManagerStore } from '@core/features/projects/api/browser/stores/project-selectors';
 import { getTaskManagerStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
@@ -43,22 +48,71 @@ const workspaceFilterLabels = {
 } as const;
 
 type WorkspaceFilter = keyof typeof workspaceFilterLabels;
+type WorkspaceSort = 'created-at' | 'updated-at' | 'name';
+
+const workspaceSortLabels: Record<WorkspaceSort, string> = {
+  'created-at': '创建时间',
+  'updated-at': '最近更新',
+  name: '名称',
+};
+
+const workspaceFilterStorageKey = 'emdash.coordination.workspace-filter';
+const workspaceSortStorageKey = 'emdash.coordination.workspace-sort';
+
+function storedWorkspaceFilter(): WorkspaceFilter {
+  const value = window.localStorage.getItem(workspaceFilterStorageKey);
+  return value && value in workspaceFilterLabels ? (value as WorkspaceFilter) : 'current';
+}
+
+function storedWorkspaceSort(): WorkspaceSort {
+  const value = window.localStorage.getItem(workspaceSortStorageKey);
+  return value === 'updated-at' || value === 'name' ? value : 'created-at';
+}
+
+export function sortWorkspaces(
+  records: Coordinator[],
+  sort: WorkspaceSort,
+  displayName: (record: Coordinator) => string = (record) => record.name
+): Coordinator[] {
+  return [...records].sort((left, right) => {
+    const comparison =
+      sort === 'name'
+        ? displayName(left).localeCompare(displayName(right), 'zh-CN')
+        : sort === 'updated-at'
+          ? right.updatedAt - left.updatedAt
+          : right.createdAt - left.createdAt;
+    return comparison || left.id.localeCompare(right.id);
+  });
+}
 
 export function CrossProjectMainAgents() {
   const query = useCoordinators();
-  const [filter, setFilter] = useState<WorkspaceFilter>('current');
-  const records =
-    query.data?.filter((record) => {
-      if (filter === 'trash') return Boolean(record.deletedAt);
-      if (record.deletedAt) return false;
-      if (filter === 'all') return true;
-      if (filter === 'current') return record.lifecycle.state !== 'archived';
-      if (filter === 'finite') return record.lifecycle.kind === 'finite';
-      if (filter === 'ongoing') return record.lifecycle.kind === 'ongoing';
-      if (filter === 'project') return record.kind === 'project';
-      if (filter === 'completed') return record.lifecycle.state === 'completed';
-      return record.lifecycle.state === 'archived';
-    }) ?? [];
+  const [filter, setFilter] = useState<WorkspaceFilter>(storedWorkspaceFilter);
+  const [sort, setSort] = useState<WorkspaceSort>(storedWorkspaceSort);
+  useEffect(() => window.localStorage.setItem(workspaceFilterStorageKey, filter), [filter]);
+  useEffect(() => window.localStorage.setItem(workspaceSortStorageKey, sort), [sort]);
+  const records = useMemo(
+    () =>
+      sortWorkspaces(
+        query.data?.filter((record) => {
+          if (filter === 'trash') return Boolean(record.deletedAt);
+          if (record.deletedAt) return false;
+          if (filter === 'all') return true;
+          if (filter === 'current') return record.lifecycle.state !== 'archived';
+          if (filter === 'finite') return record.lifecycle.kind === 'finite';
+          if (filter === 'ongoing') return record.lifecycle.kind === 'ongoing';
+          if (filter === 'project') return record.kind === 'project';
+          if (filter === 'completed') return record.lifecycle.state === 'completed';
+          return record.lifecycle.state === 'archived';
+        }) ?? [],
+        sort,
+        (record) =>
+          record.kind === 'project'
+            ? `${getProjectManagerStore().projects.get(record.projectId)?.name ?? record.name} 主任务工作区`
+            : record.name
+      ),
+    [filter, query.data, sort]
+  );
   const { navigate } = useNavigate();
   const active = useViewParams(taskViewDef);
   const [opening, setOpening] = useState<string>();
@@ -129,47 +183,112 @@ export function CrossProjectMainAgents() {
       className="flex max-h-[50%] min-h-0 shrink-0 flex-col px-2 pb-3"
       data-testid="main-agent-workspaces"
     >
-      <div className="flex items-center justify-between px-2 py-1">
-        <p className="text-xs font-medium text-foreground-muted">主任务工作区</p>
-        <Button
-          variant="ghost"
-          size="xs"
-          aria-label="新建主任务工作区"
-          onClick={() => void openCreate({})}
-        >
-          <Plus className="size-4" />
-        </Button>
+      <div className="flex h-10 items-center justify-between pr-1 pl-2">
+        <MicroLabel className="font-medium text-foreground-tertiary-passive">
+          主任务工作区
+        </MicroLabel>
+        <div className="flex items-center gap-1">
+          <DropdownMenu.Root>
+            <Tooltip.Root>
+              <DropdownMenu.Trigger
+                render={
+                  <Tooltip.Trigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        icon
+                        aria-label={`筛选工作区：${workspaceFilterLabels[filter]}`}
+                        data-testid="main-workspace-filter"
+                      >
+                        <ListFilter />
+                      </Button>
+                    }
+                  />
+                }
+              />
+              <Tooltip.Content>筛选：{workspaceFilterLabels[filter]}</Tooltip.Content>
+            </Tooltip.Root>
+            <DropdownMenu.Content className="min-w-44">
+              <DropdownMenu.Group>
+                <DropdownMenu.Label>显示范围</DropdownMenu.Label>
+                <DropdownMenu.RadioGroup value={filter}>
+                  {Object.entries(workspaceFilterLabels).map(([value, label]) => (
+                    <DropdownMenu.RadioItem
+                      key={value}
+                      value={value}
+                      onClick={() => setFilter(value as WorkspaceFilter)}
+                    >
+                      {label}
+                    </DropdownMenu.RadioItem>
+                  ))}
+                </DropdownMenu.RadioGroup>
+              </DropdownMenu.Group>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+          <DropdownMenu.Root>
+            <Tooltip.Root>
+              <DropdownMenu.Trigger
+                render={
+                  <Tooltip.Trigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        icon
+                        aria-label={`排序工作区：${workspaceSortLabels[sort]}`}
+                        data-testid="main-workspace-sort"
+                      >
+                        <ArrowDownAZ />
+                      </Button>
+                    }
+                  />
+                }
+              />
+              <Tooltip.Content>排序：{workspaceSortLabels[sort]}</Tooltip.Content>
+            </Tooltip.Root>
+            <DropdownMenu.Content className="min-w-44">
+              <DropdownMenu.Group>
+                <DropdownMenu.Label>排序方式</DropdownMenu.Label>
+                <DropdownMenu.RadioGroup value={sort}>
+                  {Object.entries(workspaceSortLabels).map(([value, label]) => (
+                    <DropdownMenu.RadioItem
+                      key={value}
+                      value={value}
+                      onClick={() => setSort(value as WorkspaceSort)}
+                    >
+                      {label}
+                    </DropdownMenu.RadioItem>
+                  ))}
+                </DropdownMenu.RadioGroup>
+              </DropdownMenu.Group>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+          <Tooltip.Root>
+            <Tooltip.Trigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  icon
+                  aria-label="新建主任务工作区"
+                  onClick={() => void openCreate({})}
+                >
+                  <Plus />
+                </Button>
+              }
+            />
+            <Tooltip.Content>新建主任务工作区</Tooltip.Content>
+          </Tooltip.Root>
+        </div>
       </div>
       <div
         className="min-h-0 [scrollbar-gutter:stable] space-y-1 overflow-y-auto overscroll-contain"
         data-testid="main-agent-workspace-scroll"
       >
-        <div className="px-2 pb-1">
-          <label
-            htmlFor="main-workspace-filter"
-            className="mb-1 block text-xs text-foreground-muted"
-          >
-            显示范围
-          </label>
-          <Select.Root
-            value={filter}
-            onValueChange={(value) => value && setFilter(value as typeof filter)}
-          >
-            <Select.Trigger id="main-workspace-filter" data-testid="main-workspace-filter">
-              <Select.Value>{workspaceFilterLabels[filter]}</Select.Value>
-            </Select.Trigger>
-            <Select.Content>
-              <Select.Item value="current">当前工作区</Select.Item>
-              <Select.Item value="finite">一次性任务</Select.Item>
-              <Select.Item value="ongoing">长期工作区</Select.Item>
-              <Select.Item value="project">项目专用</Select.Item>
-              <Select.Item value="completed">已完成</Select.Item>
-              <Select.Item value="archived">已归档</Select.Item>
-              <Select.Item value="trash">废纸篓</Select.Item>
-              <Select.Item value="all">全部</Select.Item>
-            </Select.Content>
-          </Select.Root>
-        </div>
         {query.isPending && <p className="px-2 py-2 text-xs text-foreground-muted">正在加载…</p>}
         {query.isError && (
           <p role="alert" className="text-destructive px-2 py-2 text-xs">
@@ -182,7 +301,7 @@ export function CrossProjectMainAgents() {
         {records.map((record) => {
           const projectName = getProjectManagerStore().projects.get(record.projectId)?.name;
           const displayName =
-            record.kind === 'project' && projectName ? `${projectName} 主任务` : record.name;
+            record.kind === 'project' && projectName ? `${projectName} 主任务工作区` : record.name;
           const availability = getCoordinatorActionAvailability(record);
           if (editing === record.id) {
             return (
@@ -464,7 +583,7 @@ export const CreateCrossProjectMainAgent = observer(function CreateCrossProjectM
         </Select.Content>
       </Select.Root>
       <p className="text-xs text-foreground-muted">
-        创建工作区不会启动 Agent；Agent 由实际打开的对话会话按需加载。
+        创建或打开工作区不会启动 Agent；只有发送消息、继续任务或明确委派时才会启动。
       </p>
       <label htmlFor="cross-project-agent-projects" className="block text-xs text-foreground-muted">
         关联仓库

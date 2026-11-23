@@ -12,7 +12,9 @@ export async function setTaskPinned(db: AppDb, taskId: string, isPinned: boolean
   if (!row) throw new Error(`Task not found: ${taskId}`);
 
   if (row.type === 'coordination')
-    throw new Error('The main agent has a fixed project entry and cannot be pinned as a task.');
+    throw new Error(
+      'The main task workspace has a fixed project entry and cannot be pinned as a task.'
+    );
 
   await db
     .update(tasks)

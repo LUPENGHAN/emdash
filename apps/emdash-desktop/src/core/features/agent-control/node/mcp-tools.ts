@@ -169,7 +169,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'get_main_agent_context',
     {
       description:
-        'Main agent: read the current workspace plus linked-project requirements, project decisions and global memory in one snapshot before planning work.',
+        'Main task workspace member: read the current workspace plus linked-project requirements, project decisions and global memory in one snapshot before planning work.',
       annotations: { readOnlyHint: true },
     },
     () => dispatch({ kind: 'get_main_agent_context' })
@@ -179,7 +179,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'import_project',
     {
       description:
-        'Main agent: clone a repository that is not yet in Emdash, register it as a visible project and link it to this workspace. Reuse request_id when retrying.',
+        'Main task workspace member: clone a repository that is not yet in Emdash, register it as a visible project and link it to this workspace. Reuse request_id when retrying.',
       inputSchema: {
         request_id: z.uuid(),
         repository_url: z.string().min(1),
@@ -206,7 +206,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'retry_project_import',
     {
       description:
-        'Main agent: retry a failed or cancelled repository import with its frozen URL, name and target directory.',
+        'Main task workspace member: retry a failed or cancelled repository import with its frozen URL, name and target directory.',
       inputSchema: { request_id: z.uuid() },
     },
     ({ request_id }) => dispatch({ kind: 'retry_project_import', requestId: request_id })
@@ -214,7 +214,8 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
   server.registerTool(
     'cancel_project_import',
     {
-      description: 'Main agent: cancel a repository import that is currently cloning.',
+      description:
+        'Main task workspace member: cancel a repository import that is currently cloning.',
       inputSchema: { request_id: z.uuid() },
     },
     ({ request_id }) => dispatch({ kind: 'cancel_project_import', requestId: request_id })
@@ -223,7 +224,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'get_task_status',
     {
       description:
-        'Read an authorized task status, main agent ownership, result version and waiting reason.',
+        'Read an authorized task status, workspace ownership, result version and waiting reason.',
       inputSchema: { task_id: z.string().min(1) },
       annotations: { readOnlyHint: true },
     },
@@ -234,7 +235,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'add_work_item',
     {
       description:
-        'Main agent: add a workspace work item for an outcome, analysis question or coordination item. This does not create a Project requirement or a code task. Reuse request_id for retries.',
+        'Main task workspace member: add a workspace work item for an outcome, analysis question or coordination item. This does not create a Project requirement or a code task. Reuse request_id for retries.',
       inputSchema: {
         request_id: z.uuid(),
         title: z.string().trim().min(1).max(200),
@@ -249,7 +250,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'update_work_item',
     {
       description:
-        'Main agent: update a workspace work item independently from Project requirements, task results and workspace completion.',
+        'Main task workspace member: update a workspace work item independently from Project requirements, task results and workspace completion.',
       inputSchema: {
         work_item_id: z.string().min(1),
         state: z.enum([
@@ -279,7 +280,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'create_optimization_run',
     {
       description:
-        'Main agent: capture one user-triggered experience improvement. This creates a workspace work item and a durable optimization run; it does not grant push, merge, deploy, data deletion or permission changes. Reuse request_id for retries.',
+        'Main task workspace member: capture one user-triggered experience improvement. This creates a workspace work item and a durable optimization run; it does not grant push, merge, deploy, data deletion or permission changes. Reuse request_id for retries.',
       inputSchema: {
         request_id: z.uuid(),
         conversation_id: z.string().min(1),
@@ -347,7 +348,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'transition_optimization_run',
     {
       description:
-        'Main agent: move an optimization through its validated state machine. Invalid jumps, unvalidated application and unapproved high-risk work are rejected.',
+        'Main task workspace member: move an optimization through its validated state machine. Invalid jumps, unvalidated application and unapproved high-risk work are rejected.',
       inputSchema: {
         run_id: z.uuid(),
         state: z.enum([
@@ -389,7 +390,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'add_optimization_suggestion',
     {
       description:
-        'Main agent: add a local, evidence-backed improvement suggestion. A suggestion is not a Project TODO and never executes until the user accepts it.',
+        'Main task workspace member: add a local, evidence-backed improvement suggestion. A suggestion is not a Project TODO and never executes until the user accepts it.',
       inputSchema: {
         request_id: z.uuid(),
         fingerprint: z.string().min(1),
@@ -425,7 +426,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'update_optimization_suggestion',
     {
       description:
-        'Main agent: dismiss or expire an optimization suggestion without changing TODOs.',
+        'Main task workspace member: dismiss or expire an optimization suggestion without changing TODOs.',
       inputSchema: {
         suggestion_id: z.uuid(),
         state: z.enum(['dismissed', 'expired']),
@@ -439,7 +440,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'create_checkpoint',
     {
       description:
-        'Ongoing main agent: record a named checkpoint without completing the workspace or resetting its conversations.',
+        'Ongoing main task workspace: record a named checkpoint without completing the workspace or resetting its conversations.',
       inputSchema: {
         request_id: z
           .uuid()
@@ -454,7 +455,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'set_main_agent_state',
     {
       description:
-        'Main agent lifecycle: complete a finite workspace, pause or resume an ongoing workspace, or archive either. Completion is rejected while code tasks or work items remain active.',
+        'Main task workspace lifecycle: complete a finite workspace, pause or resume an ongoing workspace, or archive either. Completion is rejected while code tasks or work items remain active.',
       inputSchema: {
         action: z.enum(['complete', 'pause', 'resume', 'archive', 'restore']),
         note: z.string().max(20_000).optional(),
@@ -604,7 +605,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
           .max(16)
           .optional()
           .describe(
-            'Freeze selected management documents as task context; omit coordinator_id for your responsible main agent. Uncommitted disk versions must still match at dispatch.'
+            'Freeze selected workspace documents as task context; omit coordinator_id for your responsible main task workspace. Uncommitted disk versions must still match at dispatch.'
           ),
         base_branch: z
           .string()
@@ -678,7 +679,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'write_management_document',
     {
       description:
-        'Designated main conversation: create or update a management text document in its configured storage, including a different repository or host. Paths are relative to management storage. To update, read first and pass its returned disk version as expected_revision. Omit expected_revision only for a new file. This does not commit or push documents. Workers cannot write shared management documents.',
+        'Main task workspace member: create or update a workspace text document in its configured storage, including a different repository or host. Paths are relative to workspace document storage. To update, read first and pass its returned disk version as expected_revision. Omit expected_revision only for a new file. This does not commit or push documents. Workers cannot write shared workspace documents.',
       inputSchema: {
         coordinator_id: z.string().min(1).optional(),
         path: documentWriteSchema.shape.path,
@@ -700,7 +701,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'read_management_document',
     {
       description:
-        'Read an authorized main agent management document as text with its version. Paths are relative to its management workspace. Omit coordinator_id for your responsible main agent. Workers can read only explicitly attached snapshots or documents permitted by their project grants. Attached snapshots remain readable after edits. Other disk versions are valid only while the saved content is unchanged; use a full commit ID for historical content.',
+        'Read an authorized main task workspace document as text with its version. Paths are relative to its workspace document storage. Omit coordinator_id for your responsible main task workspace. Workers can read only explicitly attached snapshots or documents permitted by their project grants. Attached snapshots remain readable after edits. Other disk versions are valid only while the saved content is unchanged; use a full commit ID for historical content.',
       inputSchema: {
         coordinator_id: z.string().min(1).optional(),
         path: documentPathSchema,
@@ -715,7 +716,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'take_over_task',
     {
       description:
-        'Main agent: explicitly adopt an unowned code task or take it over from another main agent. Read get_task_status first and pass its coordinatorId as expected_owner, or null when unowned. The branch and running worker are preserved.',
+        'Main task workspace member: explicitly adopt an unowned code task or take it over from another workspace. Read get_task_status first and pass its coordinatorId as expected_owner, or null when unowned. The branch and running worker are preserved.',
       inputSchema: { task_id: z.string().min(1), expected_owner: z.string().nullable() },
     },
     ({ task_id, expected_owner }) =>
@@ -726,7 +727,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'retry_task',
     {
       description:
-        'Retry startup of a saved delegated task by task ID after fixing its failure. Any conversation in its responsible main-agent task (or its original caller when unowned) can retry. Preserves the task, branch, conversation, model configuration and document snapshots; never creates a replacement task.',
+        'Retry startup of a saved delegated task by task ID after fixing its failure. Any conversation in its responsible main task workspace (or its original caller when unowned) can retry. Preserves the task, branch, conversation, model configuration and document snapshots; never creates a replacement task.',
       inputSchema: { task_id: z.string().min(1) },
     },
     ({ task_id }) => dispatch({ kind: 'retry_task', taskId: task_id })
@@ -736,7 +737,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'create_pull_request',
     {
       description:
-        'Push a code task branch and create or reuse its pull request. Main agents may act on their own assigned tasks; task agents may act only on themselves. Supply a stable request_id and reuse it on retries. Source commit, push destination and PR target are frozen before pushing. Defaults come from the target project settings. No automatic merge.',
+        'Push a code task branch and create or reuse its pull request. Main task workspace members may act on assigned tasks; task agents may act only on themselves. Supply a stable request_id and reuse it on retries. Source commit, push destination and PR target are frozen before pushing. Defaults come from the target project settings. No automatic merge.',
       inputSchema: {
         task_id: z.string().min(1).optional(),
         request_id: z.string().min(1).max(200),
@@ -785,7 +786,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'retry_pull_request',
     {
       description:
-        'Resume a saved task PR request using its frozen source, push remote and target. Inspect get_task_status.pullRequests for the request ID, phase, error and result. The current main agent or the task itself may retry; this never resolves defaults again or automatically merges.',
+        'Resume a saved task PR request using its frozen source, push remote and target. Inspect get_task_status.pullRequests for the request ID, phase, error and result. A member of the responsible main task workspace or the task itself may retry; this never resolves defaults again or automatically merges.',
       inputSchema: { task_id: z.string().min(1), request_id: z.string().min(1).max(200) },
     },
     ({ task_id, request_id }) =>
@@ -796,7 +797,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'cancel_pending_task',
     {
       description:
-        'Main agent: cancel a task waiting for prerequisites, before startup has been admitted. Keeps its history; does not stop a running task.',
+        'Main task workspace member: cancel a task waiting for prerequisites, before startup has been admitted. Keeps its history; does not stop a running task.',
       inputSchema: { task_id: z.string().min(1) },
     },
     ({ task_id }) => dispatch({ kind: 'cancel_pending_task', taskId: task_id })
@@ -806,7 +807,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'submit_task_result',
     {
       description:
-        'Submit a delegated task result to its main agent. Include actual checks and unresolved issues. This requests review; it does not mark the task complete.',
+        'Submit a delegated task result to its responsible main task workspace. Include actual checks and unresolved issues. This requests review; it does not mark the task complete.',
       inputSchema: {
         task_id: z.string().optional(),
         request_id: z.string().min(1),
@@ -820,7 +821,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'acknowledge_task_results',
     {
       description:
-        'Main agent: acknowledge received result event IDs before taking follow-up actions. Repeated acknowledgment is safe.',
+        'Main task workspace member: acknowledge received result event IDs before taking follow-up actions. Repeated acknowledgment is safe.',
       inputSchema: { event_ids: z.array(z.string()).min(1) },
     },
     ({ event_ids }) => dispatch({ kind: 'acknowledge_task_results', eventIds: event_ids })
@@ -829,7 +830,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'review_task_result',
     {
       description:
-        'Main agent: accept or request changes after checking the task result, diff and evidence. Acceptance marks the task complete.',
+        'Main task workspace member: accept or request changes after checking the task result, diff and evidence. Acceptance marks the task complete.',
       inputSchema: {
         task_id: z.string(),
         result_version: z.number().int().positive(),

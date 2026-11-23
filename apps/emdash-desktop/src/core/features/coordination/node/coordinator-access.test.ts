@@ -5,7 +5,7 @@ import { coordinatorPrincipal, mayAccessProject, mayAccessTask } from './coordin
 
 function main(id = 'a'): Coordinator {
   return {
-    version: '12',
+    version: '13',
     id,
     kind: 'project',
     name: 'Main',
@@ -15,6 +15,7 @@ function main(id = 'a'): Coordinator {
     conversationId: `conversation-${id}`,
     primary: {},
     delegationDefaults: {},
+    autoResumeResults: false,
     tasks: {},
     events: [],
     purpose: '',

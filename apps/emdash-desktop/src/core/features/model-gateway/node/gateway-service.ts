@@ -20,15 +20,19 @@ import {
   type GatewayUsage,
 } from '../api/contract';
 import {
+  activeSourceForAgent,
   agentUpstreamProtocol,
   catalogProvider,
   catalogSourceId,
   codexNativeRouteRequired,
+  findPublishedModel,
+  gatewayBindingFromSource,
   gatewayModelsSettingsSchema,
   inboundProtocolForAgent,
+  publishedModelAliases,
   upstreamProtocol,
-  type GatewayModel,
   type GatewayModelsSettings,
+  type PublishedGatewayModel,
 } from '../api/model-catalog';
 import type { ApiProvider } from './config';
 import { apiProviders, defaultConfig, type Document } from './config';
@@ -233,10 +237,18 @@ export class ModelGatewayService {
     }
     const inventory = await this.deps.inventory();
     this.definitions = new Map(inventory.map(({ provider }) => [provider.id, provider]));
-    const models = [
-      ...((await this.deps.getModels?.())?.models ?? []),
-      ...Object.values(await this.deps.routes.getAll()).flatMap((r) => r?.catalog?.models ?? []),
-      ...[...this.activeCatalogs.values()].flatMap((c) => c.snapshot.models),
+    const published = (await this.deps.getModels?.())?.models ?? [];
+    const publishedBindings = published.flatMap((model) =>
+      model.sources.map((source) => ({
+        providerId: source.providerId,
+        aliases: publishedModelAliases(model),
+      }))
+    );
+    const snapshotBindings = [
+      ...Object.values(await this.deps.routes.getAll()).flatMap(
+        (route) => route?.catalog?.models ?? []
+      ),
+      ...[...this.activeCatalogs.values()].flatMap((catalog) => catalog.snapshot.models),
     ];
     // Published models need not be in the provider's discovery suggestions.
     const expanded = inventory.map((entry) => ({
@@ -246,7 +258,12 @@ export class ModelGatewayService {
         models: [
           ...new Set([
             ...entry.provider.models,
-            ...models.filter((m) => m.providerId === entry.provider.id).map((m) => m.alias),
+            ...publishedBindings
+              .filter((binding) => binding.providerId === entry.provider.id)
+              .flatMap((binding) => binding.aliases),
+            ...snapshotBindings
+              .filter((model) => model.providerId === entry.provider.id)
+              .map((model) => model.alias),
           ]),
         ],
       },
@@ -273,7 +290,12 @@ export class ModelGatewayService {
           {
             ...snapshot,
             models: snapshot.models.filter(
-              (m) => snapshot.scope === 'task' || published.some((p) => p.id === m.id && p.enabled)
+              (model) =>
+                snapshot.scope === 'task' ||
+                published.some(
+                  (publishedModel) =>
+                    publishedModel.id === model.id && publishedModel.state === 'active'
+                )
             ),
           },
           [...this.definitions.values()],
@@ -537,7 +559,7 @@ export class ModelGatewayService {
       this.switching.delete(id);
     }
   }
-  async migrationPreview(): Promise<GatewayModel[]> {
+  async migrationPreview(): Promise<PublishedGatewayModel[]> {
     await this.load();
     await this.configuredProviders();
     return migrationPreview([...this.definitions.values()]);
@@ -548,7 +570,7 @@ export class ModelGatewayService {
   ): Promise<{ ok: boolean; status: number }> {
     await this.prepareLaunch(catalogSourceId, alias, undefined, agent);
     const models = (await this.deps.getModels?.())?.models ?? [];
-    const snapshot = snapshotCatalog(models, [...this.definitions.values()], agent);
+    const snapshot = snapshotCatalog(models, [...this.definitions.values()], agent, alias);
     const id = `diagnostic:${randomBytes(16).toString('hex')}`;
     this.activeCatalogs.set(id, { snapshot, requests: 1 });
     try {
@@ -602,36 +624,80 @@ export class ModelGatewayService {
       this.activeCatalogs.delete(id);
     }
   }
-  async saveModels(models: GatewayModel[]): Promise<void> {
+  async saveModels(
+    models: PublishedGatewayModel[],
+    ignoredSourceIds: string[] = []
+  ): Promise<void> {
     const work = this.modelsQueue.then(async () => {
       if (!this.deps.saveModels) throw new Error('Model settings are unavailable.');
-      const current = (await this.deps.getModels?.())?.models ?? [];
+      const currentSettings = await this.deps.getModels?.();
+      const current = currentSettings?.models ?? [];
       await this.configuredProviders();
-      const next = gatewayModelsSettingsSchema.parse({ version: 1, models });
-      for (const model of next.models) {
+      const normalized = models.map((model) => {
         const previous = current.find((m) => m.id === model.id);
-        if (previous && previous.alias !== model.alias)
-          throw new Error('Create another alias instead of renaming a published model.');
         if (previous && model.revision !== previous.revision)
           throw new Error('Model settings changed. Reload before saving.');
-        const provider = this.definitions.get(model.providerId);
-        if (!provider || provider.account)
-          throw new Error('Select an API provider for this model.');
-        // A valid model can be available to another agent even when Claude cannot use it.
-        if (
-          !Object.keys(model.protocolModels).every((p) =>
-            provider.endpoints
-              ? provider.endpoints[p as keyof NonNullable<ModelProvider['endpoints']>] !== undefined
-              : !provider.protocol || provider.protocol === p
-          )
-        )
-          throw new Error('The provider does not expose a selected model protocol.');
-        model.revision = previous
-          ? previous.revision + (fingerprint(model) === fingerprint(previous) ? 0 : 1)
-          : 1;
+        const nextModel =
+          previous && previous.primaryAlias !== model.primaryAlias
+            ? {
+                ...model,
+                legacyAliases: [
+                  ...new Set([
+                    ...model.legacyAliases,
+                    previous.primaryAlias,
+                    ...previous.legacyAliases,
+                  ]),
+                ].filter((candidate) => candidate !== model.primaryAlias),
+              }
+            : model;
+        for (const source of nextModel.sources) {
+          const provider = this.definitions.get(source.providerId);
+          if (!provider || provider.account)
+            throw new Error('Select an API provider for every model source.');
+          if (
+            !Object.keys(source.protocolModels).every((selectedProtocol) =>
+              provider.endpoints
+                ? provider.endpoints[
+                    selectedProtocol as keyof NonNullable<ModelProvider['endpoints']>
+                  ] !== undefined
+                : !provider.protocol || provider.protocol === selectedProtocol
+            )
+          ) {
+            throw new Error('A provider does not expose a selected model protocol.');
+          }
+        }
+        return {
+          ...nextModel,
+          revision: previous
+            ? previous.revision + (fingerprint(nextModel) === fingerprint(previous) ? 0 : 1)
+            : 1,
+        };
+      });
+      const routes = await this.deps.routes.getAll();
+      for (const removed of current.filter(
+        (model) => !normalized.some((next) => next.id === model.id)
+      )) {
+        const references = Object.values(routes).filter(
+          (route) =>
+            route?.sourceId === catalogSourceId &&
+            (publishedModelAliases(removed).includes(route.model) ||
+              route.catalog?.models.some((model) => model.id === removed.id))
+        );
+        if (references.length > 0) {
+          throw new Error(
+            `This model is referenced by ${references.length} saved conversation route(s). Archive it instead.`
+          );
+        }
       }
+      const next = gatewayModelsSettingsSchema.parse({
+        version: 2,
+        models: normalized,
+        ignoredSourceIds,
+        legacyModels: currentSettings?.legacyModels,
+        migration: currentSettings?.migration,
+      });
       await this.deps.saveModels(next);
-      for (const [id, route] of Object.entries(await this.deps.routes.getAll())) {
+      for (const [id, route] of Object.entries(routes)) {
         if (route?.catalog) {
           this.pendingCatalogs.add(id);
           await this.refreshCatalogRoute(id);
@@ -654,7 +720,8 @@ export class ModelGatewayService {
       const available = snapshotCatalog(
         models,
         [...this.definitions.values()],
-        route.catalog.agent
+        route.catalog.agent,
+        route.model
       );
       const next = route.catalog.claudeUpstreamProtocol
         ? scopeClaudeCatalog(available, route.catalog.claudeUpstreamProtocol)
@@ -847,18 +914,31 @@ export class ModelGatewayService {
       if (model && saved?.catalog && saved.model !== model)
         throw new Error('Restart the agent to change its saved gateway model.');
       const available =
-        saved?.catalog ?? snapshotCatalog(models, [...this.definitions.values()], agentId);
+        saved?.catalog ?? snapshotCatalog(models, [...this.definitions.values()], agentId, model);
       const inbound = inboundProtocolForAgent(agentId);
       const selected = available.models.find((m) => m.alias === model);
       const targetProtocol = selected && agentUpstreamProtocol(selected, agentId);
-      const configured = selected ?? models.find((m) => m.alias === model && m.enabled);
-      if (agentId === 'codex' && configured && !agentUpstreamProtocol(configured, agentId))
+      const configured = findPublishedModel(models, model);
+      const configuredSource = configured && activeSourceForAgent(configured, agentId);
+      const configuredBinding =
+        configured && configuredSource
+          ? gatewayBindingFromSource(configured, configuredSource, model)
+          : undefined;
+      if (
+        agentId === 'codex' &&
+        configuredBinding &&
+        !agentUpstreamProtocol(configuredBinding, agentId)
+      )
         throw new Error(codexNativeRouteRequired);
       if (!model || !selected || !targetProtocol)
         throw new Error(
           'Select an available gateway model in Settings → Providers → Gateway models.'
         );
-      if (!models.some((m) => m.id === selected.id && m.enabled))
+      if (
+        !models.some(
+          (publishedModel) => publishedModel.id === selected.id && publishedModel.state === 'active'
+        )
+      )
         throw new Error('This gateway model is disabled or unavailable.');
       const snapshot =
         agentId === 'claude'

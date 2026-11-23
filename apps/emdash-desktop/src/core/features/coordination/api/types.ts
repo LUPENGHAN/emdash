@@ -41,6 +41,17 @@ export const taskResultSchema = z.object({
   prUrls: z.array(z.string()).default([]),
 });
 export type TaskResult = z.infer<typeof taskResultSchema>;
+export const taskResultRouteSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('conversation'),
+    conversationId: z.string().min(1),
+    autoContinue: z.boolean(),
+  }),
+  z.object({ kind: z.literal('workspace') }),
+]);
+export type TaskResultRoute = z.infer<typeof taskResultRouteSchema>;
+export const resultRoutingPolicySchema = z.enum(['origin-auto', 'origin-notify', 'workspace']);
+export type ResultRoutingPolicy = z.infer<typeof resultRoutingPolicySchema>;
 export type AssignedTask = {
   taskId: string;
   projectId: string;
@@ -58,6 +69,8 @@ export type AssignedTask = {
   taskCreated?: boolean;
   createdAt?: number;
   dependencyResults?: { taskId: string; projectId: string; version: number; commits: string[] }[];
+  /** Frozen when the task is delegated. Missing routes from old tasks fall back to the workspace. */
+  resultRoute?: TaskResultRoute;
 };
 export type ResultEvent = {
   id: string;
@@ -159,7 +172,7 @@ export const workspaceCompletionReportSchema = z.object({
 export type WorkspaceCompletionReport = z.infer<typeof workspaceCompletionReportSchema>;
 
 export type Coordinator = {
-  version: '12';
+  version: '13';
   id: string;
   kind: 'project' | 'cross-project';
   name: string;
@@ -168,8 +181,13 @@ export type Coordinator = {
   projectAccess?: ProjectAccess;
   taskId: string;
   conversationId: string;
+  /** Legacy result receiver. It is not the identity or owner of the workspace. */
   primary: AgentSelection;
   delegationDefaults: AgentSelection;
+  /** Result events stay in the workspace unless the user explicitly enables agent wake-up. */
+  autoResumeResults: boolean;
+  /** Policy applied to future delegations. Existing tasks keep their frozen result route. */
+  resultRoutingPolicy?: ResultRoutingPolicy;
   params?: CreateTaskParams;
   tasks: Record<string, AssignedTask>;
   events: ResultEvent[];
@@ -541,5 +559,47 @@ export const coordinatorRecord = defineVersionedSchema()
       updatedAt: z.number(),
     }),
     (record) => ({ ...record, version: '12' as const })
+  )
+  .version(
+    '13',
+    coordinatorV8.extend({
+      version: z.literal('13'),
+      tasks: z.record(
+        z.string(),
+        coordinatorV8.shape.tasks.valueType.extend({
+          resultRoute: taskResultRouteSchema.optional(),
+        })
+      ),
+      documentMigration: z
+        .object({
+          id: z.string(),
+          fingerprint: z.string(),
+          source: documentStorageSchema,
+          target: documentStorageSchema,
+          files: z.array(managementDocumentSchema),
+          copied: z.array(z.object({ path: z.string(), revision: z.string() })),
+          phase: z.enum(['prepared', 'copying', 'verified', 'complete', 'cancelled']),
+          error: z.string().optional(),
+        })
+        .optional(),
+      documentStorageHistory: z.array(documentStorageSchema).optional(),
+      purpose: z.string().max(20_000),
+      lifecycle: workspaceLifecycleSchema,
+      workItems: z.record(z.string(), workspaceWorkItemSchema),
+      checkpoints: z.array(workspaceCheckpointSchema),
+      completionReport: workspaceCompletionReportSchema.optional(),
+      projectImports: z.record(z.string(), workspaceProjectImportSchema).optional(),
+      optimizationRuns: z.record(z.string(), optimizationRunSchema),
+      optimizationSuggestions: z.record(z.string(), optimizationSuggestionSchema),
+      livePromotions: z.record(z.string(), livePromotionSchema),
+      migratedFromId: z.string().optional(),
+      supersededById: z.string().optional(),
+      deletedAt: z.number().optional(),
+      autoResumeResults: z.boolean(),
+      resultRoutingPolicy: resultRoutingPolicySchema.optional(),
+      createdAt: z.number(),
+      updatedAt: z.number(),
+    }),
+    (record) => ({ ...record, version: '13' as const, autoResumeResults: false })
   )
   .build();

@@ -134,7 +134,9 @@ describe('durable task delegation', () => {
     };
     test.deps.recoveryContext = async () => ({ caller: receiver, projectGrants: ['permitted'] });
     const recovered = new TaskDelegationService(test.deps);
-    await expect(recovered.retry(caller, taskId)).rejects.toThrow('responsible main agent');
+    await expect(recovered.retry(caller, taskId)).rejects.toThrow(
+      'responsible main task workspace'
+    );
     expect(test.deps.start).toHaveBeenCalledOnce();
     const [first, repeated] = await Promise.all([
       recovered.retry(receiver, taskId),

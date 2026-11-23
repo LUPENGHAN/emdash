@@ -39,9 +39,9 @@ export function TakeOverTaskForm({ record }: { record: Coordinator }) {
       {preview && (
         <div className="space-y-2 rounded border border-border p-3 text-sm">
           <p>{preview.name}</p>
-          <p>当前管理方：{preview.ownerName ?? '尚无 Main Agent'}</p>
+          <p>当前所属工作区：{preview.ownerName ?? '尚无主任务工作区'}</p>
           {preview.ownerId === record.id ? (
-            <p>当前主任务工作区已经管理这个 Task。</p>
+            <p>这个 Task 已属于当前主任务工作区。</p>
           ) : (
             <>
               <p>
@@ -64,7 +64,7 @@ export function TakeOverTaskForm({ record }: { record: Coordinator }) {
                     .then(() => {
                       setPreview(undefined);
                       setTaskId('');
-                      toast.success('任务管理关系已更新');
+                      toast.success('Task 归属已更新');
                     })
                     .catch(async (error) => {
                       toast.error('无法接管任务', { description: String(error) });

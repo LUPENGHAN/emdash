@@ -91,8 +91,7 @@ export function createProjectOperations(dependencies: ProjectOperationDependenci
     moveProjectToFolder: (projectId: string, folderId: string | null) =>
       moveProjectToFolder(db, projectId, folderId),
     archiveProject: (projectId: string) => {
-      if (isProtectedSystemProject(projectId))
-        throw new Error('Emdash 内部主任务管理仓库不能归档。');
+      if (isProtectedSystemProject(projectId)) throw new Error('Emdash 内部主任务资料库不能归档。');
       return archiveProject(db, dependencies.projectAutomations, projectId);
     },
     restoreProject: (projectId: string) =>

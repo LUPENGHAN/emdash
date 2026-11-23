@@ -204,7 +204,9 @@ export class TaskDelegationService {
       if (record.params.id !== taskId) throw new Error('The task delegation changed.');
       const current = await this.context(record);
       if (caller.taskId !== current.caller.taskId || caller.projectId !== current.caller.projectId)
-        throw new Error('Only a conversation in the responsible main agent can retry this task.');
+        throw new Error(
+          'Only a conversation in the responsible main task workspace can retry this task.'
+        );
       await this.deps.authorize(caller, record.params.projectId, current.request);
       return this.execute(saved.key, record, caller, current.request);
     });

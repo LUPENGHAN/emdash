@@ -1,12 +1,20 @@
 import { createHash } from 'node:crypto';
-import type { ModelProvider, ProviderProtocol } from '@core/features/model-providers/api';
 import {
+  PROVIDER_PROTOCOLS,
+  type ModelProvider,
+  type ProviderProtocol,
+} from '@core/features/model-providers/api';
+import {
+  activeSourceForAgent,
   agentUpstreamProtocol,
   codexNativeRouteRequired,
   configuredProtocols,
+  gatewayBindingFromSource,
   modelAvailableForAgent,
+  publishedModelAliases,
   upstreamProtocol,
   type GatewayModel,
+  type PublishedGatewayModel,
 } from '../api/model-catalog';
 import type { ApiProvider } from './config';
 
@@ -14,6 +22,7 @@ export type CatalogSnapshot = {
   scope?: 'task';
   agent: string;
   claudeUpstreamProtocol?: ProviderProtocol;
+  /** Frozen route bindings. V2 directory records are flattened before reaching this snapshot. */
   models: GatewayModel[];
   providers: ModelProvider[];
 };
@@ -23,28 +32,33 @@ export function fingerprint(value: unknown): string {
 }
 
 export function snapshotCatalog(
-  models: GatewayModel[],
+  models: PublishedGatewayModel[],
   providers: ModelProvider[],
-  agent: string
+  agent: string,
+  requestedAlias?: string
 ): CatalogSnapshot {
-  const available = models.filter((model) =>
-    modelAvailableForAgent(
-      model,
-      providers.find((p) => p.id === model.providerId),
-      agent
-    )
-  );
+  const available = models.flatMap((model) => {
+    if (!modelAvailableForAgent(model, providers, agent)) return [];
+    const source = activeSourceForAgent(model, agent);
+    if (!source) return [];
+    const primary = gatewayBindingFromSource(model, source);
+    return requestedAlias &&
+      requestedAlias !== model.primaryAlias &&
+      publishedModelAliases(model).includes(requestedAlias)
+      ? [primary, gatewayBindingFromSource(model, source, requestedAlias)]
+      : [primary];
+  });
   return {
     agent,
     models: available,
     providers: providers
       .filter((provider) => available.some((model) => model.providerId === provider.id))
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        baseUrl: p.baseUrl,
-        protocol: p.protocol,
-        endpoints: p.endpoints,
+      .map((provider) => ({
+        id: provider.id,
+        name: provider.name,
+        baseUrl: provider.baseUrl,
+        protocol: provider.protocol,
+        endpoints: provider.endpoints,
         models: [],
       })),
   };
@@ -113,15 +127,15 @@ export function runtimeCatalog(
   const entries: ApiProvider[] = [];
   const models: Record<string, string> = {};
   for (const model of scopeCodexCatalog(snapshot).models) {
-    const saved = snapshot.providers.find((p) => p.id === model.providerId);
-    const current = inventory.find((p) => p.id === model.providerId);
-    const runtime = providers.find((p) => p.id === model.providerId);
+    const saved = snapshot.providers.find((provider) => provider.id === model.providerId);
+    const current = inventory.find((provider) => provider.id === model.providerId);
+    const runtime = providers.find((provider) => provider.id === model.providerId);
     if (!saved || !current || !runtime || connectionIdentity(saved) !== connectionIdentity(current))
       continue;
     const id = runtimeProviderId(model, saved);
     const mapping = Object.fromEntries(
-      Object.entries(model.protocolModels).map(([protocol, binding]) => [
-        protocol,
+      Object.entries(model.protocolModels).map(([selectedProtocol, binding]) => [
+        selectedProtocol,
         binding.upstreamModel,
       ])
     );
@@ -145,37 +159,49 @@ export function runtimeCatalog(
   return { providers: entries, models };
 }
 
-/** Deterministic migration preview; publishing requires the user to check model protocols. */
-export function migrationPreview(providers: ModelProvider[]): GatewayModel[] {
+/** Deterministic discovery preview. It never merges providers automatically. */
+export function migrationPreview(providers: ModelProvider[]): PublishedGatewayModel[] {
   const counts = new Map<string, number>();
-  for (const p of providers.filter((p) => !p.account))
-    for (const m of p.models) counts.set(m, (counts.get(m) ?? 0) + 1);
+  for (const provider of providers.filter((candidate) => !candidate.account)) {
+    for (const model of provider.models) counts.set(model, (counts.get(model) ?? 0) + 1);
+  }
   return providers
-    .filter((p) => !p.account)
-    .flatMap((p) =>
-      p.models.map((model) => {
-        const id = fingerprint([p.id, model]).slice(0, 12);
+    .filter((provider) => !provider.account)
+    .flatMap((provider) =>
+      provider.models.map((model) => {
+        const id = fingerprint([provider.id, model]).slice(0, 12);
         const base =
           model.replace(/[^a-zA-Z0-9._/-]/g, '-').replace(/^[^a-zA-Z0-9]+/, '') || 'model';
-        const alias = counts.get(model) === 1 && base === model ? base : `${base}-${id}`;
+        const primaryAlias = counts.get(model) === 1 && base === model ? base : `${base}-${id}`;
+        const sourceId = `source:${id}`;
         return {
           id: `import-${id}`,
-          alias,
-          name: model,
-          enabled: true,
+          primaryAlias,
+          legacyAliases: [],
+          displayName: model,
+          state: 'active' as const,
           revision: 1,
-          providerId: p.id,
-          protocolModels: Object.fromEntries(
-            configuredProtocols(p).map((protocol) => [
-              protocol,
-              { upstreamModel: p.modelAliases?.[model] ?? model },
-            ])
+          sources: [
+            {
+              id: sourceId,
+              providerId: provider.id,
+              enabled: true,
+              protocolModels: Object.fromEntries(
+                configuredProtocols(provider).map((selectedProtocol) => [
+                  selectedProtocol,
+                  { upstreamModel: provider.modelAliases?.[model] ?? model },
+                ])
+              ),
+              protocolPolicy: { mode: 'auto' as const },
+            },
+          ],
+          activeSourceByProtocol: Object.fromEntries(
+            PROVIDER_PROTOCOLS.map((selectedProtocol) => [selectedProtocol, sourceId])
           ),
-          protocolPolicy: { mode: 'auto' as const },
-          contextWindow: p.contextWindows?.[model],
-          nonReasoning: p.nonReasoningModels?.includes(model),
-          webSearch: p.webSearchModels?.includes(model),
-          codexReasoning: p.codexReasoningByModel?.[model] ?? p.codexReasoning,
+          contextWindow: provider.contextWindows?.[model],
+          nonReasoning: provider.nonReasoningModels?.includes(model),
+          webSearch: provider.webSearchModels?.includes(model),
+          codexReasoning: provider.codexReasoningByModel?.[model] ?? provider.codexReasoning,
         };
       })
     );
@@ -186,14 +212,18 @@ export function taskModelCatalog(
   provider: ModelProvider,
   model: string,
   agent: string,
-  published: GatewayModel[]
+  published: PublishedGatewayModel[]
 ): CatalogSnapshot {
   if (provider.account) throw new Error('Select an API supplier for a task gateway route.');
   if (!model.trim()) throw new Error('Specify a supplier model for this task.');
-  const matches = published.filter(
-    (entry) =>
-      entry.providerId === provider.id &&
-      Object.values(entry.protocolModels).some((mapping) => mapping.upstreamModel === model)
+  const matches = published.flatMap((entry) =>
+    entry.sources
+      .filter(
+        (source) =>
+          source.providerId === provider.id &&
+          Object.values(source.protocolModels).some((mapping) => mapping.upstreamModel === model)
+      )
+      .map((source) => gatewayBindingFromSource(entry, source))
   );
   if (
     matches.length > 1 &&
@@ -212,8 +242,8 @@ export function taskModelCatalog(
   const binding: GatewayModel = {
     ...(matches[0] ?? {
       protocolModels: Object.fromEntries(
-        protocols.map((protocol) => [
-          protocol,
+        protocols.map((selectedProtocol) => [
+          selectedProtocol,
           { upstreamModel: provider.modelAliases?.[model] ?? model },
         ])
       ),
@@ -232,10 +262,24 @@ export function taskModelCatalog(
       provider.codexReasoningByModel?.[model] ??
       provider.codexReasoning,
   };
-  const snapshot = snapshotCatalog([binding], [provider], agent);
+  const snapshot: CatalogSnapshot = {
+    scope: 'task',
+    agent,
+    models: [binding],
+    providers: [
+      {
+        id: provider.id,
+        name: provider.name,
+        baseUrl: provider.baseUrl,
+        protocol: provider.protocol,
+        endpoints: provider.endpoints,
+        models: [],
+      },
+    ],
+  };
   if (agent === 'codex' && !agentUpstreamProtocol(binding, agent))
     throw new Error(codexNativeRouteRequired);
-  if (!snapshot.models.length)
+  if (!agentUpstreamProtocol(binding, agent))
     throw new Error('This supplier model has no compatible agent protocol.');
-  return { ...snapshot, scope: 'task' };
+  return snapshot;
 }

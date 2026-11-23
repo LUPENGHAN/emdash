@@ -7,7 +7,7 @@ import { ProvidersSettingsPage } from '../browser/providers-settings-page';
 
 export const providersSettingsPage = defineSettingsPageContribution({
   id: 'providers',
-  label: 'Providers',
+  label: '模型与路由',
   icon: 'network',
   component: ProvidersSettingsPage,
 } satisfies SettingsPageContribution<SettingsPageTab>);

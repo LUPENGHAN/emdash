@@ -10,7 +10,11 @@ import type { ModelProvider } from '@core/features/model-providers/api';
 import { withAgentEffort } from '@core/features/model-providers/api/node/agent-effort';
 import { buildSourceLaunch } from '@core/features/model-providers/api/node/source-launch';
 import type { GatewayUsage } from '../api/contract';
-import { catalogSourceId, type GatewayModelsSettings } from '../api/model-catalog';
+import {
+  catalogSourceId,
+  gatewayModelsSettingsSchema,
+  type GatewayModelsSettings,
+} from '../api/model-catalog';
 import { startAcpTestClient } from './acp-test-client';
 import { ModelGatewayService, type GatewayRoute } from './gateway-service';
 
@@ -139,7 +143,7 @@ it('routes native protocols and explicit model choices through the Go process, p
       models: [],
     },
   ];
-  let settings: GatewayModelsSettings = {
+  let settings: GatewayModelsSettings = gatewayModelsSettingsSchema.parse({
     version: 1,
     models: [
       {
@@ -166,7 +170,7 @@ it('routes native protocols and explicit model choices through the Go process, p
         protocolPolicy: { mode: 'auto' },
       },
     ],
-  };
+  });
   const vault = new Map<string, string>();
   let idle = true;
   let key = 'fake-key';
@@ -337,7 +341,7 @@ it('routes native protocols and explicit model choices through the Go process, p
     ).rejects.toThrow('Select an available');
     idle = false;
     await service.saveModels(
-      settings.models.map((m) => (m.id === 'both-id' ? { ...m, name: 'Display rename' } : m))
+      settings.models.map((m) => (m.id === 'both-id' ? { ...m, displayName: 'Display rename' } : m))
     );
     expect((await service.route('claude-conversation'))?.catalog?.models[0].name).toBe(
       'Both protocols'
@@ -354,8 +358,13 @@ it('routes native protocols and explicit model choices through the Go process, p
         m.id === 'both-id'
           ? {
               ...m,
-              providerId: 'p2',
-              protocolModels: { 'openai-chat': { upstreamModel: 'replacement-chat' } },
+              sources: [
+                {
+                  ...m.sources[0],
+                  providerId: 'p2',
+                  protocolModels: { 'openai-chat': { upstreamModel: 'replacement-chat' } },
+                },
+              ],
             }
           : m
       )
@@ -520,7 +529,7 @@ it('routes native protocols and explicit model choices through the Go process, p
       }
     }
     await service.saveModels(
-      settings.models.map((m) => (m.id === 'chat-id' ? { ...m, enabled: false } : m))
+      settings.models.map((m) => (m.id === 'chat-id' ? { ...m, state: 'disabled' } : m))
     );
     const sent = seen.length;
     const disabled = await fetch(codex.provider.baseUrl + '/responses', {
@@ -544,6 +553,25 @@ it('routes native protocols and explicit model choices through the Go process, p
         }),
       ])
     );
+    await expect(
+      service.saveModels(settings.models.filter((model) => model.id !== 'chat-id'))
+    ).rejects.toThrow('Archive it instead');
+    await service.saveModels(
+      settings.models.map((model) =>
+        model.id === 'both-id' ? { ...model, primaryAlias: 'both-renamed' } : model
+      )
+    );
+    expect(settings.models.find((model) => model.id === 'both-id')).toMatchObject({
+      primaryAlias: 'both-renamed',
+      legacyAliases: expect.arrayContaining(['both']),
+    });
+    const legacyAliasLaunch = await service.prepareLaunch(
+      catalogSourceId,
+      'both',
+      'legacy-alias-conversation',
+      'claude'
+    );
+    expect(legacyAliasLaunch.provider.models).toContain('both');
     providers = providers.map((p) =>
       p.id === 'p1' ? { ...p, baseUrl: `${base}/changed-scope` } : p
     );

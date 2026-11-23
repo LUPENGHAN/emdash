@@ -51,7 +51,7 @@ export function GatewayProvidersPanel() {
       await operation();
       await status.refetch();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Router operation failed.');
+      setError(e instanceof Error ? e.message : '路由操作失败。');
     } finally {
       setBusy(false);
     }
@@ -64,14 +64,13 @@ export function GatewayProvidersPanel() {
     <section className="space-y-3 rounded-md border border-border p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-medium">Local routing</h3>
+          <h2 className="text-base font-medium">本地路由</h2>
           <p className="text-xs text-foreground-muted">
-            Starts automatically. Choose a published model in a gateway conversation. Existing
-            provider-based sessions keep their saved routes.
+            应用启动后自动运行。已有会话保留自己的路由快照，目录变化不会改写历史。
           </p>
         </div>
         <span role="status" className="shrink-0 text-xs">
-          {status.data?.state === 'ready' ? 'Running' : (status.data?.state ?? 'Loading…')}
+          {status.data?.state === 'ready' ? '运行中' : (status.data?.state ?? '加载中…')}
         </span>
         {status.data?.state !== 'ready' ? (
           <Button
@@ -79,7 +78,7 @@ export function GatewayProvidersPanel() {
             disabled={busy}
             onClick={() => void run(async () => (await getModelGatewayClient()).start())}
           >
-            Retry router
+            重试路由
           </Button>
         ) : null}
       </div>
@@ -99,29 +98,28 @@ export function GatewayProvidersPanel() {
           variant={tab === 'routes' ? 'secondary' : 'ghost'}
           onClick={() => setTab('routes')}
         >
-          Conversation routes
+          会话路由
         </Button>
         <Button
           size="sm"
           variant={tab === 'accounts' ? 'secondary' : 'ghost'}
           onClick={() => setTab('accounts')}
         >
-          Gateway accounts
+          网关账号
         </Button>
         <Button
           size="sm"
           variant={tab === 'usage' ? 'secondary' : 'ghost'}
           onClick={() => setTab('usage')}
         >
-          Router usage
+          路由用量
         </Button>
       </div>
       {tab === 'routes' ? (
         <div className="space-y-2 text-xs">
           {routes.data?.length === 0 ? (
             <p className="text-foreground-muted">
-              No routed conversations yet. Choose Gateway and a published model when creating a
-              conversation.
+              还没有网关会话。创建会话时选择统一网关和已发布模型即可产生路由。
             </p>
           ) : null}
           {routes.data?.map((route) => (
@@ -130,13 +128,13 @@ export function GatewayProvidersPanel() {
               className="flex flex-wrap items-center gap-2 rounded border border-border px-3 py-2"
             >
               <span className="min-w-0 flex-1 truncate">{route.title}</span>
-              <span className="text-foreground-muted">Local router →</span>
+              <span className="text-foreground-muted">本地路由 →</span>
               <span>{route.providerName}</span>
               <code>{route.requestedModel ?? route.model}</code>
               {route.upstreamModel ? (
                 <span className="text-foreground-muted">
                   → {route.upstreamModel} · {route.inboundProtocol} → {route.upstreamProtocol} ·
-                  revision {route.revision}
+                  修订 {route.revision}
                 </span>
               ) : null}
               {route.restartReason ? (
@@ -145,17 +143,18 @@ export function GatewayProvidersPanel() {
                 </span>
               ) : null}
               {route.pendingName ? (
-                <span className="text-foreground-muted">→ {route.pendingName} after this turn</span>
+                <span className="text-foreground-muted">
+                  → 本轮结束后切换到 {route.pendingName}
+                </span>
               ) : null}
             </div>
           ))}
-          {routes.error ? <p role="alert">Could not load routes.</p> : null}
+          {routes.error ? <p role="alert">无法加载会话路由。</p> : null}
         </div>
       ) : tab === 'accounts' ? (
         <div className="space-y-3">
           <p className="text-xs text-foreground-muted">
-            Authorize an account for requests through the router. Native agent sign-in remains under
-            Official accounts.
+            授权网关直接使用的账号。Agent 自己的原生登录仍在“官方账号”中管理。
           </p>
           <div className="flex gap-2">
             {(['codex', 'claude'] as const).map((provider) => (
@@ -172,22 +171,20 @@ export function GatewayProvidersPanel() {
                   })
                 }
               >
-                Connect {provider === 'codex' ? 'Codex' : 'Claude'} OAuth
+                连接 {provider === 'codex' ? 'Codex' : 'Claude'} OAuth
               </Button>
             ))}
           </div>
           {flow ? (
             <div className="space-y-2 rounded border border-border p-3">
-              <p className="text-xs">
-                Finish authorization in your browser. Waiting for the callback…
-              </p>
+              <p className="text-xs">请在浏览器中完成授权，正在等待回调…</p>
               <Button size="sm" variant="ghost" onClick={() => void openExternal(flow.url)}>
-                Open authorization
+                打开授权页面
               </Button>
               <Input
                 value={callback}
                 onChange={(event) => setCallback(event.target.value)}
-                placeholder="Paste callback URL if it did not finish automatically"
+                placeholder="如果没有自动完成，请粘贴回调 URL"
               />
               <Button
                 size="sm"
@@ -201,11 +198,11 @@ export function GatewayProvidersPanel() {
                   )
                 }
               >
-                Submit callback
+                提交回调
               </Button>
               {authorization.data?.error || authorization.error ? (
                 <p role="alert" className="text-destructive text-xs">
-                  {authorization.data?.error ?? 'Authorization status is unavailable.'}
+                  {authorization.data?.error ?? '无法读取授权状态。'}
                 </p>
               ) : null}
               <Button
@@ -216,7 +213,7 @@ export function GatewayProvidersPanel() {
                   setCallback('');
                 }}
               >
-                Close
+                关闭
               </Button>
             </div>
           ) : null}
@@ -241,39 +238,27 @@ export function GatewayProvidersPanel() {
                   )
                 }
               >
-                Disconnect
+                断开连接
               </Button>
             </div>
           ))}
         </div>
       ) : (
-        <div
-          className="overflow-auto text-xs"
-          role="region"
-          aria-label="Gateway usage"
-          tabIndex={0}
-        >
+        <div className="overflow-auto text-xs" role="region" aria-label="网关用量" tabIndex={0}>
           <p className="mb-2 text-foreground-muted">
-            Request usage is stored independently. Deleting conversations keeps these records.
+            请求用量独立保存，删除会话也不会删除这些历史记录。
           </p>
           <table className="w-full text-left">
-            <caption className="sr-only">Gateway request usage</caption>
+            <caption className="sr-only">网关请求用量</caption>
             <thead>
               <tr>
-                {[
-                  'Time',
-                  'Provider',
-                  'Model',
-                  'Input',
-                  'Output',
-                  'Cache read',
-                  'Cache write',
-                  'Status',
-                ].map((label) => (
-                  <th key={label} scope="col" className="p-1">
-                    {label}
-                  </th>
-                ))}
+                {['时间', '服务源', '模型', '输入', '输出', '缓存读取', '缓存写入', '状态'].map(
+                  (label) => (
+                    <th key={label} scope="col" className="p-1">
+                      {label}
+                    </th>
+                  )
+                )}
               </tr>
             </thead>
             <tbody>
@@ -292,35 +277,33 @@ export function GatewayProvidersPanel() {
                     {item.upstreamModel ? (
                       <span className="block text-foreground-muted">
                         {item.upstreamModel} · {item.inboundProtocol} → {item.upstreamProtocol} ·
-                        revision {item.routeRevision}
+                        修订 {item.routeRevision}
                       </span>
                     ) : null}
                   </td>
-                  <td className="p-1">
-                    {item.status === 'missing' ? 'Unknown' : item.inputTokens}
-                  </td>
-                  <td className="p-1">
-                    {item.status === 'missing' ? 'Unknown' : item.outputTokens}
-                  </td>
+                  <td className="p-1">{item.status === 'missing' ? '未知' : item.inputTokens}</td>
+                  <td className="p-1">{item.status === 'missing' ? '未知' : item.outputTokens}</td>
                   {item.status === 'complete' &&
                   item.cacheReadTokens === undefined &&
                   item.cacheWriteTokens === undefined ? (
                     <td className="p-1" colSpan={2}>
-                      Legacy cached ({item.cachedTokens})
+                      旧版缓存统计（{item.cachedTokens}）
                     </td>
                   ) : (
                     <>
-                      <td className="p-1">{item.cacheReadTokens ?? 'Unknown'}</td>
-                      <td className="p-1">{item.cacheWriteTokens ?? 'Unknown'}</td>
+                      <td className="p-1">{item.cacheReadTokens ?? '未知'}</td>
+                      <td className="p-1">{item.cacheWriteTokens ?? '未知'}</td>
                     </>
                   )}
-                  <td className="p-1">{item.failed ? 'Failed' : item.status}</td>
+                  <td className="p-1">
+                    {item.failed ? '失败' : item.status === 'complete' ? '完成' : '缺失'}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {usage.data?.length === 0 ? <p>No router usage yet.</p> : null}
-          {usage.error ? <p role="alert">Could not load usage.</p> : null}
+          {usage.data?.length === 0 ? <p>还没有路由用量记录。</p> : null}
+          {usage.error ? <p role="alert">无法加载路由用量。</p> : null}
         </div>
       )}
     </section>

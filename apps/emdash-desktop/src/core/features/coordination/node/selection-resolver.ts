@@ -1,5 +1,8 @@
 import { getPlugin } from '@core/features/agents/api/node/plugin-registry';
-import { catalogProvider, type GatewayModel } from '@core/features/model-gateway/api/model-catalog';
+import {
+  catalogProvider,
+  type PublishedGatewayModel,
+} from '@core/features/model-gateway/api/model-catalog';
 import type { ModelProvider } from '@core/features/model-providers/api';
 import { modelEffortOptions } from '@core/features/model-providers/api/model-effort';
 import type { ProviderCustomConfig } from '@core/primitives/app-settings/api';
@@ -9,7 +12,7 @@ type Dependencies = {
   defaultAgent(): Promise<string>;
   getAgentSettings(agent: string): Promise<ProviderCustomConfig | undefined>;
   getProviders(): Promise<ModelProvider[]>;
-  getModels(): Promise<GatewayModel[]>;
+  getModels(): Promise<PublishedGatewayModel[]>;
 };
 
 /** Resolves a reusable selection without allocating a route or starting an agent. */

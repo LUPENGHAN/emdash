@@ -127,7 +127,7 @@ export async function createWorktreeThroughRegistry(
         stage: 'capability',
         message:
           spec.purpose === 'management'
-            ? 'This Host cannot create independent management workspaces. Update the workspace server or Emdash app before retrying.'
+            ? 'This Host cannot create independent workspace document checkouts. Update the workspace server or Emdash app before retrying.'
             : 'This Host cannot create task workspaces. Update the workspace server or Emdash app before retrying.',
       });
     }

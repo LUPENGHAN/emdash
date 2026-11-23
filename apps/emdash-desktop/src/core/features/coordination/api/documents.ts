@@ -19,7 +19,7 @@ export const documentPathSchema = z
       ctx.addIssue({
         code: 'custom',
         message:
-          'Use a document path inside the management workspace, without .git or parent traversal.',
+          'Use a document path inside the workspace document checkout, without .git or parent traversal.',
       });
   });
 export const documentRevisionSchema = z

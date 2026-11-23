@@ -112,7 +112,7 @@ export async function prepareCreateTask(
   if (workspaceConfig.git.kind === 'management' && params.taskConfig.role !== 'coordination')
     return err({
       type: 'provision-failed',
-      message: 'Management workspaces belong to main agents.',
+      message: 'Management workspaces belong to main task workspaces.',
     });
   const git = workspaceConfig.git;
   const codeReferences =

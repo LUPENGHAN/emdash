@@ -4,8 +4,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
-import type { Coordinator } from '../api/types';
-import { CreateCrossProjectMainAgent, CrossProjectMainAgents } from './cross-project-main-agents';
+import type { Coordinator } from '@core/features/coordination/api/types';
+import {
+  CreateCrossProjectMainAgent,
+  CrossProjectMainAgents,
+  sortWorkspaces,
+} from '@core/features/coordination/browser/cross-project-main-agents';
 
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
@@ -26,7 +30,7 @@ const state = vi.hoisted(() => ({
   projects: [] as Array<{ id: string; name: string; data?: { archivedAt?: number } }>,
 }));
 
-vi.mock('../api/browser/use-coordinators', () => ({
+vi.mock('@core/features/coordination/api/browser/use-coordinators', () => ({
   useCoordinators: () => ({
     data: state.records,
     isPending: false,
@@ -35,7 +39,7 @@ vi.mock('../api/browser/use-coordinators', () => ({
   }),
 }));
 
-vi.mock('../api/browser/client', () => ({
+vi.mock('@core/features/coordination/api/browser/client', () => ({
   getCoordinationClient: async () => ({
     open: mocks.open,
     completeAndArchive: mocks.completeAndArchive,
@@ -70,7 +74,7 @@ vi.mock('@core/manifests/browser/modal-api', () => ({
 
 function workspace(overrides: Partial<Coordinator> = {}): Coordinator {
   return {
-    version: '12',
+    version: '13',
     id: 'cross:workspace',
     kind: 'cross-project',
     name: '缓存命中率排查',
@@ -80,6 +84,7 @@ function workspace(overrides: Partial<Coordinator> = {}): Coordinator {
     conversationId: 'main-conversation',
     primary: { agent: 'codex' },
     delegationDefaults: {},
+    autoResumeResults: false,
     tasks: {},
     events: [],
     purpose: '找出缓存命中率为零的原因',
@@ -106,6 +111,7 @@ describe('Main Agent workspace context menu', () => {
   let root: Root;
 
   beforeEach(() => {
+    window.localStorage.clear();
     for (const mock of Object.values(mocks)) mock.mockReset();
     mocks.confirm.mockResolvedValue({ success: true, data: undefined });
     mocks.refetch.mockResolvedValue(undefined);
@@ -220,7 +226,7 @@ describe('Main Agent workspace context menu', () => {
 
     expect(host.textContent).not.toContain('主任务 Agent');
     expect(host.querySelector('[data-testid="cross-project-agent-type"]')).toBeNull();
-    expect(host.textContent).toContain('创建工作区不会启动 Agent');
+    expect(host.textContent).toContain('创建或打开工作区不会启动 Agent');
 
     await act(async () => userEvent.fill(page.getByPlaceholder('工作区名称'), '跨仓库发布'));
     const create = host.querySelector<HTMLButtonElement>(
@@ -278,7 +284,7 @@ describe('Main Agent workspace context menu', () => {
     await act(async () => root.render(<CrossProjectMainAgents />));
     const filter = host.querySelector<HTMLElement>('[data-testid="main-workspace-filter"]');
     await act(async () => filter?.click());
-    const trashOption = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+    const trashOption = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
       (option) => option.textContent?.trim() === '废纸篓'
     );
     expect(trashOption).toBeDefined();
@@ -301,6 +307,25 @@ describe('Main Agent workspace context menu', () => {
       );
       expect(labels).toEqual(['恢复', '永久删除…']);
     });
+  });
+
+  it('keeps workspace ordering stable with an ID tie-breaker', () => {
+    const records = [
+      workspace({ id: 'cross:b', createdAt: 10, updatedAt: 20, name: '乙' }),
+      workspace({ id: 'cross:a', createdAt: 10, updatedAt: 20, name: '甲' }),
+      workspace({ id: 'cross:c', createdAt: 5, updatedAt: 30, name: '丙' }),
+    ];
+    expect(sortWorkspaces(records, 'created-at').map((record) => record.id)).toEqual([
+      'cross:a',
+      'cross:b',
+      'cross:c',
+    ]);
+    expect(sortWorkspaces(records, 'updated-at').map((record) => record.id)).toEqual([
+      'cross:c',
+      'cross:a',
+      'cross:b',
+    ]);
+    expect(records.map((record) => record.id)).toEqual(['cross:b', 'cross:a', 'cross:c']);
   });
 
   it('passes the explicit cascade choice to permanent deletion', async () => {

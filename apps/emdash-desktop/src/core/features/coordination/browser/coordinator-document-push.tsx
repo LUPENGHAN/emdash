@@ -85,7 +85,7 @@ export function CoordinatorDocumentPush({
   return (
     <div className="space-y-2 border-t border-border pt-2" data-testid="coordinator-document-push">
       <p className="text-xs text-foreground-muted">
-        {saved ? `文档远端：${saved.remote} · ${saved.destination}` : '管理文档仅保存在本地。'}
+        {saved ? `文档远端：${saved.remote} · ${saved.destination}` : '工作区文档仅保存在本地。'}
       </p>
       <details>
         <summary className="cursor-pointer text-xs">配置文档远端</summary>

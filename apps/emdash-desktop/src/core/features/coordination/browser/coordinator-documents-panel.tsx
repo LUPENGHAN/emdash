@@ -187,7 +187,7 @@ const CoordinatorDocumentEditor = observer(function CoordinatorDocumentEditor({
       <div className="space-y-2 p-4" data-testid="coordinator-documents-no-git">
         <p>该目录项目没有 Git 仓库。</p>
         <p className="text-sm text-foreground-muted">
-          仍可使用主任务工作区对话；管理分支、文档推送和代码基线同步不适用于该目录。
+          仍可使用主任务工作区对话；文档分支、文档推送和代码基线同步不适用于该目录。
         </p>
         <DocumentStorageSetup record={record} />
       </div>
@@ -201,12 +201,12 @@ const CoordinatorDocumentEditor = observer(function CoordinatorDocumentEditor({
         </Button>
       </div>
     );
-  if (!workspace.data) return <p className="p-4">正在加载管理文档…</p>;
+  if (!workspace.data) return <p className="p-4">正在加载工作区文档…</p>;
   const hasFile = !!composition.paneLayout.focusedPane.activeResourceOfKind('file');
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="coordinator-documents-panel">
       <div className="shrink-0 space-y-2 border-b border-border p-3">
-        <p className="text-xs text-foreground-muted">管理文档 · {workspace.data.branch}</p>
+        <p className="text-xs text-foreground-muted">工作区文档</p>
         <form
           className="flex items-center gap-2"
           onSubmit={(event) => {

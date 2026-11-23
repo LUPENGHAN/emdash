@@ -600,7 +600,7 @@ export class PullRequestService {
       return err({
         type: 'management_branch',
         branch: headRefName,
-        message: 'Management documents cannot be used as a code pull request source.',
+        message: 'Workspace documents cannot be used as a code pull request source.',
       });
     const repositoryUrl = normalizeRepositoryUrl(input.repositoryUrl);
     if (!repositoryUrl) return err({ type: 'invalid_repository', input: input.repositoryUrl });
@@ -651,7 +651,7 @@ export class PullRequestService {
       return err({
         type: 'management_branch',
         branch: source,
-        message: 'Management documents cannot be used as a code pull request source.',
+        message: 'Workspace documents cannot be used as a code pull request source.',
       });
     const repositoryUrl = normalizeRepositoryUrl(input.repositoryUrl);
     if (!repositoryUrl) {

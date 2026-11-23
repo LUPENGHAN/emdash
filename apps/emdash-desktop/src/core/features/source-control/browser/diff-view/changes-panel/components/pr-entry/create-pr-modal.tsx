@@ -155,7 +155,7 @@ export const CreatePrModal = observer(function CreatePrModal({
 
   const doCreate = async (push: boolean) => {
     if (managementBranch) {
-      setError('Management documents cannot be used as a code pull request source.');
+      setError('Workspace documents cannot be used as a code pull request source.');
       return;
     }
     if (identityBlocked || accountSaveInFlight.current || isCreating) return;
@@ -225,7 +225,7 @@ export const CreatePrModal = observer(function CreatePrModal({
       </Dialog.Header>
       <Dialog.Body className="space-y-4">
         {managementBranch && (
-          <p role="alert">Management documents cannot be used as a code pull request source.</p>
+          <p role="alert">Workspace documents cannot be used as a code pull request source.</p>
         )}
         {!hasProviderRemote && (
           <p className="text-muted-foreground text-sm">

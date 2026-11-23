@@ -70,7 +70,7 @@ it('keeps supplier/model bindings private across catalog changes and routes real
     dataDir: directory,
     routes,
     ledger: store(),
-    getModels: async () => ({ version: 1, models: [] }),
+    getModels: async () => ({ version: 2, models: [], ignoredSourceIds: [] }),
     saveModels: async () => {},
     inventory: async () =>
       providers.map((provider) => ({ provider, apiKey: `fake-${provider.id}` })),

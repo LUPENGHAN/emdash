@@ -7,7 +7,7 @@ export function createModelGatewayWireController(service: ModelGatewayService): 
     status: () => service.status(),
     migrationPreview: () => service.migrationPreview(),
     testModel: ({ alias, agent }) => service.testModel(alias, agent),
-    saveModels: ({ models }) => service.saveModels(models),
+    saveModels: ({ models, ignoredSourceIds }) => service.saveModels(models, ignoredSourceIds),
     start: () => service.start(),
     stop: () => service.stop(),
     usage: ({ limit }) => service.usage(limit),

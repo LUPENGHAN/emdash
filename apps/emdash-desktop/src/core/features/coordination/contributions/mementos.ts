@@ -17,6 +17,6 @@ export const coordinatorViewMemento = defineMemento({
   id: 'coordination.view',
   subject: taskSubject,
   schema: coordinatorViewSchema,
-  default: { version: '1' as const, tab: 'conversation' as const },
+  default: { version: '1' as const, tab: 'tasks' as const },
   retention: { tier: 'transient' },
 });

@@ -1388,6 +1388,24 @@ describe('AcpChatStore prompt submission', () => {
     expect(transcriptTestState.activeTurnSnapshot?.id).toBe('active');
     store.dispose();
   });
+
+  it('loads coordination history passively and starts only after an explicit prompt', async () => {
+    const live = fakeLiveSession(idleState(), historyPage('existing'));
+    vi.spyOn(AcpLiveSession, 'create').mockResolvedValueOnce(live.session);
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1', undefined, () => true);
+    try {
+      store.bootstrap();
+      await vi.waitFor(() => expect(store.historyLoading).toBe(false));
+      expect(live.loadHistory).toHaveBeenCalledOnce();
+      expect(live.startSession).not.toHaveBeenCalled();
+
+      store.submitPrompt('继续处理');
+      await vi.waitFor(() => expect(live.startSession).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(live.session.sendPrompt).toHaveBeenCalledOnce());
+    } finally {
+      store.dispose();
+    }
+  });
 });
 
 class FakeRemote<T> {

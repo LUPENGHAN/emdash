@@ -30,10 +30,10 @@ export function ProviderTransfer({ providers }: { providers: ModelProvider[] }) 
             disabled={providers.length === 0}
             onClick={() => setMode('export')}
           >
-            Export…
+            导出…
           </Button>
           <Button size="sm" variant="secondary" onClick={() => void chooseImportFile()}>
-            Import…
+            导入…
           </Button>
         </div>
       ) : mode === 'export' ? (
@@ -57,9 +57,7 @@ function ExportPanel({ providers, onDone }: { providers: ModelProvider[]; onDone
         await getAgentsClient()
       ).exportModelProviders({ providerIds: selected, includeKeys });
       if (result.path) {
-        toast.success(
-          result.count === 1 ? 'Exported 1 provider' : `Exported ${result.count} providers`
-        );
+        toast.success(result.count === 1 ? '已导出 1 个服务源' : `已导出 ${result.count} 个服务源`);
         onDone();
       }
     } catch (error) {
@@ -71,12 +69,12 @@ function ExportPanel({ providers, onDone }: { providers: ModelProvider[]; onDone
 
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
-      <p className="text-sm font-medium text-foreground">Export providers</p>
+      <p className="text-sm font-medium text-foreground">导出服务源</p>
       <ChoiceList
         items={providers.map((provider) => ({
           id: provider.id,
           name: provider.name,
-          details: [describeProvider(provider), `Models: ${provider.models.length}`],
+          details: [describeProvider(provider), `模型：${provider.models.length}`],
         }))}
         selected={selected}
         onChange={setSelected}
@@ -87,18 +85,18 @@ function ExportPanel({ providers, onDone }: { providers: ModelProvider[]; onDone
           onCheckedChange={(checked) => setIncludeKeys(checked === true)}
         />
         <span>
-          Include API keys
+          包含 API 密钥
           <span className="block text-xs text-foreground-muted">
-            The file holds them in plain text: anyone with it can use them. Keep it private.
+            密钥会以明文写入文件；任何获得文件的人都能使用，请妥善保管。
           </span>
         </span>
       </label>
       <div className="flex gap-2">
         <Button size="sm" disabled={busy || selected.length === 0} onClick={() => void run()}>
-          Export
+          导出
         </Button>
         <Button size="sm" variant="ghost" onClick={onDone}>
-          Cancel
+          取消
         </Button>
       </div>
     </div>
@@ -121,7 +119,7 @@ function ImportPanel({ file, onDone }: { file: ImportFile; onDone: () => void })
       invalidateAppSettingsKey('modelProviders');
       await queryClient.invalidateQueries({ queryKey: ['modelProviderKeyStatus'] });
       toast.success(
-        result.imported === 1 ? 'Imported 1 provider' : `Imported ${result.imported} providers`
+        result.imported === 1 ? '已导入 1 个服务源' : `已导入 ${result.imported} 个服务源`
       );
       onDone();
     } catch (error) {
@@ -133,21 +131,21 @@ function ImportPanel({ file, onDone }: { file: ImportFile; onDone: () => void })
 
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
-      <p className="text-sm font-medium text-foreground">Import providers</p>
+      <p className="text-sm font-medium text-foreground">导入服务源</p>
       <ChoiceList
         items={file.providers.map((provider) => ({
           id: provider.id,
           name: provider.name,
           details: [
             provider.description,
-            `Models: ${provider.models}`,
-            provider.hasKey ? 'Key included' : 'No key',
-            provider.exists ? 'Replaces the existing one' : null,
+            `模型：${provider.models}`,
+            provider.hasKey ? '包含密钥' : '不含密钥',
+            provider.exists ? '将替换现有服务源' : null,
           ],
           warning: provider.previousUrl
             ? includeKeys && provider.hasKey
-              ? `Moves from ${provider.previousUrl}`
-              : `Moves from ${provider.previousUrl}; its saved key is removed`
+              ? `连接地址将从 ${provider.previousUrl} 迁移`
+              : `连接地址将从 ${provider.previousUrl} 迁移；已保存密钥会被移除`
             : null,
         }))}
         selected={selected}
@@ -156,8 +154,8 @@ function ImportPanel({ file, onDone }: { file: ImportFile; onDone: () => void })
       {file.skipped > 0 ? (
         <p className="text-xs text-foreground-muted">
           {file.skipped === 1
-            ? '1 entry could not be read and is left out.'
-            : `${file.skipped} entries could not be read and are left out.`}
+            ? '有 1 条记录无法读取，已跳过。'
+            : `有 ${file.skipped} 条记录无法读取，已跳过。`}
         </p>
       ) : null}
       {anyKey ? (
@@ -166,15 +164,15 @@ function ImportPanel({ file, onDone }: { file: ImportFile; onDone: () => void })
             checked={includeKeys}
             onCheckedChange={(checked) => setIncludeKeys(checked === true)}
           />
-          Import API keys into the keychain
+          将 API 密钥导入系统钥匙串
         </label>
       ) : null}
       <div className="flex gap-2">
         <Button size="sm" disabled={busy || selected.length === 0} onClick={() => void run()}>
-          Import
+          导入
         </Button>
         <Button size="sm" variant="ghost" onClick={onDone}>
-          Cancel
+          取消
         </Button>
       </div>
     </div>
@@ -198,7 +196,7 @@ function ChoiceList({
           checked={allSelected}
           onCheckedChange={(checked) => onChange(checked === true ? items.map((i) => i.id) : [])}
         />
-        Select all
+        全选
       </label>
       <ul className="max-h-72 overflow-y-auto rounded-md border border-border">
         {items.map((item) => (

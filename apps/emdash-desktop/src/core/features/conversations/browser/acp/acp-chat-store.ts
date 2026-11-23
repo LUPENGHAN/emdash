@@ -135,6 +135,7 @@ export class AcpChatStore {
   private _attachmentRecovery: Scope | null = null;
   private _attachedHostGeneration: number | undefined;
   private _bootstrapFailed = false;
+  private _agentStartAuthorized = false;
 
   constructor(
     readonly conversationId: string,
@@ -699,7 +700,10 @@ export class AcpChatStore {
     const providerId = conversation?.providerId;
     let clientSession: AcpLiveSession | null = null;
     try {
-      const deferFirstStart = !mode && !conversation?.sessionId && this.isCoordinationTask();
+      // Viewing history is passive. Coordination conversations always wait for an explicit action;
+      // ordinary conversations with a saved session also must not resume merely because they open.
+      const deferFirstStart =
+        !mode && (this.isCoordinationTask() || Boolean(conversation?.sessionId));
       const attachedSession = await AcpLiveSession.create(this.conversationId);
       clientSession = attachedSession;
       if (this._disposed || this._historyEpoch !== epoch) {
@@ -714,6 +718,7 @@ export class AcpChatStore {
       });
 
       if (!deferFirstStart) {
+        this._agentStartAuthorized = true;
         const started = await attachedSession.startSession(mode);
         if (this._disposed || this._historyEpoch !== epoch || this.session !== attachedSession)
           return;
@@ -798,8 +803,10 @@ export class AcpChatStore {
               });
               await this._runBootstrap();
             } else {
-              const started = await session.startSession();
-              if (!started.success) throw new AcpStartError(started.error);
+              if (this._agentStartAuthorized) {
+                const started = await session.startSession();
+                if (!started.success) throw new AcpStartError(started.error);
+              }
               if (scope.signal.aborted || this.session !== session) return;
               runInAction(() => {
                 this.loadError = null;
@@ -873,6 +880,14 @@ export class AcpChatStore {
     }
 
     try {
+      if (!this._agentStartAuthorized && session.startSession) {
+        const started = await session.startSession();
+        if (!started.success) {
+          this._toastError('Failed to start conversation', started.error);
+          return 'rejected';
+        }
+        this._agentStartAuthorized = true;
+      }
       const result = await session.sendPrompt(
         {
           text,

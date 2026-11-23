@@ -47,7 +47,7 @@ type GitBlocker = Extract<
   { kind: 'blocked' }
 >['reason'];
 const gitBlockerMessages: Record<GitBlocker, string> = {
-  'management-branch': 'Select a code baseline instead of a management branch.',
+  'management-branch': 'Select a code baseline instead of a workspace document branch.',
   'remote-changed':
     'The upstream remote changed during synchronization. Check its settings before retrying.',
   'symbolic-baseline':

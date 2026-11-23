@@ -7,5 +7,5 @@ export const gatewayModelsSettingsContribution = defineSettingsContribution<
 >({
   key: 'gatewayModels',
   schema: gatewayModelsSettingsSchema,
-  defaults: { version: 1, models: [] },
+  defaults: { version: 2, models: [], ignoredSourceIds: [] },
 });

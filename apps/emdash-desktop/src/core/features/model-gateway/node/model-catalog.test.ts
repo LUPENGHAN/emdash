@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ModelProvider } from '@core/features/model-providers/api';
 import {
   gatewayModelsSettingsSchema,
+  migrateGatewayModelsV1,
   upstreamProtocol,
   type GatewayModel,
 } from '../api/model-catalog';
@@ -35,11 +36,124 @@ const model: GatewayModel = {
     'openai-responses': { upstreamModel: 'native-responses' },
   },
 };
+const published = migrateGatewayModelsV1({ version: 1, models: [model] }).models[0]!;
 
 describe('model-first routing', () => {
+  it('migrates every legacy route losslessly without merging models or sources', () => {
+    const legacy = {
+      version: 1 as const,
+      models: [
+        model,
+        {
+          ...model,
+          id: 'm-2',
+          alias: 'public-two',
+          name: 'Public model two',
+          providerId: 'other',
+          enabled: false,
+          revision: 3,
+        },
+      ],
+    };
+    const migrated = gatewayModelsSettingsSchema.parse(legacy);
+
+    expect(migrated).toMatchObject({
+      version: 2,
+      migration: { fromVersion: 1 },
+      ignoredSourceIds: [],
+      legacyModels: legacy.models,
+    });
+    expect(migrated.models).toHaveLength(2);
+    expect(migrated.models[0]).toMatchObject({
+      id: model.id,
+      primaryAlias: model.alias,
+      displayName: model.name,
+      state: 'active',
+      revision: model.revision,
+      sources: [
+        {
+          providerId: model.providerId,
+          protocolModels: model.protocolModels,
+          protocolPolicy: model.protocolPolicy,
+        },
+      ],
+    });
+    expect(migrated.models[1]).toMatchObject({ state: 'disabled', revision: 3 });
+  });
+
+  it('uses the explicitly selected source per inbound protocol and never silently falls back', () => {
+    const anthropicSource = {
+      ...published.sources[0]!,
+      id: 'anthropic-source',
+      providerId: 'anthropic-provider',
+      protocolModels: { anthropic: { upstreamModel: 'claude-physical' } },
+    };
+    const responsesSource = {
+      ...published.sources[0]!,
+      id: 'responses-source',
+      providerId: 'responses-provider',
+      protocolModels: { 'openai-responses': { upstreamModel: 'codex-physical' } },
+    };
+    const multiSource = {
+      ...published,
+      sources: [anthropicSource, responsesSource],
+      activeSourceByProtocol: {
+        anthropic: anthropicSource.id,
+        'openai-responses': responsesSource.id,
+      },
+    };
+    const providers: ModelProvider[] = [
+      {
+        ...provider,
+        id: 'anthropic-provider',
+        protocol: 'anthropic',
+        endpoints: undefined,
+      },
+      {
+        ...provider,
+        id: 'responses-provider',
+        protocol: 'openai-responses',
+        endpoints: undefined,
+      },
+    ];
+
+    expect(snapshotCatalog([multiSource], providers, 'claude').models[0]).toMatchObject({
+      providerId: 'anthropic-provider',
+      sourceId: 'anthropic-source',
+    });
+    expect(snapshotCatalog([multiSource], providers, 'codex').models[0]).toMatchObject({
+      providerId: 'responses-provider',
+      sourceId: 'responses-source',
+    });
+    expect(
+      snapshotCatalog(
+        [
+          {
+            ...multiSource,
+            sources: [anthropicSource, { ...responsesSource, enabled: false }],
+          },
+        ],
+        providers,
+        'codex'
+      ).models
+    ).toEqual([]);
+  });
+
+  it('keeps old public aliases resolvable while new snapshots publish the primary alias', () => {
+    const renamed = {
+      ...published,
+      primaryAlias: 'public-renamed',
+      legacyAliases: ['public'],
+    };
+    const snapshot = snapshotCatalog([renamed], [provider], 'claude', 'public');
+
+    expect(snapshot.models.map((entry) => entry.alias)).toEqual(['public-renamed', 'public']);
+    expect(snapshot.models.every((entry) => entry.id === renamed.id)).toBe(true);
+  });
+
   it('builds private task routes without changing public aliases or inferring unknown mappings', () => {
     const before = structuredClone(model);
-    const snapshot = taskModelCatalog(provider, 'native-claude', 'claude', [model]);
+    const snapshot = taskModelCatalog(provider, 'native-claude', 'claude', [published]);
     expect(snapshot.models[0]).toMatchObject({
       alias: 'task-model',
       providerId: 'p',
@@ -77,7 +191,7 @@ describe('model-first routing', () => {
   });
 
   it('keeps physical models, credentials and connection scopes independent', () => {
-    const snapshot = snapshotCatalog([model], [provider], 'claude');
+    const snapshot = snapshotCatalog([published], [provider], 'claude');
     const runtime = (key: string, source = provider) =>
       runtimeCatalog(snapshot, [source], gatewayProviders([{ provider: source, apiKey: key }]));
     const first = runtime('secret-one');
@@ -94,20 +208,36 @@ describe('model-first routing', () => {
     expect(JSON.stringify(snapshot)).not.toContain('secret');
     expect(
       catalogBindings(
-        snapshotCatalog([{ ...model, name: 'Rename', revision: 2 }], [provider], 'claude')
+        snapshotCatalog(
+          [{ ...published, displayName: 'Rename', revision: 2 }],
+          [provider],
+          'claude'
+        )
       )
     ).toBe(catalogBindings(snapshot));
     expect(
-      catalogBindings(snapshotCatalog([{ ...model, contextWindow: 32000 }], [provider], 'claude'))
+      catalogBindings(
+        snapshotCatalog([{ ...published, contextWindow: 32000 }], [provider], 'claude')
+      )
     ).not.toBe(catalogBindings(snapshot));
   });
 
   it('does not publish a model on provider protocols absent from its configuration', () => {
     const restricted = { ...provider, endpoints: undefined, protocol: 'openai-responses' as const };
-    expect(snapshotCatalog([model], [restricted], 'claude').models).toEqual([]);
+    expect(snapshotCatalog([published], [restricted], 'claude').models).toEqual([]);
     expect(
       snapshotCatalog(
-        [{ ...model, protocolModels: { 'openai-responses': { upstreamModel: 'r' } } }],
+        [
+          {
+            ...published,
+            sources: [
+              {
+                ...published.sources[0]!,
+                protocolModels: { 'openai-responses': { upstreamModel: 'r' } },
+              },
+            ],
+          },
+        ],
         [restricted],
         'codex'
       ).models
@@ -118,9 +248,9 @@ describe('model-first routing', () => {
     const inventory = [provider, { ...provider, id: 'other' }];
     const first = migrationPreview(inventory);
     expect(first).toEqual(migrationPreview(inventory));
-    expect(new Set(first.map((m) => m.alias)).size).toBe(2);
-    expect(first.map((m) => m.providerId)).toEqual(['p', 'other']);
-    expect(gatewayModelsSettingsSchema.safeParse({ version: 1, models: first }).success).toBe(true);
+    expect(new Set(first.map((m) => m.primaryAlias)).size).toBe(2);
+    expect(first.map((m) => m.sources[0]?.providerId)).toEqual(['p', 'other']);
+    expect(gatewayModelsSettingsSchema.safeParse({ version: 2, models: first }).success).toBe(true);
     expect(
       gatewayModelsSettingsSchema.safeParse({
         version: 1,

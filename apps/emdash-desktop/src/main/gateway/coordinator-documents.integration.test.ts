@@ -80,7 +80,7 @@ async function setup() {
     git: client(gitContract, connect(gp.left)),
   };
   const record: Coordinator = {
-    version: '12',
+    version: '13',
     id: 'project:project',
     kind: 'project',
     name: 'Main agent',
@@ -90,6 +90,7 @@ async function setup() {
     conversationId: 'conversation',
     primary: {},
     delegationDefaults: {},
+    autoResumeResults: false,
     tasks: {},
     events: [],
     purpose: '',
@@ -284,7 +285,7 @@ describe('management documents over host Wire runtimes', () => {
       revision: first,
     });
     await expect(service.read(record, 'README.md', code)).rejects.toThrow(
-      'outside this management branch history'
+      'outside this workspace document branch history'
     );
     await expect(service.read(record, 'missing.md', first)).rejects.toThrow('unavailable');
   });

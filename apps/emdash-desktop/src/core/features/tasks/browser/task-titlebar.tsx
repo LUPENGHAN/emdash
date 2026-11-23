@@ -305,6 +305,9 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
             </Popover.Content>
           </Popover.Root>
           {taskPayload.linkedIssue ? <LinkedIssueBadge issue={taskPayload.linkedIssue} /> : null}
+          {isCoordinationTask ? (
+            <span className="ml-1 flex items-center" data-coordinator-view-switcher-slot />
+          ) : null}
           {taskPayload.type === 'task' && (
             <button
               className={cn(

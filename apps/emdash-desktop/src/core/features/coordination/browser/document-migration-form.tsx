@@ -55,7 +55,7 @@ export const DocumentMigrationForm = observer(function DocumentMigrationForm({
   };
   return (
     <div className="space-y-3 p-3" data-testid="document-migration-form">
-      <p>将选中的管理文档迁移到独立 Git 工作树。</p>
+      <p>将选中的工作区文档迁移到独立 Git 工作树。</p>
       <p className="text-xs text-foreground-muted">
         原文件、分支和对话都会保留。仅选择由该主任务工作区管理的方案与决策；产品文档仍跟随代码
         Task。如果存储已断开，请先重新连接再复制。
@@ -124,7 +124,7 @@ export const DocumentMigrationForm = observer(function DocumentMigrationForm({
             </Select.Content>
           </Select.Root>
           <Textarea
-            aria-label="管理文档路径"
+            aria-label="工作区文档路径"
             data-testid="migration-document-paths"
             placeholder={'plans/decision.md\nnotes/acceptance.md'}
             value={paths}

@@ -21,7 +21,7 @@ it('restores coordinator identity, defaults, result snapshots and acknowledgment
       store: new AppDbKeyValueStore<Record<string, Coordinator>>(fixture.db, 'coordinators'),
       getTask: async () => null,
       getConversation: async (id) =>
-        id === 'replacement-main'
+        id === 'replacement-main' || id === record.conversationId
           ? {
               taskId: record.taskId,
               projectId: record.projectId,
@@ -68,6 +68,7 @@ it('restores coordinator identity, defaults, result snapshots and acknowledgment
     ['other']
   );
   await first.markTaskCreated('worker');
+  await first.bindConversation(record.id, record.conversationId, true);
   const receipt = await first.submit({ ...main, taskId: 'worker' }, 'worker', 'submission', {
     summary: 'Implemented',
     commits: ['abc'],
@@ -99,7 +100,7 @@ it('restores coordinator identity, defaults, result snapshots and acknowledgment
   await service().recover();
   expect(deliver).not.toHaveBeenCalled();
   expect((await service().ensureProject('project')).taskId).toBe(main.taskId);
-  await restarted.bindConversation(record.id, 'replacement-main');
+  await restarted.bindConversation(record.id, 'replacement-main', true);
   const switched = await service().getByTask(record.taskId);
   expect(switched?.conversationId).toBe('replacement-main');
   expect(switched?.tasks.worker.result?.summary).toBe('Implemented');

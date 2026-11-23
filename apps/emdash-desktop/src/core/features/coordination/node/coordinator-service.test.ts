@@ -19,12 +19,14 @@ function setup() {
       taskConfig: {
         version: '1',
         name: request.name,
-        initialConversation: {
-          id: ids.conversationId,
-          provider: 'claude',
-          type: 'acp',
-          initialQueue: [{ text: request.prompt! }],
-        },
+        ...(request.prompt && {
+          initialConversation: {
+            id: ids.conversationId,
+            provider: 'claude',
+            type: 'acp' as const,
+            initialQueue: [{ text: request.prompt }],
+          },
+        }),
       },
       workspaceConfig: {
         version: '2',
@@ -123,7 +125,7 @@ const result: TaskResult = {
   unresolved: [],
   prUrls: [],
 };
-async function assigned(test: ReturnType<typeof setup>) {
+async function assigned(test: ReturnType<typeof setup>, autoResumeResults = true) {
   const record = await test.service.ensureProject('project');
   await test.service.registerDelegation(caller(record), {
     id: 'worker-task',
@@ -132,6 +134,14 @@ async function assigned(test: ReturnType<typeof setup>) {
     workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
   });
   await test.service.markTaskCreated('worker-task');
+  if (autoResumeResults) {
+    test.deps.getConversation.mockResolvedValue({
+      taskId: record.taskId,
+      projectId: record.projectId,
+      selection: { agent: 'claude' },
+    });
+    await test.service.bindConversation(record.id, record.conversationId, true);
+  }
   return record;
 }
 
@@ -183,7 +193,14 @@ describe('main agent coordination', () => {
     expect(await new CoordinatorService(test.deps).ensureProject('project')).toEqual(first);
   });
 
-  it('opens an explicit coordination runtime once and leaves the first turn to the user', async () => {
+  it('maps legacy default agent names to the workspace product name', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    test.records.set(record.id, { ...record, name: 'Main agent' });
+    expect((await test.service.list())[0]?.name).toBe('主任务工作区');
+  });
+
+  it('opens a passive coordination runtime without creating or starting a conversation', async () => {
     const test = setup();
     const first = await test.service.openProject('project');
     await new CoordinatorService(test.deps).openProject('project');
@@ -193,9 +210,11 @@ describe('main agent coordination', () => {
       kind: 'management',
       branchName: `emdash/manage/${first.taskId}`,
     });
-    expect(first.params?.taskConfig.initialConversation?.initialQueue).toBeUndefined();
+    expect(first.params?.taskConfig.initialConversation).toBeUndefined();
     expect(test.resources.start).not.toHaveBeenCalled();
-    expect(await test.service.instructionsForTask(first.taskId)).toContain('Main Agent');
+    const instructions = await test.service.instructionsForTask(first.taskId);
+    expect(instructions).toContain('main task workspace');
+    expect(instructions).toContain('There is no privileged conversation or lead role');
   });
 
   it('attaches delegated tasks to one coordinator and exposes worker instructions', async () => {
@@ -223,10 +242,70 @@ describe('main agent coordination', () => {
     expect(latest?.tasks[worker.taskId].state).toBe('review');
     expect(latest?.events).toHaveLength(1);
     expect(test.deps.deliver).toHaveBeenCalledOnce();
+    expect(test.deps.deliver.mock.calls[0][4]).toBe(record.conversationId);
     expect(test.deps.setTaskStatus).not.toHaveBeenCalledWith(worker.taskId, 'done');
     await test.service.acknowledge(caller(record), [first.eventId]);
     await test.service.acknowledge(caller(record), [first.eventId]);
     expect((await test.service.getByTask(record.taskId))?.events[0].state).toBe('acknowledged');
+  });
+
+  it('keeps task results in the workspace by default without waking an agent', async () => {
+    const test = setup();
+    const record = await assigned(test, false);
+    await test.service.submit(caller(record, 'worker-task'), 'worker-task', 'result', result);
+    await test.service.deliverPending(record.id);
+    expect(test.deps.deliver).not.toHaveBeenCalled();
+    const event = (await test.service.getByTask(record.taskId))?.events[0];
+    expect(event?.state).toBe('pending');
+    expect(event).not.toHaveProperty('error');
+    expect((await test.service.getByTask(record.taskId))?.tasks['worker-task'].resultRoute).toEqual(
+      { kind: 'workspace' }
+    );
+    await test.service.review(record.id, 'worker-task', true, '用户验收通过', 1);
+    expect((await test.service.getByTask(record.taskId))?.events[0].state).toBe('acknowledged');
+  });
+
+  it('freezes each delegated task result route to the exact caller conversation', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    const workerCaller = {
+      ...caller(record),
+      conversationId: 'analysis-conversation',
+    };
+    await test.service.registerDelegation(workerCaller, {
+      id: 'routed-task',
+      projectId: 'project',
+      taskConfig: { version: '1', name: 'Routed implementation' },
+      workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+    });
+    expect((await test.service.getByTask(record.taskId))?.tasks['routed-task'].resultRoute).toEqual(
+      {
+        kind: 'conversation',
+        conversationId: 'analysis-conversation',
+        autoContinue: true,
+      }
+    );
+  });
+
+  it('applies workspace-only routing to future tasks without rewriting existing routes', async () => {
+    const test = setup();
+    const record = await test.service.ensureProject('project');
+    await test.service.registerDelegation(caller(record), {
+      id: 'first-task',
+      projectId: 'project',
+      taskConfig: { version: '1', name: 'First' },
+      workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+    });
+    await test.service.updateResultRoutingPolicy(record.id, 'workspace');
+    await test.service.registerDelegation(caller(record), {
+      id: 'second-task',
+      projectId: 'project',
+      taskConfig: { version: '1', name: 'Second' },
+      workspaceConfig: { version: '2', git: { kind: 'none' }, workspace: { kind: 'new-worktree' } },
+    });
+    const saved = await test.service.getByTask(record.taskId);
+    expect(saved?.tasks['first-task'].resultRoute?.kind).toBe('conversation');
+    expect(saved?.tasks['second-task'].resultRoute).toEqual({ kind: 'workspace' });
   });
 
   it('requires explicit review of the latest result and never reopens an accepted result on retry', async () => {
@@ -320,7 +399,7 @@ describe('main agent coordination', () => {
       test.service.submit(worker, worker.taskId, 'one', { ...result, summary: 'Changed' })
     ).rejects.toThrow('different content');
     await expect(test.service.acknowledge(worker, [receipt.eventId])).rejects.toThrow(
-      'conversation in this main agent'
+      'conversation in this main task workspace'
     );
   });
 
@@ -411,7 +490,7 @@ describe('main agent coordination', () => {
       selection: { agent: 'codex' },
     });
     test.deps.deliver.mockClear();
-    const switched = await test.service.bindConversation(record.id, 'replacement-main');
+    const switched = await test.service.bindConversation(record.id, 'replacement-main', true);
     await test.service.deliverPending(record.id);
     expect(switched.id).toBe(record.id);
     expect(switched.taskId).toBe(record.taskId);
@@ -447,7 +526,7 @@ describe('main agent coordination', () => {
       await resume.promise;
       return { taskId: record.taskId, projectId: record.projectId, selection: { agent: 'claude' } };
     });
-    const switching = test.service.bindConversation(record.id, 'replacement-main');
+    const switching = test.service.bindConversation(record.id, 'replacement-main', true);
     await entered.promise;
     const read = deferred<void>();
     vi.spyOn(test.deps.store, 'getAll').mockImplementationOnce(async () => {
@@ -475,16 +554,16 @@ describe('main agent coordination', () => {
   it('rejects missing and foreign main conversations without changing the receiver', async () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
-    await expect(test.service.bindConversation(record.id, 'missing')).rejects.toThrow(
-      'belonging to this main agent'
+    await expect(test.service.bindConversation(record.id, 'missing', true)).rejects.toThrow(
+      'belonging to this main task workspace'
     );
     test.deps.getConversation.mockResolvedValue({
       taskId: 'foreign',
       projectId: record.projectId,
       selection: { agent: 'claude' },
     });
-    await expect(test.service.bindConversation(record.id, 'foreign')).rejects.toThrow(
-      'belonging to this main agent'
+    await expect(test.service.bindConversation(record.id, 'foreign', true)).rejects.toThrow(
+      'belonging to this main task workspace'
     );
     expect((await test.service.getByTask(record.taskId))?.conversationId).toBe(
       record.conversationId
@@ -536,11 +615,11 @@ describe('main agent coordination', () => {
     const test = setup();
     const record = await test.service.ensureProject('project');
     test.records.set(record.id, { ...record, version: '1' } as unknown as Coordinator);
-    expect((await test.service.ensureProject('project')).version).toBe('12');
+    expect((await test.service.ensureProject('project')).version).toBe('13');
     await test.service.update(record.id, {
       projectAccess: { mode: 'selected', projectIds: ['project'] },
     });
-    expect(test.records.get(record.id)?.version).toBe('12');
+    expect(test.records.get(record.id)?.version).toBe('13');
     test.records.set(record.id, { ...record, version: '99' } as unknown as Coordinator);
     await expect(test.service.update(record.id, { projectIds: [] })).rejects.toThrow(
       'future-version'
@@ -571,7 +650,7 @@ describe('main agent coordination', () => {
       (await test.service.list()).filter((record) => record.kind === 'cross-project')
     ).toHaveLength(1);
     await expect(test.service.createCrossProject({ ...input, name: 'Changed' })).rejects.toThrow(
-      'different main agent parameters'
+      'different workspace parameters'
     );
     expect((await new CoordinatorService(test.deps).createCrossProject(input)).id).toBe(one.id);
   });
@@ -1058,6 +1137,12 @@ describe('main agent coordination', () => {
       source.id,
       caller(destination)
     );
+    test.deps.getConversation.mockResolvedValue({
+      taskId: destination.taskId,
+      projectId: destination.projectId,
+      selection: { agent: 'claude' },
+    });
+    await test.service.bindConversation(destination.id, destination.conversationId, true);
     await test.service.deliverPending(destination.id);
     expect((await test.service.getByTask(source.taskId))?.tasks['worker-task']).toBeUndefined();
     expect(switched.tasks['worker-task'].result).toEqual(result);
@@ -1127,7 +1212,7 @@ describe('main agent coordination', () => {
     );
     await expect(
       test.service.takeOverTask(destination.id, 'worker-task', source.id, caller(source))
-    ).rejects.toThrow('conversation in this main agent');
+    ).rejects.toThrow('conversation in this main task workspace');
     await expect(test.service.takeOverTask(destination.id, 'missing', null)).rejects.toThrow(
       'unavailable'
     );
@@ -1308,7 +1393,7 @@ describe('prerequisite result scheduling', () => {
         [],
         ['worker-task']
       )
-    ).rejects.toThrow('responsible main agent');
+    ).rejects.toThrow('responsible main task workspace');
     expect((await test.service.getByTask(main.taskId))?.tasks.missing).toBeUndefined();
   });
   it('does not release a dependent task when the approved prerequisite was deleted', async () => {
@@ -1444,7 +1529,7 @@ it('preserves a legacy main checkout until its separate document migration runs'
   vi.mocked(test.resources.prepare).mockClear();
   vi.mocked(test.resources.create).mockClear();
   const reopened = await new CoordinatorService(test.deps).open(first.id);
-  expect(reopened.version).toBe('12');
+  expect(reopened.version).toBe('13');
   expect(reopened.params?.workspaceConfig.git).toEqual(saved.params.workspaceConfig.git);
   expect(reopened.taskId).toBe(first.taskId);
   expect(reopened.conversationId).toBe(first.conversationId);
@@ -1604,7 +1689,7 @@ describe('management document authorization', () => {
     const input = { path: 'plan.md', content: 'saved' };
     await expect(
       service.writeDocument(main.id, input, caller(main, 'worker-task'))
-    ).rejects.toThrow('conversation in this main agent');
+    ).rejects.toThrow('conversation in this main task workspace');
     await service.writeDocument(main.id, input, {
       ...caller(main),
       conversationId: 'another-main-task-conversation',
@@ -1864,7 +1949,9 @@ it('requires an initialized main workspace for commits without recursively alloc
   });
   const record = await service.ensureProject('project');
   const input = { paths: ['plan.md'], message: 'Save plan', expectedRevision: 'b'.repeat(40) };
-  await expect(service.commitDocuments(record.id, input)).rejects.toThrow('Open the main agent');
+  await expect(service.commitDocuments(record.id, input)).rejects.toThrow(
+    'Open the main task document workspace'
+  );
   expect(resources.prepare).not.toHaveBeenCalled();
   const opened = await service.open(record.id);
   vi.mocked(resources.activate).mockClear();

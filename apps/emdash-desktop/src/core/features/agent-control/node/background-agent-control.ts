@@ -237,7 +237,9 @@ export class BackgroundAgentControl {
     const task = await this.deps.task(taskId);
     if (!task) throw new Error('The target task is unavailable or deleted.');
     if (!(await this.deps.access.mayAccessTask(caller, task, intent)))
-      throw new Error('Task permission denied. The task may belong to another main agent.');
+      throw new Error(
+        'Task permission denied. The task may belong to another main task workspace.'
+      );
     await this.deps.assertProject(task.projectId);
     return task;
   }

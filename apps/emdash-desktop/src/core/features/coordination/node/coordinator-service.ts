@@ -39,6 +39,7 @@ import {
   type TaskResult,
   type ResolvedAgentSelection,
   type ProjectAccess,
+  type ResultRoutingPolicy,
   type TakeoverPreview,
   type DocumentStorage,
   type CoordinatorDeleteTaskPreview,
@@ -103,19 +104,22 @@ type Dependencies = {
     coordinator: Coordinator,
     eventId: string,
     text: string,
-    hiddenContext?: string
+    hiddenContext?: string,
+    conversationId?: string,
+    taskId?: string,
+    projectId?: string
   ): Promise<void>;
   emit(event: CoordinationEvent): void;
   onSchedulingChange?(): void;
   reportError?(error: unknown, id: string): void;
 };
 
-const instruction = `You are working in an app-level Emdash Main Agent workspace. Every conversation in this main-agent task has the same coordination permissions; the configured notification conversation only receives automatic result wake-ups.
+const instruction = `You are working in an app-level Emdash main task workspace. Every conversation in this workspace has the same coordination permissions. There is no privileged conversation or lead role. A delegated task returns to the conversation that delegated it according to the route frozen on that task; manual tasks and unavailable origins fall back to the workspace inbox.
 Keep workspace work items separate from Project requirements: work items describe this workspace's outcomes and analysis, while requirements remain the Project backlog authority.
 Before planning or updating a cross-project solution, call get_main_agent_context to read linked-project requirements, project decisions and global memory together.
 Coordinate existing Emdash tasks through MCP.
 Delegate implementation into task worktrees; keep code changes on their own branches.
-Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort. Use depends_on for tasks that must wait for approved prerequisite results. Attach only relevant management documents with document_refs; their versions and content are frozen for that task.
+Specify a stable request_id when creating a task and reuse it for retries. You may select agent, supplier_id, model and effort. Use depends_on for tasks that must wait for approved prerequisite results. Attach only relevant workspace documents with document_refs; their versions and content are frozen for that task.
 If a saved task fails to start, inspect get_task_status and use retry_task with its task ID after fixing the failure. This also works after a receiver switch or explicit task takeover; do not create a replacement task to recover startup.
 Use create_pull_request with the assigned task ID and a stable request_id to push its code branch and open a PR. Specify the push remote and target repository/branch when project defaults are insufficient. Inspect get_task_status.pullRequests and use retry_pull_request to resume a saved request without changing its frozen source or target.
 Workers must call submit_task_result with commits, checks and unresolved issues. Inspect their changes and evidence before reviewing a result.
@@ -154,7 +158,7 @@ export class CoordinatorService {
       const saved = await this.deps.store.getOrThrow(id);
       if (saved) return this.parseRecord(saved);
       const record: Coordinator = {
-        version: '12',
+        version: '13',
         id,
         kind: 'project',
         name: '主任务',
@@ -164,6 +168,8 @@ export class CoordinatorService {
         conversationId: randomUUID(),
         primary: { agent: await this.deps.defaultAgent() },
         delegationDefaults: {},
+        autoResumeResults: false,
+        resultRoutingPolicy: 'origin-auto',
         tasks: {},
         events: [],
         purpose: '',
@@ -192,9 +198,9 @@ export class CoordinatorService {
   }): Promise<Coordinator> {
     const id = `cross:${input.id}`;
     const name = input.name.trim();
-    if (!name) throw new Error('Name the cross-project main agent.');
+    if (!name) throw new Error('Name the cross-project main task workspace.');
     const projectId = input.projectId ?? (await this.deps.ensureMainAgentHostProject?.());
-    if (!projectId) throw new Error('The main-agent management repository is unavailable.');
+    if (!projectId) throw new Error('The main task workspace repository is unavailable.');
     const projectIds = [...new Set(input.projectIds)].sort();
     const primary = agentSelectionSchema.parse(input.primary ?? {});
     const delegationDefaults = agentSelectionSchema.parse(input.delegationDefaults ?? {});
@@ -216,7 +222,7 @@ export class CoordinatorService {
       if (saved) {
         const record = this.parseRecord(saved);
         if (record.creationFingerprint !== fingerprint)
-          throw new Error('This creation request has different main agent parameters.');
+          throw new Error('This creation request has different workspace parameters.');
         return record;
       }
       await this.deps.assertProjectAvailable(projectId);
@@ -226,7 +232,7 @@ export class CoordinatorService {
         if (resolved.errors.length) throw new Error(resolved.errors.join(' '));
       }
       const record: Coordinator = {
-        version: '12',
+        version: '13',
         id,
         name,
         kind: 'cross-project',
@@ -236,6 +242,8 @@ export class CoordinatorService {
         conversationId: randomUUID(),
         primary: { agent: await this.deps.defaultAgent(), ...primary },
         delegationDefaults,
+        autoResumeResults: false,
+        resultRoutingPolicy: 'origin-auto',
         tasks: {},
         events: [],
         creationFingerprint: fingerprint,
@@ -256,7 +264,7 @@ export class CoordinatorService {
   async migrateToStandalone(id: string, requestId: string): Promise<Coordinator> {
     const destinationId = `cross:${requestId}`;
     const hostProjectId = await this.deps.ensureMainAgentHostProject?.();
-    if (!hostProjectId) throw new Error('The main-agent management repository is unavailable.');
+    if (!hostProjectId) throw new Error('The main task workspace repository is unavailable.');
     return this.underLocks(this.locks, [id, destinationId], async () => {
       const source = await this.get(id);
       if (source.projectId === hostProjectId) return source;
@@ -450,13 +458,13 @@ export class CoordinatorService {
   }
   async delegationStatus(id: string, taskId: string) {
     const record = await this.get(id);
-    if (!record.tasks[taskId]) throw new Error('This main agent does not own the task.');
+    if (!record.tasks[taskId]) throw new Error('This main task workspace does not own the task.');
     return (await this.deps.delegations?.status(taskId)) ?? null;
   }
   async retryTask(id: string, taskId: string): Promise<void> {
     const record = await this.get(id);
     const assignment = record.tasks[taskId];
-    if (!assignment) throw new Error('This main agent does not own the task.');
+    if (!assignment) throw new Error('This main task workspace does not own the task.');
     if (assignment.state === 'cancelled') throw new Error('The task was cancelled.');
     if (!this.deps.delegations) throw new Error('Task delegation is unavailable.');
     const conversation = await this.deps.getConversation(record.conversationId);
@@ -483,27 +491,35 @@ export class CoordinatorService {
     const main = records.find((record) => record.taskId === taskId);
     if (main)
       return `${instruction}
-Management document push target: ${JSON.stringify(main.documentPushTarget ?? null)}.
-Management document storage: ${JSON.stringify(main.documentStorage ? { projectId: main.documentStorage.projectId, taskId: main.documentStorage.taskId, state: main.documentStorage.state } : null)}. Use read_management_document and write_management_document to access the configured storage; it may be outside your conversation's working directory. Updating a file requires the returned disk version as expected_revision. Creating or editing a document does not commit or push it.
-Keep management documents local until a personal fork is explicitly configured. A saved target does not trigger a push. When a push is requested, check get_task_status for this main task to obtain its current documentPushTarget; never substitute a default code remote or push code baseline refs.`;
+Workspace document push target: ${JSON.stringify(main.documentPushTarget ?? null)}.
+Workspace document storage: ${JSON.stringify(main.documentStorage ? { projectId: main.documentStorage.projectId, taskId: main.documentStorage.taskId, state: main.documentStorage.state } : null)}. Use read_management_document and write_management_document to access the configured storage; it may be outside your conversation's working directory. Updating a file requires the returned disk version as expected_revision. Creating or editing a document does not commit or push it.
+Keep workspace documents local until a personal fork is explicitly configured. A saved target does not trigger a push. When a push is requested, check get_task_status for this main task to obtain its current documentPushTarget; never substitute a default code remote or push code baseline refs.`;
     const assignment = records.find((record) => record.tasks[taskId])?.tasks[taskId];
     if (assignment)
       return `You are executing delegated Emdash task ${taskId}.
 Keep code on this task's branch. Before finishing, call submit_task_result with this task ID,
 a stable request_id, a summary, commit references, checks actually run and unresolved issues.
-Do not mark the task complete yourself. The responsible main agent reviews your result.
+Do not mark the task complete yourself. A member of the responsible main task workspace reviews your result.
 Approved prerequisite versions: ${JSON.stringify(assignment.dependencyResults ?? [])}. These references do not install changes into this repository; consume the specified commits or versions explicitly.
-Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use these saved versions as task context. They grant access only to these snapshots, not to the rest of the source management workspace. Read a snapshot through read_management_document with its coordinatorId, path and revision.`;
+Frozen workspace documents: ${JSON.stringify(assignment.documents ?? [])}. Use these saved versions as task context. They grant access only to these snapshots, not to the rest of the source workspace document storage. Read a snapshot through read_management_document with its coordinatorId, path and revision.`;
     return undefined;
   }
   private parseRecord(value: unknown): Coordinator {
     const parsed = coordinatorRecord.safeParse(value);
     if (parsed.status !== 'ok') throw new Error(`Cannot read coordinator record: ${parsed.status}`);
-    return coordinatorRecord.schema.parse(parsed.data);
+    const record = coordinatorRecord.schema.parse(parsed.data);
+    if (
+      record.name === 'Main agent' ||
+      record.name === 'Main Agent' ||
+      record.name === '主 Agent'
+    ) {
+      record.name = '主任务工作区';
+    }
+    return record;
   }
   private async get(id: string): Promise<Coordinator> {
     const record = await this.deps.store.getOrThrow(id);
-    if (!record) throw new Error('The main agent no longer exists.');
+    if (!record) throw new Error('The main task workspace no longer exists.');
     return this.parseRecord(record);
   }
   private async save(record: Coordinator): Promise<void> {
@@ -529,7 +545,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       const state = await runtime.findTask(record.taskId, record.projectId);
       if (state === 'deleted')
         throw new Error(
-          'The main agent runtime was removed. Restore its project before opening it.'
+          'The main task workspace runtime was removed. Restore its project before opening it.'
         );
       if (!record.params) {
         const params = await runtime.prepare(
@@ -545,33 +561,26 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
             kind: 'create_task',
             projectId: record.projectId,
             name: record.name,
-            prompt: instruction,
-            providerId: record.primary.agent,
-            connection: record.primary.connection,
-            supplierId: record.primary.supplierId,
-            model: record.primary.model,
-            effort: record.primary.effort,
-            ui: 'chat',
           },
           { taskId: record.taskId, conversationId: record.conversationId, role: 'coordination' }
         );
         params.taskConfig.role = 'coordination';
         if (params.workspaceConfig.git.kind === 'none') {
           if (params.workspaceConfig.workspace.kind !== 'repository-instance')
-            throw new Error('A directory main agent needs its project workspace.');
+            throw new Error('A directory-backed main task workspace needs its project workspace.');
         } else {
           if (params.workspaceConfig.workspace.kind !== 'new-worktree')
-            throw new Error('A Git main agent needs an isolated management workspace.');
+            throw new Error(
+              'A Git-backed main task workspace needs an isolated workspace document checkout.'
+            );
           params.workspaceConfig.git = {
             kind: 'management',
             branchName: `emdash/manage/${record.taskId}`,
           };
         }
-        // The first turn is user initiated. Instructions are delivered as hidden context on that turn.
-        if (params.taskConfig.initialConversation) {
-          params.taskConfig.initialConversation.initialQueue = undefined;
-          params.taskConfig.initialConversation.initialPrompt = undefined;
-        }
+        // A workspace exists independently from conversations. The first conversation is created
+        // only when the user explicitly starts one from the workspace UI.
+        params.taskConfig.initialConversation = undefined;
         record = { ...record, params };
         await this.save(record);
       }
@@ -581,7 +590,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     });
   }
   private documentService() {
-    if (!this.deps.documents) throw new Error('Management documents are unavailable.');
+    if (!this.deps.documents) throw new Error('Workspace documents are unavailable.');
     return this.deps.documents;
   }
   private async documentRecord(id: string) {
@@ -707,7 +716,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         !['complete', 'cancelled'].includes(record.documentMigration.phase)
       )
         throw new Error('Finish or cancel the pending document migration first.');
-      if (!record.params) throw new Error('The main agent workspace is unavailable.');
+      if (!record.params) throw new Error('The main task workspace is unavailable.');
       const source = record.documentStorage ?? {
         projectId: record.projectId,
         taskId: record.taskId,
@@ -725,7 +734,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         files.reduce((bytes, file) => bytes + Buffer.byteLength(file.content, 'utf8'), 0) >
         16 * 1024 * 1024
       )
-        throw new Error('Choose management documents totaling no more than 16 MiB per migration.');
+        throw new Error('Choose workspace documents totaling no more than 16 MiB per migration.');
       const target = await this.prepareDocumentTarget(record, selected.projectId);
       record.documentMigration = {
         id: selected.requestId,
@@ -856,9 +865,11 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       const record = await this.get(id);
       await this.assertDocumentAvailable(record);
       if (caller && caller.taskId !== record.taskId)
-        throw new Error('Only a conversation in this main agent can write management documents.');
+        throw new Error(
+          'Only a conversation in this main task workspace can write workspace documents.'
+        );
       const documents = this.documentService();
-      if (!documents.write) throw new Error('Management document writes are unavailable.');
+      if (!documents.write) throw new Error('Workspace document writes are unavailable.');
       const result = await documents.write(record, input);
       this.deps.emit({
         coordinatorId: record.id,
@@ -871,7 +882,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   async documentPushOptions(id: string) {
     const documents = this.documentService();
     if (!documents.pushTargets)
-      throw new Error('Management document push configuration is unavailable.');
+      throw new Error('Workspace document push configuration is unavailable.');
     return documents.pushTargets(await this.documentRecord(id));
   }
   async configureDocumentPush(id: string, remote: string | null, expectedFingerprint?: string) {
@@ -883,7 +894,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         await this.assertDocumentAvailable(record);
         const documents = this.documentService();
         if (!documents.pushTarget)
-          throw new Error('Management document push configuration is unavailable.');
+          throw new Error('Workspace document push configuration is unavailable.');
         const target = await documents.pushTarget(record, remote);
         if (target.fingerprint !== expectedFingerprint)
           throw new Error(
@@ -900,7 +911,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       const record = await this.get(id);
       await this.assertDocumentAvailable(record);
       const documents = this.documentService();
-      if (!documents.preparePush) throw new Error('Management document push is unavailable.');
+      if (!documents.preparePush) throw new Error('Workspace document push is unavailable.');
       if (record.documentPushTarget?.fingerprint !== expectedFingerprint)
         throw new Error(
           'The document push target changed. Review the saved remote before pushing.'
@@ -911,11 +922,11 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   async commitDocuments(id: string, input: DocumentCommit) {
     return this.locks.runExclusive(id, async () => {
       const documents = this.documentService();
-      if (!documents.commit) throw new Error('Management document commits are unavailable.');
+      if (!documents.commit) throw new Error('Workspace document commits are unavailable.');
       const record = await this.get(id);
       await this.assertDocumentAvailable(record);
       if (!record.params)
-        throw new Error('Open the main agent document workspace before committing.');
+        throw new Error('Open the main task document workspace before committing.');
       return documents.commit(record, input);
     });
   }
@@ -945,9 +956,9 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         'read'
       ))
     )
-      throw new Error('Management document permission denied.');
+      throw new Error('Workspace document permission denied.');
     await this.deps.assertProjectAvailable(record.projectId);
-    // Reading cannot allocate or start a main agent on behalf of a worker.
+    // Reading cannot allocate or start a main task workspace on behalf of a worker.
     return documents.read(record, path, revision);
   }
   async update(
@@ -964,7 +975,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       const record = await this.get(id);
       if (record.deletedAt) throw new Error('Restore this workspace from Trash before editing it.');
       const name = patch.name?.trim();
-      if (patch.name !== undefined && !name) throw new Error('Name the main agent workspace.');
+      if (patch.name !== undefined && !name) throw new Error('Name the main task workspace.');
       if (patch.projectAccess?.mode === 'selected')
         for (const projectId of patch.projectAccess.projectIds)
           await this.deps.assertProjectAvailable(projectId);
@@ -1268,7 +1279,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
       if (record.lifecycle.kind !== 'ongoing')
-        throw new Error('Only an ongoing main agent can create checkpoints.');
+        throw new Error('Only an ongoing main task workspace can create checkpoints.');
       const existing = record.checkpoints.find((checkpoint) => checkpoint.id === requestId);
       if (existing) {
         if (existing.title !== title.trim())
@@ -1300,7 +1311,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         this.completeFinite(record, note);
       } else if (action === 'pause' || action === 'resume') {
         if (record.lifecycle.kind !== 'ongoing')
-          throw new Error('Only an ongoing main agent can be paused or resumed.');
+          throw new Error('Only an ongoing main task workspace can be paused or resumed.');
         record.lifecycle.state = action === 'pause' ? 'paused' : 'active';
       } else if (action === 'archive') {
         if (record.lifecycle.state !== 'archived')
@@ -1399,7 +1410,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     await this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
       if (!this.deps.taskDeletion || !this.deps.store.delOrThrow)
-        throw new Error('Permanent main agent deletion is unavailable.');
+        throw new Error('Permanent main task workspace deletion is unavailable.');
       if (options.deleteChildren) {
         for (const assignment of Object.values(record.tasks)) {
           const task = await this.deps.getTask(assignment.taskId);
@@ -1442,16 +1453,16 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   }
   private completeFinite(record: Coordinator, note?: string): void {
     if (record.lifecycle.kind !== 'finite')
-      throw new Error('Ongoing main agents use checkpoints instead of completion.');
+      throw new Error('Ongoing main task workspaces use checkpoints instead of completion.');
     if (Object.values(record.tasks).some((task) => !['done', 'cancelled'].includes(task.state)))
-      throw new Error('Finish or cancel active tasks before completing this main agent.');
+      throw new Error('Finish or cancel active tasks before completing this main task workspace.');
     if (
       Object.values(record.workItems).some(
         (item) => !['done', 'deferred', 'cancelled'].includes(item.state)
       )
     )
       throw new Error(
-        'Resolve, defer or cancel open work items before completing this main agent.'
+        'Resolve, defer or cancel open work items before completing this main task workspace.'
       );
     const now = Date.now();
     record.lifecycle.state = 'completed';
@@ -1487,21 +1498,35 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     await this.deps.assertProjectAvailable(record.projectId);
     return this.deps.resolveSelection(selection);
   }
-  async bindConversation(id: string, conversationId: string): Promise<Coordinator> {
+  async bindConversation(
+    id: string,
+    conversationId: string | undefined,
+    autoResume: boolean
+  ): Promise<Coordinator> {
     const record = await this.deliveries.runExclusive(id, () =>
       this.locks.runExclusive(id, async () => {
         const latest = await this.get(id);
         await this.deps.assertProjectAvailable(latest.projectId);
+        if (!autoResume) {
+          latest.autoResumeResults = false;
+          await this.save(latest);
+          return latest;
+        }
+        if (!conversationId)
+          throw new Error('Choose a conversation before enabling automatic continuation.');
         const conversation = await this.deps.getConversation(conversationId);
         if (
           !conversation ||
           conversation.taskId !== latest.taskId ||
           conversation.projectId !== latest.projectId
         )
-          throw new Error('Choose an available conversation belonging to this main agent.');
-        if (latest.conversationId === conversationId) return latest;
+          throw new Error(
+            'Choose an available conversation belonging to this main task workspace.'
+          );
+        if (latest.conversationId === conversationId && latest.autoResumeResults) return latest;
         latest.conversationId = conversationId;
         latest.primary = conversation.selection;
+        latest.autoResumeResults = true;
         for (const event of latest.events)
           if (event.state !== 'acknowledged') {
             event.state = 'pending';
@@ -1514,6 +1539,14 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     void this.deliverPending(id).catch((error) => this.deps.reportError?.(error, id));
     this.deps.onSchedulingChange?.();
     return record;
+  }
+  async updateResultRoutingPolicy(id: string, policy: ResultRoutingPolicy): Promise<Coordinator> {
+    return this.locks.runExclusive(id, async () => {
+      const record = await this.get(id);
+      record.resultRoutingPolicy = policy;
+      await this.save(record);
+      return record;
+    });
   }
   async defaultsForCaller(caller: AgentCaller): Promise<AgentSelection> {
     const record = (await this.list()).find(
@@ -1585,7 +1618,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     const records = await this.accessRecords(caller);
     const principal = coordinatorPrincipal(caller, records);
     if (projectIds.length && principal.kind === 'ordinary')
-      throw new Error('Project grants require a responsible main agent.');
+      throw new Error('Project grants require a responsible main task workspace.');
     for (const projectId of projectIds) {
       if (!mayAccessProject(caller, principal, projectId, 'delegate'))
         throw new Error(`Project permission denied: ${projectId}`);
@@ -1609,13 +1642,15 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       );
       if (!record) {
         if (dependsOn.length || refs.length)
-          throw new Error('Task dependencies and documents require a responsible main agent.');
+          throw new Error(
+            'Task dependencies and documents require a responsible main task workspace.'
+          );
         return;
       }
       const owner = records.find((entry) => entry.tasks[params.id]);
       if (owner && owner.id !== record.id)
         throw new Error(
-          'The task belongs to another main agent. Explicitly take it over before controlling it.'
+          'The task belongs to another main task workspace. Explicitly take it over before controlling it.'
         );
       await this.locks.runExclusive(record.id, async () => {
         const latest = await this.get(record.id);
@@ -1655,7 +1690,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
           documents.reduce((bytes, doc) => bytes + Buffer.byteLength(doc.content, 'utf8'), 0) >
           2 * 1024 * 1024
         )
-          throw new Error('Choose management documents totaling no more than 2 MiB for this task.');
+          throw new Error('Choose workspace documents totaling no more than 2 MiB for this task.');
         latest.tasks[params.id] = {
           taskId: params.id,
           projectId: params.projectId,
@@ -1668,6 +1703,14 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
           ...(dependsOn.length && { blockedReason: 'Waiting for dependency review.' }),
           resultVersion: 0,
           submissions: {},
+          resultRoute:
+            latest.resultRoutingPolicy === 'workspace'
+              ? { kind: 'workspace' }
+              : {
+                  kind: 'conversation',
+                  conversationId: caller.conversationId,
+                  autoContinue: (latest.resultRoutingPolicy ?? 'origin-auto') === 'origin-auto',
+                },
           ...(grantedProjectIds.length && { grantedProjectIds: [...new Set(grantedProjectIds)] }),
         };
         if (optimizationRunId) {
@@ -1756,7 +1799,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
             predecessor &&
             !mayAccessTask(actor, records, { id, projectId: predecessor.projectId }, 'read')
           ) {
-            const reason = `Dependency ${id} is outside the responsible main agent's project scope.`;
+            const reason = `Dependency ${id} is outside the responsible main task workspace's project scope.`;
             task.state = 'blocked';
             task.blockedReason = reason;
             await this.save(latest);
@@ -1801,7 +1844,9 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       this.locks.runExclusive(id, async () => {
         const record = await this.get(id);
         if (caller && caller.taskId !== record.taskId)
-          throw new Error('Only a conversation in this main agent can cancel this planned task.');
+          throw new Error(
+            'Only a conversation in this main task workspace can cancel this planned task.'
+          );
         const task = record.tasks[taskId];
         if (!task || task.taskCreated !== false)
           throw new Error('Choose a waiting task that has not started.');
@@ -1882,14 +1927,18 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
             .filter(Boolean)
             .map((value) => this.parseRecord(value));
           const next = records.find((entry) => entry.id === id);
-          if (!next) throw new Error('The destination main agent is unavailable.');
+          if (!next) throw new Error('The destination main task workspace is unavailable.');
           if (caller && caller.taskId !== next.taskId)
-            throw new Error('Only a conversation in this main agent can take over a task.');
+            throw new Error(
+              'Only a conversation in this main task workspace can take over a task.'
+            );
           const task = await this.codeTask(taskId, records);
           if (!task || task.archivedAt)
             throw new Error('The target task is unavailable or archived.');
           if (task.type !== 'task' || records.some((entry) => entry.taskId === taskId))
-            throw new Error('Main agents and automation runs cannot be taken over as code tasks.');
+            throw new Error(
+              'Main task workspaces and automation runs cannot be taken over as code tasks.'
+            );
           await this.deps.assertProjectAvailable(task.projectId);
           const actor: AgentCaller = caller ?? {
             taskId: next.taskId,
@@ -2010,7 +2059,9 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     const receipt = await this.locks.runExclusive(record.id, async () => {
       const latest = await this.get(record.id);
       if (caller.taskId !== taskId && caller.taskId !== latest.taskId)
-        throw new Error('Only a conversation in this main agent can submit another task result.');
+        throw new Error(
+          'Only a conversation in this main task workspace can submit another task result.'
+        );
       const task = latest.tasks[taskId];
       if (!task) throw new Error('The task owner changed. Retry submitting the result.');
       if (task.taskCreated === false)
@@ -2044,7 +2095,8 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
   }
   async acknowledge(caller: AgentCaller, eventIds: string[]): Promise<void> {
     const record = await this.getByTask(caller.taskId);
-    if (!record) throw new Error('Only a conversation in this main agent can acknowledge results.');
+    if (!record)
+      throw new Error('Only a conversation in this main task workspace can acknowledge results.');
     await this.locks.runExclusive(record.id, async () => {
       const latest = await this.get(record.id);
       if (eventIds.some((id) => !latest.events.some((event) => event.id === id)))
@@ -2065,7 +2117,7 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
     return this.locks.runExclusive(id, async () => {
       const record = await this.get(id);
       if (caller && caller.taskId !== record.taskId)
-        throw new Error('Only a conversation in this main agent can review this task.');
+        throw new Error('Only a conversation in this main task workspace can review this task.');
       const task = record.tasks[taskId];
       if (!task?.result) throw new Error('This task has no submitted result to review.');
       if (task.resultVersion !== resultVersion)
@@ -2075,6 +2127,11 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       if (!task.review) {
         task.state = accepted ? 'done' : 'changes_requested';
         task.review = { note, accepted, at: Date.now() };
+        for (const event of record.events) {
+          if (event.taskId !== taskId || event.version !== resultVersion) continue;
+          event.state = 'acknowledged';
+          event.error = undefined;
+        }
         for (const run of Object.values(record.optimizationRuns)) {
           if (!run.taskIds.includes(taskId)) continue;
           if (accepted) {
@@ -2152,7 +2209,8 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
       this.locks.runExclusive(id, async () => {
         const record = await this.get(id);
         const event = record.events.find((entry) => entry.id === eventId);
-        if (!event) throw new Error('This result event is no longer assigned to this main agent.');
+        if (!event)
+          throw new Error('This result event is no longer assigned to this main task workspace.');
         if (event.state === 'acknowledged') return;
         event.state = 'acknowledged';
         event.error = undefined;
@@ -2167,13 +2225,34 @@ Frozen management documents: ${JSON.stringify(assignment.documents ?? [])}. Use 
         // Acknowledgments can arrive while another event is being delivered.
         const current = (await this.get(id)).events.find((entry) => entry.id === event.id);
         if (current?.state !== 'pending') continue;
+        const assignment = record.tasks[event.taskId];
+        const route = assignment?.resultRoute;
+        if (!route || route.kind === 'workspace' || !route.autoContinue) continue;
+        const origin = await this.deps.getConversation(route.conversationId);
+        const originProjectId = origin
+          ? origin.taskId === record.taskId
+            ? record.projectId
+            : record.tasks[origin.taskId]?.projectId
+          : undefined;
+        if (!origin || !originProjectId || origin.projectId !== originProjectId) {
+          await this.locks.runExclusive(id, async () => {
+            const latest = await this.get(id);
+            const task = latest.tasks[event.taskId];
+            if (task) task.resultRoute = { kind: 'workspace' };
+            await this.save(latest);
+          });
+          continue;
+        }
         const result = event.result;
         try {
           await this.deps.deliver(
             record,
             event.id,
             `Task "${record.tasks[event.taskId]?.name ?? event.taskId}" submitted a result (version ${event.version}): ${result.summary}`,
-            `${instruction}\nResult event ${event.id}, task ${event.taskId}, version ${event.version}:\n${JSON.stringify(result)}`
+            `${instruction}\nResult event ${event.id}, task ${event.taskId}, version ${event.version}:\n${JSON.stringify(result)}`,
+            route.conversationId,
+            origin.taskId,
+            origin.projectId
           );
           await this.locks.runExclusive(id, async () => {
             const latest = await this.get(id);
