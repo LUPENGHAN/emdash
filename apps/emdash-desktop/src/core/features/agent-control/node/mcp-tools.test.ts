@@ -130,6 +130,7 @@ it('carries explicit supplier, model and effort through task and conversation to
     model: 'code-v1',
     connection: 'gateway',
     effort: 'high',
+    permission_mode: 'full',
   });
   expect(registered.dispatch).toHaveBeenLastCalledWith(
     expect.objectContaining({
@@ -138,6 +139,7 @@ it('carries explicit supplier, model and effort through task and conversation to
       model: 'code-v1',
       effort: 'high',
       connection: 'gateway',
+      permissionMode: 'full',
     })
   );
   const conversation = registered.tool('create_conversation')!;
@@ -156,6 +158,24 @@ it('carries explicit supplier, model and effort through task and conversation to
       effort: null,
     })
   );
+});
+
+it('exposes message status and idempotent explicit delivery tools', async () => {
+  const registered = registeredTools();
+  await registered.tool('get_message_status')!.handler({ prompt_id: 'prompt-1' });
+  expect(registered.dispatch).toHaveBeenLastCalledWith({
+    kind: 'get_message_status',
+    promptId: 'prompt-1',
+  });
+  await registered.tool('deliver_message')!.handler({
+    prompt_id: 'prompt-1',
+    request_id: 'delivery-1',
+  });
+  expect(registered.dispatch).toHaveBeenLastCalledWith({
+    kind: 'deliver_message',
+    promptId: 'prompt-1',
+    requestId: 'delivery-1',
+  });
 });
 
 it('does not expose structured chat as a delegated task transport', () => {

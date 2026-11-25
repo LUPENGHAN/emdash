@@ -1031,6 +1031,24 @@ describe('AcpChatStore prompt submission', () => {
     }
   });
 
+  it('resumes a saved provider session when bootstrap was explicitly authorized', async () => {
+    const live = fakeLiveSession(suspendedState(), historyPage('restored'));
+    const create = vi.spyOn(AcpLiveSession, 'create').mockResolvedValueOnce(live.session);
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    try {
+      store.bootstrap('resume');
+      await vi.waitFor(() => expect(store.historyLoading).toBe(false));
+
+      expect(live.startSession).toHaveBeenCalledOnce();
+      expect(live.startSession).toHaveBeenCalledWith('resume');
+      expect(historySeed).toHaveBeenCalledWith([expect.objectContaining({ id: 'restored' })]);
+      expect(store.loadError).toBeNull();
+    } finally {
+      store.dispose();
+      create.mockRestore();
+    }
+  });
+
   it('bounds transient history retries and allows explicit recovery', async () => {
     const live = fakeLiveSession(idleState(), historyPage('retained'), {
       revalidate: vi.fn(async () => {}),

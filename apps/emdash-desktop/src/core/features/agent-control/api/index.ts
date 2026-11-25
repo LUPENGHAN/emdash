@@ -184,6 +184,8 @@ export type AgentControlAction =
       ui?: 'terminal' | 'chat';
     }
   | { kind: 'send_message'; conversationId: string; text: string; requestId?: string }
+  | { kind: 'get_message_status'; promptId: string }
+  | { kind: 'deliver_message'; promptId: string; requestId: string }
   | { kind: 'handoff'; providerId: string; model?: string; note?: string }
   | { kind: 'suggest_task'; title: string; prompt: string }
   | {
@@ -205,6 +207,7 @@ export type AgentControlAction =
       supplierId?: string;
       connection?: 'gateway' | 'official';
       effort?: string | null;
+      permissionMode?: 'ask' | 'full';
       ui?: 'terminal' | 'chat';
     }
   | { kind: 'list_tasks'; includeArchived: boolean; projectId?: string }

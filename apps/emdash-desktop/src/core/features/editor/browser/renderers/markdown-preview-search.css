@@ -1,0 +1,23 @@
+::highlight(emdash-markdown-match) {
+  background-color: #f8dc83;
+  color: #241700;
+  text-decoration: underline;
+}
+
+::highlight(emdash-markdown-active-match) {
+  background-color: #ffad59;
+  color: #241700;
+  text-decoration: underline double;
+}
+
+@media (forced-colors: active) {
+  ::highlight(emdash-markdown-match) {
+    background-color: Mark;
+    color: MarkText;
+  }
+
+  ::highlight(emdash-markdown-active-match) {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+}

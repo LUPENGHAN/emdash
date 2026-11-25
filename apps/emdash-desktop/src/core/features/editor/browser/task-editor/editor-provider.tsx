@@ -29,7 +29,12 @@ interface EditorContextValue {
    * given DOM element. Called by MonacoFileRenderer to position the editor host.
    */
   setEditorHost: (el: HTMLElement | null) => void;
+  /** Inserts text at the current selection in this pane's Monaco editor. */
+  insertText: (text: string, position?: EditorInsertPosition | null) => boolean;
+  getPositionAtClientPoint: (clientX: number, clientY: number) => EditorInsertPosition | null;
 }
+
+export type EditorInsertPosition = Readonly<{ lineNumber: number; column: number }>;
 
 const EditorContext = createContext<EditorContextValue | null>(null);
 
@@ -292,9 +297,42 @@ export const EditorProvider = observer(function EditorProvider({
     }
   }, []);
 
+  const insertText = useCallback(
+    (text: string, position?: EditorInsertPosition | null): boolean => {
+      const editor = editorRef.current;
+      const selection = position
+        ? {
+            startLineNumber: position.lineNumber,
+            startColumn: position.column,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          }
+        : editor?.getSelection();
+      if (!editor || !selection || !editor.getModel()) return false;
+      editor.pushUndoStop();
+      const applied = editor.executeEdits('markdown-image-import', [
+        { range: selection, text, forceMoveMarkers: true },
+      ]);
+      editor.pushUndoStop();
+      editor.focus();
+      return applied;
+    },
+    []
+  );
+
+  const getPositionAtClientPoint = useCallback(
+    (clientX: number, clientY: number): EditorInsertPosition | null => {
+      const position = editorRef.current?.getTargetAtClientPoint(clientX, clientY)?.position;
+      return position ? { lineNumber: position.lineNumber, column: position.column } : null;
+    },
+    []
+  );
+
   return (
     <ViewScopeInstanceProvider instance={editorScopeInstance}>
-      <EditorContext.Provider value={{ setEditorHost }}>{children}</EditorContext.Provider>
+      <EditorContext.Provider value={{ setEditorHost, insertText, getPositionAtClientPoint }}>
+        {children}
+      </EditorContext.Provider>
     </ViewScopeInstanceProvider>
   );
 });

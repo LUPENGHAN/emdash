@@ -109,6 +109,7 @@ function ProseFragment(props: {
 
     const handleClick = (e: MouseEvent) => {
       const result = classification();
+      if (result?.kind === 'blocked') e.preventDefault();
       if (result?.kind === 'workspace-file') {
         e.preventDefault();
         commands().onOpenFile?.({
@@ -126,10 +127,13 @@ function ProseFragment(props: {
       <a
         class={cls}
         style={{ left: `${props.frag.x}px` }}
-        href={href}
+        href={classification()?.kind === 'blocked' ? undefined : href}
         target="_blank"
         rel="noopener noreferrer"
         onClick={handleClick}
+        onAuxClick={(event) => {
+          if (event.button === 1) handleClick(event);
+        }}
       >
         {props.frag.text}
       </a>

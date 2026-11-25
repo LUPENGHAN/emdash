@@ -156,6 +156,14 @@ export const plugin = definePlugin(
 );
 
 const NO_DAEMON_FLAG = '--no-daemon';
+const EMDASH_FILE_LINK_INSTRUCTIONS =
+  'When referencing a local file in a response, render a short descriptive Markdown label whose destination is https://open-file.emdash.invalid/open?path=<percent-encoded-absolute-path-with-optional-line-suffix>. Do not show the full path as visible text and do not put the path beside the label. This Emdash-only URL opens the file inside Emdash; use ordinary URLs for web links.';
+const EMDASH_TUI_ARGS = [
+  '-c',
+  'features.tui_workspace=false',
+  '-c',
+  `developer_instructions=${JSON.stringify(EMDASH_FILE_LINK_INSTRUCTIONS)}`,
+];
 
 export const provider = registerPluginBehavior(plugin, {
   usageLimits: { probe: probeCodexUsage },
@@ -192,11 +200,11 @@ export const provider = registerPluginBehavior(plugin, {
     // provider, the chat UI) is refused as "open in another app". Emdash owns the
     // agent's lifetime, so the session stays in the process it starts.
     probeFlags: [NO_DAEMON_FLAG],
-    buildCommand: (ctx) =>
-      buildStandardCommand(
-        ctx.supportedFlags?.includes(NO_DAEMON_FLAG)
-          ? { ...ctx, extraArgs: [...(ctx.extraArgs ?? []), NO_DAEMON_FLAG] }
-          : ctx,
+    buildCommand: (ctx) => {
+      const extraArgs = [...(ctx.extraArgs ?? []), ...EMDASH_TUI_ARGS];
+      if (ctx.supportedFlags?.includes(NO_DAEMON_FLAG)) extraArgs.push(NO_DAEMON_FLAG);
+      return buildStandardCommand(
+        { ...ctx, extraArgs },
         {
           autoApproveFlag:
             '-c approval_policy=never -c sandbox_mode=danger-full-access --dangerously-bypass-hook-trust',
@@ -208,7 +216,8 @@ export const provider = registerPluginBehavior(plugin, {
           deduplicateFlags: ['--dangerously-bypass-approvals-and-sandbox', NO_DAEMON_FLAG],
           modelFlag: '-m',
         }
-      ),
+      );
+    },
   },
   hooks: buildCodexHookConfig(),
   mcp: codexMcpAdapter(),

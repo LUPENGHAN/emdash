@@ -26,6 +26,10 @@ describe('codex provider', () => {
         '-c',
         'sandbox_mode=danger-full-access',
         '--dangerously-bypass-hook-trust',
+        '-c',
+        'features.tui_workspace=false',
+        '-c',
+        expect.stringContaining('developer_instructions='),
       ],
       env: {},
     });
@@ -45,12 +49,23 @@ describe('codex provider', () => {
       'thread-1',
       '-c',
       'model_provider=x',
+      '-c',
+      'features.tui_workspace=false',
+      '-c',
+      expect.stringContaining('developer_instructions='),
       '--no-daemon',
     ]);
     expect(
       provider.behavior.prompt!.buildCommand({ ...baseContext, ...noDaemon, initialPrompt: 'go' })
         .args
-    ).toEqual(['--no-daemon', 'go']);
+    ).toEqual([
+      '-c',
+      'features.tui_workspace=false',
+      '-c',
+      expect.stringContaining('developer_instructions='),
+      '--no-daemon',
+      'go',
+    ]);
     // An older Codex rejects the flag, so it is only passed when the CLI lists it.
     expect(provider.behavior.prompt!.buildCommand(resume).args).not.toContain('--no-daemon');
   });

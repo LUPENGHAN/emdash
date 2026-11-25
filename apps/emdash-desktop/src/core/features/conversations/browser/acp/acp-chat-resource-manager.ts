@@ -1,3 +1,4 @@
+import type { AcpSessionStartMode } from '@emdash/core/runtimes/acp/api/client';
 import { getProjectHostAccess } from '@core/features/projects/api/browser/stores/project-selectors';
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { AcpChatStore } from './acp-chat-store';
@@ -19,6 +20,7 @@ type Entry = {
  */
 export class AcpChatResourceManager {
   private readonly _entries = new Map<string, Entry>();
+  private readonly _authorizedStarts = new Map<string, AcpSessionStartMode>();
 
   constructor(
     private readonly projectId: string,
@@ -51,6 +53,18 @@ export class AcpChatResourceManager {
     return this._entries.get(conversationId)?.store;
   }
 
+  /** Authorize one agent activation initiated by an explicit user action such as UI switching. */
+  authorizeStart(conversationId: string, mode: AcpSessionStartMode): void {
+    this._authorizedStarts.set(conversationId, mode);
+  }
+
+  /** Consume the one-shot activation so restored tabs never start agents merely by opening. */
+  consumeAuthorizedStart(conversationId: string): AcpSessionStartMode | undefined {
+    const mode = this._authorizedStarts.get(conversationId);
+    this._authorizedStarts.delete(conversationId);
+    return mode;
+  }
+
   release(conversationId: string): void {
     const entry = this._entries.get(conversationId);
     if (!entry) return;
@@ -72,6 +86,7 @@ export class AcpChatResourceManager {
       entry.store.dispose();
     }
     this._entries.clear();
+    this._authorizedStarts.clear();
   }
 }
 

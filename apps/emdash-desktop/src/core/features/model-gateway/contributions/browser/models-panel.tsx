@@ -373,7 +373,7 @@ export function GatewayModelsPanel() {
                   const confirmed = await openModal('confirmActionModal', {
                     title: `永久删除“${editing.displayName}”？`,
                     description:
-                      '当前模型会从目录移除；历史会话快照和用量记录仍保留。如果还有会话引用，系统会拒绝删除并提示先归档。',
+                      '当前模型会立即从可选目录移除；历史会话的路由快照和用量记录仍保留，但不能再用这个模型启动或重启。',
                     confirmLabel: '永久删除',
                   });
                   if (!confirmed.success) return;
@@ -381,7 +381,17 @@ export function GatewayModelsPanel() {
                     ...value,
                     models: value.models.filter((model) => model.id !== editing.id),
                   };
-                  await save(next);
+                  const persisted = settings.value?.models.some((model) => model.id === editing.id);
+                  if (persisted) {
+                    await (await getModelGatewayClient()).deleteModel({ modelId: editing.id });
+                    await queryClient.invalidateQueries({
+                      queryKey: ['appSettings', 'gatewayModels'],
+                    });
+                    await queryClient.invalidateQueries({ queryKey: ['modelGateway'] });
+                    setDraft(draft ? next : undefined);
+                  } else {
+                    setDraft(next);
+                  }
                   setSelected(undefined);
                 })
               }

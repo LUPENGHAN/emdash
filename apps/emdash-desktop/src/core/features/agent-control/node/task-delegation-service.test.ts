@@ -107,7 +107,7 @@ describe('durable task delegation', () => {
     expect(t.deps.create).toHaveBeenCalledOnce();
     expect(t.deps.start).toHaveBeenCalledOnce();
     const future = structuredClone(saved);
-    Reflect.set(future.params.selectionSnapshot!, 'version', '2');
+    Reflect.set(future.params.selectionSnapshot!, 'version', '99');
     t.records.set(key, future);
     await expect(t.service.status(result.task_id)).rejects.toThrow('Cannot read delegation record');
   });

@@ -173,6 +173,34 @@ describe('file link provider', () => {
     expect(decorations).toEqual({ pointerCursor: false, underline: false });
   });
 
+  it('shows file paths as links while a TUI owns mouse input', () => {
+    const buffer = makeBuffer([new MockBufferLine('open src/app.ts')]);
+    const provider = new FileLinkProvider(
+      { buffer: { active: buffer }, modes: { mouseTrackingMode: 'vt200' } } as never,
+      vi.fn(),
+      vi.fn(),
+      new ActivationModifierTracker(true)
+    );
+
+    provider.provideLinks(1, (links) => {
+      expect(links?.[0]?.decorations).toEqual({ pointerCursor: true, underline: true });
+    });
+  });
+
+  it('keeps shell file paths visually dormant until the activation modifier is pressed', () => {
+    const buffer = makeBuffer([new MockBufferLine('open src/app.ts')]);
+    const provider = new FileLinkProvider(
+      { buffer: { active: buffer }, modes: { mouseTrackingMode: 'none' } } as never,
+      vi.fn(),
+      vi.fn(),
+      new ActivationModifierTracker(true)
+    );
+
+    provider.provideLinks(1, (links) => {
+      expect(links?.[0]?.decorations).toEqual({ pointerCursor: false, underline: false });
+    });
+  });
+
   it('only opens links when the activation modifier is pressed', () => {
     const openedFiles: string[] = [];
     const openedExternal: string[] = [];
@@ -217,8 +245,8 @@ describe('file link provider', () => {
       externalLink.text
     );
 
-    expect(openedFiles).toEqual(['src/app.ts']);
-    expect(openedExternal).toEqual(['/tmp/report.md']);
+    expect(openedFiles).toEqual(['src/app.ts', '/tmp/report.md']);
+    expect(openedExternal).toEqual([]);
   });
 
   it('opens absolute image paths in the task instead of the OS', () => {

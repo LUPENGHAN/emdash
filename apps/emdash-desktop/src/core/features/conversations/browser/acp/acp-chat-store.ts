@@ -344,10 +344,10 @@ export class AcpChatStore {
     return this.historyKnown && this.messageCount === 0;
   }
 
-  bootstrap(): void {
+  bootstrap(mode?: AcpSessionStartMode): void {
     if (this._bootstrapped) return;
     this._bootstrapped = true;
-    void this._runBootstrap();
+    void this._runBootstrap(mode);
   }
 
   retry(options: { mode?: AcpSessionStartMode } = {}): void {
@@ -375,7 +375,14 @@ export class AcpChatStore {
     this._attachmentRecovery = null;
     this.historyLoading = true;
     this.loadError = null;
-    void this._runBootstrap(options.mode);
+    const conversation = conversationRegistry
+      .get(this.taskId)
+      ?.conversations.get(this.conversationId)?.data;
+    // Retry is an explicit user action. If passive history loading found a saved provider
+    // session but deliberately did not wake it, retry must resume that session instead of
+    // repeating the same unavailable read forever.
+    const mode = options.mode ?? (conversation?.sessionId ? 'resume' : undefined);
+    void this._runBootstrap(mode);
   }
 
   bindView(view: ChatView | null): void {

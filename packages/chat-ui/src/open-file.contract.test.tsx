@@ -125,6 +125,28 @@ describe('open-file command contract', () => {
     });
   });
 
+  it('disables navigation for links blocked by the host', async () => {
+    const onOpenFile = vi.fn();
+    const host = mount(
+      [
+        {
+          kind: 'message',
+          id: 'message-1',
+          role: 'assistant',
+          text: '[blocked](https://example.com)',
+        },
+      ],
+      { classifyLink: () => ({ kind: 'blocked' }), onOpenFile }
+    );
+    await nextPaint();
+
+    const link = host.querySelector('a');
+    expect(link?.textContent).toBe('blocked');
+    expect(link?.hasAttribute('href')).toBe(false);
+    expect(dispatchLinkClick(link!)).toBe(true);
+    expect(onOpenFile).not.toHaveBeenCalled();
+  });
+
   it('routes diff, file-operation, and resource file rows through onOpenFile', async () => {
     const onOpenFile = vi.fn();
     const host = mount(

@@ -30,6 +30,7 @@ import {
   gatewayModelsSettingsSchema,
   inboundProtocolForAgent,
   publishedModelAliases,
+  removeGatewayProvider,
   upstreamProtocol,
   type GatewayModelsSettings,
   type PublishedGatewayModel,
@@ -706,6 +707,86 @@ export class ModelGatewayService {
     });
     this.modelsQueue = work.catch(() => undefined);
     await work;
+  }
+  async removeProvider(providerId: string): Promise<{
+    removedModels: number;
+    removedSources: number;
+    updatedModels: number;
+  }> {
+    const work = this.modelsQueue.then(async () => {
+      if (!this.deps.saveModels || !this.deps.getModels)
+        throw new Error('Model settings are unavailable.');
+      const current = await this.deps.getModels();
+      const result = removeGatewayProvider(current, providerId);
+      if (result.removedSources === 0) {
+        return {
+          removedModels: result.removedModels,
+          removedSources: result.removedSources,
+          updatedModels: result.updatedModels,
+        };
+      }
+      const next = gatewayModelsSettingsSchema.parse(result.settings);
+      await this.deps.saveModels(next);
+      await this.configuredProviders();
+      if (this.state === 'ready') await this.syncProviders();
+      return {
+        removedModels: result.removedModels,
+        removedSources: result.removedSources,
+        updatedModels: result.updatedModels,
+      };
+    });
+    this.modelsQueue = work.then(
+      () => undefined,
+      () => undefined
+    );
+    return work;
+  }
+  async reconcileProviderInventory(): Promise<{
+    removedModels: number;
+    removedSources: number;
+    updatedModels: number;
+  }> {
+    if (!this.deps.inventory || !this.deps.getModels)
+      return { removedModels: 0, removedSources: 0, updatedModels: 0 };
+    const [inventory, settings] = await Promise.all([this.deps.inventory(), this.deps.getModels()]);
+    const available = new Set(inventory.map(({ provider }) => provider.id));
+    const missing = [
+      ...new Set(
+        settings.models.flatMap((model) =>
+          model.sources
+            .filter((source) => !available.has(source.providerId))
+            .map((source) => source.providerId)
+        )
+      ),
+    ];
+    const total = { removedModels: 0, removedSources: 0, updatedModels: 0 };
+    for (const providerId of missing) {
+      const result = await this.removeProvider(providerId);
+      total.removedModels += result.removedModels;
+      total.removedSources += result.removedSources;
+      total.updatedModels += result.updatedModels;
+    }
+    return total;
+  }
+  async deleteModel(modelId: string): Promise<{ deleted: boolean }> {
+    const work = this.modelsQueue.then(async () => {
+      if (!this.deps.saveModels || !this.deps.getModels)
+        throw new Error('Model settings are unavailable.');
+      const current = await this.deps.getModels();
+      if (!current.models.some((model) => model.id === modelId)) return { deleted: false };
+      const next = gatewayModelsSettingsSchema.parse({
+        ...current,
+        models: current.models.filter((model) => model.id !== modelId),
+      });
+      await this.deps.saveModels(next);
+      if (this.state === 'ready') await this.syncProviders();
+      return { deleted: true };
+    });
+    this.modelsQueue = work.then(
+      () => undefined,
+      () => undefined
+    );
+    return work;
   }
   private async refreshCatalogRoute(id: string): Promise<void> {
     if (this.active.get(id) || this.switching.has(id)) return;

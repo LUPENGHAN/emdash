@@ -4,6 +4,7 @@ import { getProjectSshConnectionId } from '@core/features/projects/api/browser/s
 import { getTaskComposition } from '@core/features/workbench/api/browser/task-composition-selectors';
 import type { Conversation, ConversationType } from '@core/primitives/conversations/api';
 import { log } from '@core/primitives/logging/browser/logger';
+import { getAcpChatResourceManager } from './acp/acp-chat-resource-manager';
 import { currentChoice, restartConversation, resumableSessionId } from './restart-conversation';
 
 /** Providers whose session ids resume both in the CLI (--resume) and in ACP (session/load). */
@@ -32,9 +33,11 @@ export function canSwitchConversationUi(conversation: Conversation): boolean {
  * it has none yet (nothing sent), a new one starts there. See `restartConversation`,
  * which it shares with restarting on another provider.
  */
-export async function switchConversationUi(
-  conversation: Conversation
-): Promise<{ conversationId: string; type: ConversationType }> {
+export async function switchConversationUi(conversation: Conversation): Promise<{
+  conversationId: string;
+  type: ConversationType;
+  startMode?: 'fresh' | 'resume';
+}> {
   const type = switchTarget(conversation);
   let choice = currentChoice(conversation);
   if (conversation.modelSource?.startsWith('gateway:')) {
@@ -44,13 +47,25 @@ export async function switchConversationUi(
       choice = { ...choice, modelSource: selected.sourceId, sourceModel: selected.model };
   }
   const created = await restartConversation(conversation, choice, { type });
-  return { conversationId: created.id, type };
+  return {
+    conversationId: created.id,
+    type,
+    ...(type === 'acp' && {
+      startMode: resumableSessionId(created) === null ? ('fresh' as const) : ('resume' as const),
+    }),
+  };
 }
 
 /** Tab-menu entry point: switch, then open the replacement where the old tab was. */
 export async function switchConversationUiAndOpen(conversation: Conversation): Promise<void> {
   try {
-    const { conversationId, type } = await switchConversationUi(conversation);
+    const { conversationId, type, startMode } = await switchConversationUi(conversation);
+    if (type === 'acp' && startMode) {
+      getAcpChatResourceManager(conversation.taskId, conversation.projectId).authorizeStart(
+        conversationId,
+        startMode
+      );
+    }
     getTaskComposition(conversation.projectId, conversation.taskId)?.paneLayout.open(
       type === 'acp' ? 'acp-chat' : 'conversation',
       { conversationId },

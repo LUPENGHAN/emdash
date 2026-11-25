@@ -2,11 +2,13 @@ import type { HostFileRef } from '@emdash/core/primitives/path/api';
 import { EmptyState } from '@emdash/ui/react/components';
 import { toast } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
+import { useCallback, useRef, useState, type DragEvent } from 'react';
 import { openFileStore } from '@core/features/editor/api/browser/open-file-store/open-file-store';
 import type { FilePayload } from '@core/features/editor/api/browser/task-editor/stores/file-tab-resource';
 import { FileTabResource } from '@core/features/editor/api/browser/task-editor/stores/file-tab-resource';
 import { getMachinesStore } from '@core/features/machines/contributions/app-stores';
 import type { TaskTabContext } from '@core/features/workbench/api/browser/tabs/task-tab-context';
+import { useWorkspace } from '@core/features/workbench/api/browser/task-composition-context';
 import { resolveWorkspacePath } from '@core/features/workspaces/api/browser/workspace-path';
 import { openModal } from '@core/manifests/browser/modal-api';
 import { projectAvailabilityUi } from '@core/manifests/browser/project-availability-ui';
@@ -24,13 +26,14 @@ import type {
 } from '@core/primitives/workbench-shell/browser/tabs/core/tab-provider';
 import { createTabProvider } from '@core/primitives/workbench-shell/browser/tabs/core/tab-provider-registry';
 import { registerLanguageContext } from '../lsp/language-services';
-import { EditorProvider } from './editor-provider';
+import { EditorProvider, useEditorContext, type EditorInsertPosition } from './editor-provider';
 import { FileContentPreview } from './file-content-preview';
 import { FileContentRenderer } from './file-content-renderer';
 import { FileContentToolbar } from './file-content-toolbar';
 import { FILE_CONTENT_TYPES } from './file-content-types';
 import { FileStatusPlaceholder } from './file-status-placeholder';
 import { FileTabBarItem, FileTabBarItemDragPreview } from './file-tab-item';
+import { importMarkdownImages } from './markdown-image-import';
 import { RecoveredStaleBanner } from './recovered-stale-banner';
 
 export interface FileOpenArgs {
@@ -53,6 +56,11 @@ const FileTabContent = observer(function FileTabContent({ host, ctx }: TabConten
 /** Renders the Monaco source and/or preview for the currently active file tab. */
 const FileContent = observer(function FileContent({ host, ctx }: TabContentProps) {
   const taskCtx = ctx as TaskTabContext;
+  const workspace = useWorkspace();
+  const { insertText, getPositionAtClientPoint } = useEditorContext();
+  const [importingImages, setImportingImages] = useState(false);
+  const [imageDragActive, setImageDragActive] = useState(false);
+  const fileDragDepth = useRef(0);
   const liveActionDisabledReason = projectAvailabilityUi.getLiveActionDisabledReason(
     taskCtx.projectId
   );
@@ -73,10 +81,89 @@ const FileContent = observer(function FileContent({ host, ctx }: TabContentProps
       ? !!def.Preview && (activeFile!.viewMode === 'preview' || !def.editable)
       : false;
   const canToggle = def ? def.editable && !!def.Preview : false;
+  const handlesImageDrop = activeFile?.fileKind === 'markdown';
+  const canImportImages =
+    handlesImageDrop && !activeFile?.readOnly && !blocked && !liveActionDisabledReason;
+
+  const importImages = useCallback(
+    async (files: readonly File[], position?: EditorInsertPosition | null) => {
+      if (!activeFile || activeFile.fileKind !== 'markdown') return;
+      if (!canImportImages) {
+        toast.error('无法导入图片', {
+          description: liveActionDisabledReason ?? '当前 Markdown 文件不可写。',
+        });
+        return;
+      }
+      setImportingImages(true);
+      try {
+        const imported = await importMarkdownImages({
+          documentPath: activeFile.path,
+          sshConnectionId: workspace.sshConnectionId,
+          files,
+        });
+        const markdown = imported.map((image) => image.markdown).join('\n');
+        if (!insertText(markdown, position)) throw new Error('编辑器尚未准备好，请稍后重试。');
+        activeFile.setViewMode('source');
+        toast.success(imported.length > 1 ? `已导入 ${imported.length} 张图片` : '图片已导入');
+      } catch (error) {
+        toast.error('图片导入失败', {
+          description: error instanceof Error ? error.message : '请稍后重试。',
+        });
+      } finally {
+        setImportingImages(false);
+      }
+    },
+    [activeFile, canImportImages, insertText, liveActionDisabledReason, workspace.sshConnectionId]
+  );
+
+  const isFileDrag = (event: DragEvent<HTMLDivElement>) =>
+    Array.from(event.dataTransfer.types).includes('Files');
+
+  const handleFileDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (!handlesImageDrop || !isFileDrag(event)) return;
+    event.preventDefault();
+    fileDragDepth.current += 1;
+    setImageDragActive(true);
+  };
+
+  const handleFileDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!handlesImageDrop || !isFileDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = canImportImages ? 'copy' : 'none';
+  };
+
+  const handleFileDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (!handlesImageDrop || !isFileDrag(event)) return;
+    fileDragDepth.current = Math.max(0, fileDragDepth.current - 1);
+    if (fileDragDepth.current === 0) setImageDragActive(false);
+  };
+
+  const handleFileDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (!handlesImageDrop || !isFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const position = getPositionAtClientPoint(event.clientX, event.clientY);
+    fileDragDepth.current = 0;
+    setImageDragActive(false);
+    void importImages(Array.from(event.dataTransfer.files), position);
+  };
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden">
-      {activeFile && <FileContentToolbar tab={activeFile} canToggle={canToggle} />}
+    <div
+      className="flex h-full w-full flex-col overflow-hidden"
+      onDragEnterCapture={handleFileDragEnter}
+      onDragOverCapture={handleFileDragOver}
+      onDragLeaveCapture={handleFileDragLeave}
+      onDropCapture={handleFileDrop}
+    >
+      {activeFile && (
+        <FileContentToolbar
+          tab={activeFile}
+          canToggle={canToggle}
+          importingImages={importingImages}
+          onImportImages={(files) => void importImages(files)}
+        />
+      )}
       {activeFile && <RecoveredStaleBanner tab={activeFile} />}
       {activeFile && liveActionDisabledReason && !blocked && (
         <div
@@ -105,6 +192,11 @@ const FileContent = observer(function FileContent({ host, ctx }: TabContentProps
             <FileContentPreview tab={activeFile} />
           </div>
         )}
+        {imageDragActive ? (
+          <div className="border-accent pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-lg border-2 border-dashed bg-(--em-surface)/90 text-sm font-medium text-foreground shadow-lg">
+            {canImportImages ? '松开即可导入图片' : '当前 Markdown 文件不可写'}
+          </div>
+        ) : null}
       </div>
     </div>
   );

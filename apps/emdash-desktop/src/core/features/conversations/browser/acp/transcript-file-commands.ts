@@ -1,9 +1,12 @@
 import type { ChatCommands } from '@core/features/conversations/api/browser/chat/chat-transcript';
+import {
+  classifyEmdashFileLink,
+  splitAgentFileLocation,
+} from '@core/features/editor/api/browser/agent-file-link';
 // TODO(conversations-extraction): Inject task editor/file-opening behavior into ACP chat.
 import { openFileInAdjacentPane } from '@core/features/editor/api/browser/open-file-in-file-editor';
 
 const EXPLICIT_SCHEME_RE = /^[A-Za-z][A-Za-z\d+.-]*:/u;
-const EDITOR_LOCATION_SUFFIX_RE = /(?::(\d+)(?::\d+)?|#L(\d+)(?:C\d+)?)$/u;
 const BASENAME_WITH_LINE_SUFFIX_RE = /^[^/\\:]+\.[^/\\:]+:\d+(?::\d+)?$/u;
 const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/u;
 const WINDOWS_UNC_PATH_RE = /^\\\\[^\\]+\\[^\\]+/u;
@@ -30,8 +33,8 @@ export type TranscriptFileCommands = {
 
 /**
  * Classifies markdown links at the Emdash host boundary. A scheme-less href is
- * a file path in a desktop agent transcript; explicit URI schemes, anchors,
- * query-only links, and protocol-relative URLs keep browser behavior. Editor
+ * a file path in a desktop agent transcript. The Emdash short-link origin is
+ * handled here before ordinary web links go to the browser. Editor
  * location suffixes are removed from paths and their line is passed to the
  * editor. The file opener does not accept a column.
  */
@@ -40,26 +43,23 @@ export function classifyTranscriptLink(href: string): TranscriptLinkClassificati
   if (!target || target.startsWith('#') || target.startsWith('?') || target.startsWith('//')) {
     return { kind: 'external' };
   }
-  const locationSuffix = EDITOR_LOCATION_SUFFIX_RE.exec(target);
-  const filePath = locationSuffix ? target.slice(0, -locationSuffix[0].length) : target;
-  const parsedLine = locationSuffix ? Number(locationSuffix[1] ?? locationSuffix[2]) : undefined;
-  const fileLink = {
-    kind: 'workspace-file' as const,
-    path: filePath,
-    ...(parsedLine !== undefined && Number.isSafeInteger(parsedLine) && parsedLine > 0
-      ? { line: parsedLine }
-      : {}),
-  };
   if (
     target.startsWith('/') ||
     WINDOWS_ABSOLUTE_PATH_RE.test(target) ||
     WINDOWS_UNC_PATH_RE.test(target) ||
-    BASENAME_WITH_LINE_SUFFIX_RE.test(target)
+    BASENAME_WITH_LINE_SUFFIX_RE.test(target) ||
+    !EXPLICIT_SCHEME_RE.test(target)
   ) {
-    return fileLink;
+    return { kind: 'workspace-file', ...splitAgentFileLocation(target) };
   }
-  if (EXPLICIT_SCHEME_RE.test(target)) return { kind: 'external' };
-  return fileLink;
+
+  const url = URL.parse(target);
+  const shortLink = url ? classifyEmdashFileLink(url) : null;
+  if (shortLink?.kind === 'file') {
+    const { path, line } = shortLink;
+    return { kind: 'workspace-file', path, ...(line === undefined ? {} : { line }) };
+  }
+  return shortLink ? { kind: 'blocked' } : { kind: 'external' };
 }
 
 /** All file affordances originating in chat preserve the transcript and open to its right. */

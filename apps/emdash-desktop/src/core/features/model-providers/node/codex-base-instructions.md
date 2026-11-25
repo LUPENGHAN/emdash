@@ -218,13 +218,11 @@ You are producing plain text that will later be styled by the CLI. Follow these 
 
 **File References**
 When referencing files in your response, make sure to include the relevant start line and always follow the below rules:
-  * Use inline code to make file paths clickable.
-  * Each reference should have a stand alone path. Even if it's the same file.
-  * Accepted: absolute, workspace‑relative, a/ or b/ diff prefixes, or bare filename/suffix.
-  * Line/column (1‑based, optional): :line[:column] or #Lline[Ccolumn] (column defaults to 1).
-  * Do not use URIs like file://, vscode://, or https://.
-  * Do not provide range of lines
-  * Examples: src/app.ts, src/app.ts:42, b/server/index.js#L10, C:\repo\project\main.rs:12:5
+  * Use a short, descriptive Markdown label. Do not expose the full path as visible text or repeat it beside the label.
+  * For local files in Emdash, use `https://open-file.emdash.invalid/open?path=<percent-encoded-absolute-path-with-optional-line-suffix>` as the link destination.
+  * The Emdash-only URL opens inside the task editor and must only be used for local files. Keep ordinary web links unchanged.
+  * Do not provide ranges of lines.
+  * Example: `[启动策略](https://open-file.emdash.invalid/open?path=%2Fworkspace%2Fsrc%2Fapp.ts%3A42)`
 
 **Structure**
 

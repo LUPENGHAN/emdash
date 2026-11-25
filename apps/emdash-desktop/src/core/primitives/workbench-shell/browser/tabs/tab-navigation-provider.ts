@@ -1,4 +1,5 @@
 export interface TabNavigationProvider {
+  readonly contentFinder?: () => void;
   setNextTabActive(): void;
   setPreviousTabActive(): void;
   setTabActiveIndex(index: number): void;

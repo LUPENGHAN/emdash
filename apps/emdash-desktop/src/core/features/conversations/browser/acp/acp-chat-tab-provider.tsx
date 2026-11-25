@@ -156,8 +156,9 @@ export const acpChatTabProvider: TabProvider<
   ): AcpChatTabResource {
     const taskCtx = ctx as TaskTabContext;
     const manager = getAcpChatResourceManager(taskCtx.taskId, taskCtx.projectId);
+    const authorizedStart = manager.consumeAuthorizedStart(entry.state.conversationId);
     const store = manager.acquire(entry.state.conversationId);
-    return new AcpChatTabResource(store, handle);
+    return new AcpChatTabResource(store, handle, authorizedStart);
   },
 
   dispose(entry: TabEntry<AcpChatState>, _resource: AcpChatTabResource, ctx: TabViewContext): void {

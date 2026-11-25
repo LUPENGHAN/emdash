@@ -7,6 +7,26 @@ vi.mock('@core/features/editor/api/browser/open-file-in-file-editor', () => ({
 
 describe('classifyTranscriptLink', () => {
   it.each([
+    ['/workspace/portal/front/signin.coffee:1', '/workspace/portal/front/signin.coffee', 1],
+    ['/workspace/测试 #1.md#L42C7', '/workspace/测试 #1.md', 42],
+    ['C:\\repo\\src\\app.ts:42:7', 'C:\\repo\\src\\app.ts', 42],
+  ])('decodes %s from an Emdash link with its line', (target, path, line) => {
+    const href = `https://open-file.emdash.invalid/open?path=${encodeURIComponent(target)}`;
+    expect(classifyTranscriptLink(href)).toEqual({ kind: 'workspace-file', path, line });
+  });
+
+  it.each([
+    'https://open-file.emdash.invalid/other?path=%2Ftmp%2Fapp.ts',
+    'https://user@open-file.emdash.invalid/open?path=%2Ftmp%2Fapp.ts',
+    'https://open-file.emdash.invalid/open?path=%2Fa&path=%2Fb',
+    'https://open-file.emdash.invalid/open?path=%2Fa#fragment',
+    'https://open-file.emdash.invalid/open?path=%2Ftmp%2Fbad%0Afile.ts',
+    'https://open-file.emdash.invalid/open?path=%5C%5Cserver%5Cshare%5Capp.ts',
+  ])('blocks malformed Emdash file links %s', (href) => {
+    expect(classifyTranscriptLink(href)).toEqual({ kind: 'blocked' });
+  });
+
+  it.each([
     ['src/auth/jwt.ts', 'src/auth/jwt.ts'],
     ['./src/app.ts', './src/app.ts'],
     ['../shared/types.ts', '../shared/types.ts'],
@@ -47,6 +67,7 @@ describe('classifyTranscriptLink', () => {
     'mcp://server/resource',
     'vscode://file/tmp/report.md:42',
     'https://example.com/docs.ts:42',
+    'https://open-file.emdash.invalid.example/open?path=%2Ftmp%2Fapp.ts',
     'urn:isbn:123',
     'custom:42',
     '//example.com/docs',

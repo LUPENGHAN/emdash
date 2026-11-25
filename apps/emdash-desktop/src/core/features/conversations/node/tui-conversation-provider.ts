@@ -88,6 +88,14 @@ function parseExtraArgs(value: string | undefined): string[] {
   return value.trim().split(/\s+/);
 }
 
+function terminalCompatibilityEnv(providerId: string): Record<string, string> {
+  // Codex hides Markdown link destinations only for terminals it knows can carry
+  // semantic OSC 8 links. Emdash renders its PTY with xterm.js and intercepts
+  // those links itself, so VS Code is the closest truthful capability profile.
+  // Keep the override scoped to Codex; other agents still see TERM_PROGRAM=emdash.
+  return providerId === 'codex' ? { TERM_PROGRAM: 'vscode' } : {};
+}
+
 export class TuiConversationProvider implements ConversationProvider {
   private readonly projectId: string;
   private readonly taskId: string;
@@ -224,7 +232,11 @@ export class TuiConversationProvider implements ConversationProvider {
       autoApprove: conversation.autoApprove ?? false,
       trustWorkspace,
       extraArgs: [...parseExtraArgs(providerConfig?.extraArgs), ...(agentControl?.args ?? [])],
-      providerVars: { ...providerVars, ...agentControl?.env },
+      providerVars: {
+        ...providerVars,
+        ...agentControl?.env,
+        ...terminalCompatibilityEnv(conversation.providerId),
+      },
       gitCredentials,
       cols: initialSize.cols,
       rows: initialSize.rows,

@@ -126,7 +126,12 @@ export type PublishedGatewayModel = z.infer<typeof publishedGatewayModelSchema>;
 
 const gatewayModelsV1Schema = z
   .object({
-    version: z.literal(1).default(1),
+    // Early settings were saved without a version. SettingsStore merges current defaults before
+    // parsing, so those records can arrive here with version 2 even though their model shape is V1.
+    version: z
+      .union([z.literal(1), z.literal(2)])
+      .optional()
+      .default(1),
     models: z.array(gatewayModelSchema).default([]),
   })
   .superRefine(({ models }, ctx) => {
@@ -179,6 +184,64 @@ const gatewayModelsV2Schema = z
   });
 
 export type GatewayModelsSettings = z.infer<typeof gatewayModelsV2Schema>;
+
+export type RemoveGatewayProviderResult = {
+  settings: GatewayModelsSettings;
+  removedModels: number;
+  removedSources: number;
+  updatedModels: number;
+};
+
+/**
+ * Removes one provider from the current model catalog. Models owned only by that
+ * provider disappear; shared models keep their other sources without silently
+ * choosing a replacement for an explicitly selected route.
+ */
+export function removeGatewayProvider(
+  settings: GatewayModelsSettings,
+  providerId: string
+): RemoveGatewayProviderResult {
+  let removedModels = 0;
+  let removedSources = 0;
+  let updatedModels = 0;
+  const models = settings.models.flatMap((model) => {
+    const sources = model.sources.filter((source) => source.providerId !== providerId);
+    const removed = model.sources.length - sources.length;
+    if (removed === 0) return [model];
+    removedSources += removed;
+    if (sources.length === 0) {
+      removedModels += 1;
+      return [];
+    }
+    updatedModels += 1;
+    const survivingSourceIds = new Set(sources.map((source) => source.id));
+    return [
+      {
+        ...model,
+        revision: model.revision + 1,
+        sources,
+        activeSourceByProtocol: Object.fromEntries(
+          Object.entries(model.activeSourceByProtocol).filter(([, sourceId]) =>
+            survivingSourceIds.has(sourceId)
+          )
+        ),
+      },
+    ];
+  });
+  const ignoredPrefix = `${providerId}:`;
+  return {
+    settings: {
+      ...settings,
+      models,
+      ignoredSourceIds: settings.ignoredSourceIds.filter(
+        (fingerprint) => !fingerprint.startsWith(ignoredPrefix)
+      ),
+    },
+    removedModels,
+    removedSources,
+    updatedModels,
+  };
+}
 
 export function migrateGatewayModelsV1(
   settings: z.infer<typeof gatewayModelsV1Schema>

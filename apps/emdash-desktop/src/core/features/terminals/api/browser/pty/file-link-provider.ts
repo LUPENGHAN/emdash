@@ -78,13 +78,17 @@ export class FileLinkProvider implements ILinkProvider {
   }
 
   private toXtermLink(match: FileLinkMatch): ILink {
-    const decorations = this.tracker.decorations();
+    const decorations = this.directActivation()
+      ? { pointerCursor: true, underline: true }
+      : this.tracker.decorations();
     const link: ILink = {
       range: match.range,
       text: match.text,
       decorations,
       hover: (event) => {
-        this.tracker.hover(link.decorations ?? decorations, event);
+        const current = link.decorations ?? decorations;
+        if (this.directActivation()) setDecorations(current, true);
+        else this.tracker.hover(current, event);
       },
       leave: () => {
         this.tracker.leave(link.decorations ?? decorations);
@@ -100,6 +104,11 @@ export class FileLinkProvider implements ILinkProvider {
     };
     return link;
   }
+
+  private directActivation(): boolean {
+    const mode = this.terminal.modes?.mouseTrackingMode;
+    return mode !== undefined && mode !== 'none';
+  }
 }
 
 export function openTerminalFileLink(
@@ -108,7 +117,7 @@ export function openTerminalFileLink(
   onOpenExternal: (filePath: string) => void
 ): void {
   if (isImagePath(match.text)) openTerminalImage(match.text, onOpenFile);
-  else if (match.isExternal) onOpenExternal(match.text);
+  else if (match.text.startsWith('~/')) onOpenExternal(match.text);
   else onOpenFile(normalizeFilePath(match.text));
 }
 

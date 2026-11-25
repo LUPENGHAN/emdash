@@ -14,7 +14,7 @@ import {
   type OpenFileEntry,
 } from '@core/features/editor/api/browser/open-file-store/open-file-store';
 import { hostFileRefFromNativePath } from '@core/primitives/desktop-runtime/api';
-import { StickyDiffEditor, type DiffSideModel } from './sticky-diff-editor';
+import { StickyDiffEditor, StickyFacetEditor, type DiffSideModel } from './sticky-diff-editor';
 import '@emdash/ui/style.css';
 
 const runtime = vi.hoisted(() => ({ binder: null as MonacoFacetBinder | null }));
@@ -258,6 +258,51 @@ it('keeps a loaded diff visible but read-only while a side fails', async () => {
   expect(host.querySelector('[role="status"]')).toBeNull();
   // Toggling readOnly schedules Monaco's 100ms debounced hunk-menu update, whose timer survives
   // disposal and then throws from the disposed context key service. Let it flush first.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+});
+
+it('edits and saves the modified buffer in the single-side source editor', async () => {
+  const binder = new MonacoFacetBinder(async () => monaco);
+  runtime.binder = binder;
+  const sides = await createDiffSides(binder, 'markdown-source', '# Before');
+  const entry: OpenFileEntry = { ...sides.modified.entry, dirty: true };
+  sides.modified.entry = entry;
+  const save = vi.mocked(openFileStore.save);
+  save.mockReset();
+  save.mockResolvedValue({ success: true, data: undefined });
+
+  const host = document.createElement('div');
+  host.style.cssText = 'width: 800px; height: 400px';
+  document.body.appendChild(host);
+  cleanups.push(() => host.remove());
+  const root = createRoot(host);
+  cleanups.push(async () => {
+    await act(async () => root.unmount());
+  });
+
+  await act(async () => {
+    root.render(
+      <StickyFacetEditor
+        side={sides.modified}
+        filePath="markdown-source.md"
+        ariaLabel="Markdown 源码"
+      />
+    );
+  });
+
+  const model = binder.modelFor(sides.modified.uri);
+  const editor = monaco.editor.getEditors().find((candidate) => candidate.getModel() === model);
+  if (!editor) throw new Error('source editor missing');
+  expect(editor.getOption(monaco.editor.EditorOption.readOnly)).toBe(false);
+  editor.setPosition({ lineNumber: 1, column: 9 });
+  editor.trigger('keyboard', 'type', { text: '!' });
+  expect(entry.handleFor({ kind: 'buffer' })?.getText()).toBe('# Before!');
+
+  const modifier = navigator.userAgent.includes('Mac') ? 'Meta' : 'Control';
+  editor.focus();
+  await userEvent.keyboard(`{${modifier}>}s{/${modifier}}`);
+  expect(save).toHaveBeenCalledWith(entry);
+  // Monaco schedules language-feature work after an edit; let cancellations settle before teardown.
   await new Promise((resolve) => setTimeout(resolve, 150));
 });
 

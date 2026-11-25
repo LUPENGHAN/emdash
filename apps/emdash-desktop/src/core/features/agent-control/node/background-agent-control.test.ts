@@ -86,7 +86,7 @@ function setup() {
       },
     },
     deliver: vi.fn<ConstructorParameters<typeof BackgroundAgentControl>[0]['deliver']>(
-      async () => ({ status: 'accepted', queued: true })
+      async () => ({ status: 'delivered', queued: true })
     ),
   };
   return { records, deps, tasks, conversations, service: new BackgroundAgentControl(deps) };
@@ -167,10 +167,10 @@ describe('background agent discovery and messaging', () => {
     await new BackgroundAgentControl(test.deps).dispatch(caller, action);
     expect(test.deps.deliver).toHaveBeenCalledOnce();
   });
-  it('retains a known pending delivery and retries it with the same prompt ID', async () => {
+  it('retains a known queued delivery and retries it with the same prompt ID', async () => {
     const test = setup();
     test.deps.deliver.mockResolvedValueOnce({
-      status: 'pending',
+      status: 'queued',
       reason: 'Terminal input not injected',
     });
     const action = {
@@ -180,10 +180,52 @@ describe('background agent discovery and messaging', () => {
       requestId: 'pending',
     };
     const first = JSON.parse((await test.service.dispatch(caller, action))!.text);
-    expect(first.status).toBe('pending');
+    expect(first.status).toBe('queued');
     const retried = JSON.parse((await test.service.dispatch(caller, action))!.text);
-    expect(retried.status).toBe('accepted');
+    expect(retried.status).toBe('delivered');
     expect(retried.prompt_id).toBe(first.prompt_id);
+  });
+  it('queries a queued message and explicitly injects it exactly once', async () => {
+    const test = setup();
+    test.deps.deliver
+      .mockResolvedValueOnce({ status: 'queued', reason: 'Target is working' })
+      .mockResolvedValueOnce({ status: 'injected' });
+    const sent = JSON.parse(
+      (await test.service.dispatch(caller, {
+        kind: 'send_message',
+        conversationId: 'target',
+        text: 'Continue with the fix',
+        requestId: 'queue-first',
+      }))!.text
+    );
+    expect(sent.status).toBe('queued');
+    const status = JSON.parse(
+      (await test.service.dispatch(caller, {
+        kind: 'get_message_status',
+        promptId: sent.prompt_id,
+      }))!.text
+    );
+    expect(status).toMatchObject({ prompt_id: sent.prompt_id, status: 'queued' });
+
+    const delivered = JSON.parse(
+      (await test.service.dispatch(caller, {
+        kind: 'deliver_message',
+        promptId: sent.prompt_id,
+        requestId: 'deliver-once',
+      }))!.text
+    );
+    expect(delivered.status).toBe('injected');
+    await test.service.dispatch(caller, {
+      kind: 'deliver_message',
+      promptId: sent.prompt_id,
+      requestId: 'deliver-once',
+    });
+    await test.service.dispatch(caller, {
+      kind: 'deliver_message',
+      promptId: sent.prompt_id,
+      requestId: 'another-request',
+    });
+    expect(test.deps.deliver).toHaveBeenCalledTimes(2);
   });
   it('authorizes archive and deletion before leaving their user confirmation to the renderer', async () => {
     const test = setup();
@@ -227,12 +269,12 @@ describe('pending message handling', () => {
   it('lists known-unsent messages and durably handles them without injecting input or replaying the request', async () => {
     const test = setup();
     test.deps.deliver.mockResolvedValue({
-      status: 'pending',
+      status: 'queued',
       reason: 'Terminal requires explicit delivery',
     });
     await test.service.dispatch(caller, action);
     const [pending] = await test.service.pendingMessages('worker');
-    expect(pending).toMatchObject({ text: action.text, status: 'pending', title: 'target' });
+    expect(pending).toMatchObject({ text: action.text, status: 'queued', title: 'target' });
     expect(await test.service.pendingMessages('main')).toEqual([]);
     await expect(test.service.resolvePendingMessage('main', pending.id, 'handled')).rejects.toThrow(
       'target is unavailable'
@@ -259,24 +301,28 @@ describe('pending message handling', () => {
   });
   it('does not present an in-flight delivery as an unknown result', async () => {
     const test = setup();
-    const reply = deferred<{ status: 'pending'; reason: string }>();
+    const reply = deferred<{ status: 'queued'; reason: string }>();
     test.deps.deliver.mockReturnValue(reply.promise);
     const sending = test.service.dispatch(caller, action);
     await vi.waitFor(() => expect(test.deps.deliver).toHaveBeenCalledOnce());
     expect(await test.service.pendingMessages('worker')).toEqual([]);
-    reply.resolve({ status: 'pending', reason: 'Not delivered' });
+    reply.resolve({ status: 'queued', reason: 'Not delivered' });
     await sending;
     expect(await test.service.pendingMessages('worker')).toHaveLength(1);
   });
   it('reads historical messages and refuses to overwrite unknown future message records', async () => {
     const test = setup();
-    test.deps.deliver.mockResolvedValue({ status: 'pending', reason: 'Not delivered' });
+    test.deps.deliver.mockResolvedValue({ status: 'queued', reason: 'Not delivered' });
     await test.service.dispatch(caller, action);
     const [key, record] = [...test.records.entries()][0];
-    test.records.set(key, { ...record, version: '1' } as unknown as AgentMessageRecord);
+    test.records.set(key, {
+      ...record,
+      version: '1',
+      phase: 'pending',
+    } as unknown as AgentMessageRecord);
     const [pending] = await test.service.pendingMessages('worker');
     await test.service.resolvePendingMessage('worker', pending.id, 'handled');
-    expect(test.records.get(key)?.version).toBe('2');
+    expect(test.records.get(key)?.version).toBe('3');
     test.records.set(key, { ...record, version: '99' } as unknown as AgentMessageRecord);
     await expect(
       test.service.resolvePendingMessage('worker', pending.id, 'handled')
@@ -287,7 +333,7 @@ describe('pending message handling', () => {
 
 it('isolates unreadable messages for other tasks and surfaces an error for the affected task', async () => {
   const test = setup();
-  test.deps.deliver.mockResolvedValue({ status: 'pending', reason: 'Terminal' });
+  test.deps.deliver.mockResolvedValue({ status: 'queued', reason: 'Terminal' });
   await test.service.dispatch(caller, {
     kind: 'send_message',
     conversationId: 'target',

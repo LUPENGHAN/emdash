@@ -1,9 +1,13 @@
+import {
+  classifyEmdashFileLink,
+  parseAgentFilePath,
+} from '@core/features/editor/api/browser/agent-file-link';
 import { getFileKind } from '@core/features/editor/api/browser/renderers/fileKind';
 
 export type OscLinkTarget =
   | { kind: 'web' }
-  | { kind: 'image'; path: string }
-  | { kind: 'invalid-image' };
+  | { kind: 'file'; path: string }
+  | { kind: 'invalid-file' };
 
 export function isImagePath(path: string): boolean {
   const kind = getFileKind(path);
@@ -12,14 +16,18 @@ export function isImagePath(path: string): boolean {
 
 /** Classifies OSC 8 destinations without granting a terminal output access to other schemes. */
 export function classifyOscLink(text: string): OscLinkTarget | null {
+  const localFile = parseAgentFilePath(text);
+  if (localFile) return { kind: 'file', path: localFile.path };
+
   let url: URL;
   try {
     url = new URL(text);
   } catch {
-    return /^file:/i.test(text) && isImagePath(text.split(/[?#]/, 1)[0])
-      ? { kind: 'invalid-image' }
-      : null;
+    return /^file:/i.test(text) ? { kind: 'invalid-file' } : null;
   }
+  const shortLink = classifyEmdashFileLink(url);
+  if (shortLink)
+    return shortLink.kind === 'file' ? { kind: 'file', path: shortLink.path } : shortLink;
   if (url.protocol === 'http:' || url.protocol === 'https:') return { kind: 'web' };
   if (url.protocol !== 'file:') return null;
 
@@ -27,9 +35,8 @@ export function classifyOscLink(text: string): OscLinkTarget | null {
   try {
     path = decodeURIComponent(url.pathname);
   } catch {
-    return isImagePath(url.pathname) ? { kind: 'invalid-image' } : null;
+    return { kind: 'invalid-file' };
   }
-  if (!isImagePath(path)) return null;
 
   // A file URL belongs to the terminal's host, not to an authority supplied by output.
   // Encoded separators are rejected rather than interpreted as path components.
@@ -45,9 +52,9 @@ export function classifyOscLink(text: string): OscLinkTarget | null {
     !path.startsWith('/') ||
     path.startsWith('//')
   ) {
-    return { kind: 'invalid-image' };
+    return { kind: 'invalid-file' };
   }
 
   // Keep the slash before a drive letter until the task host's path style is known.
-  return { kind: 'image', path };
+  return { kind: 'file', path };
 }

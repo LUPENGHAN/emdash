@@ -56,6 +56,18 @@ export const modelGatewayContract = defineContract({
     }),
     output: empty,
   }),
+  removeProvider: procedure({
+    input: z.object({ providerId: z.string().min(1) }),
+    output: z.object({
+      removedModels: z.number().int().nonnegative(),
+      removedSources: z.number().int().nonnegative(),
+      updatedModels: z.number().int().nonnegative(),
+    }),
+  }),
+  deleteModel: procedure({
+    input: z.object({ modelId: z.string().min(1) }),
+    output: z.object({ deleted: z.boolean() }),
+  }),
   start: procedure({ input: empty, output: z.custom<GatewayStatus>() }),
   stop: procedure({ input: empty, output: empty }),
   usage: procedure({

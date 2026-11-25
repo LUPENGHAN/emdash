@@ -3,6 +3,7 @@ import type { ModelProvider } from '@core/features/model-providers/api';
 import {
   gatewayModelsSettingsSchema,
   migrateGatewayModelsV1,
+  removeGatewayProvider,
   upstreamProtocol,
   type GatewayModel,
 } from '../api/model-catalog';
@@ -39,6 +40,70 @@ const model: GatewayModel = {
 const published = migrateGatewayModelsV1({ version: 1, models: [model] }).models[0]!;
 
 describe('model-first routing', () => {
+  it('cascades a deleted provider through single-source and shared catalog models', () => {
+    const removedSource = { ...published.sources[0]!, id: 'removed-source' };
+    const survivingSource = {
+      ...published.sources[0]!,
+      id: 'surviving-source',
+      providerId: 'other',
+    };
+    const settings = gatewayModelsSettingsSchema.parse({
+      version: 2,
+      models: [
+        {
+          ...published,
+          id: 'only-removed',
+          primaryAlias: 'only-removed',
+          sources: [removedSource],
+          activeSourceByProtocol: { anthropic: removedSource.id },
+        },
+        {
+          ...published,
+          id: 'shared',
+          primaryAlias: 'shared',
+          revision: 4,
+          sources: [removedSource, survivingSource],
+          activeSourceByProtocol: {
+            anthropic: removedSource.id,
+            'openai-responses': survivingSource.id,
+          },
+        },
+      ],
+      ignoredSourceIds: [
+        `p:${JSON.stringify(removedSource.protocolModels)}`,
+        `other:${JSON.stringify(survivingSource.protocolModels)}`,
+      ],
+    });
+
+    const result = removeGatewayProvider(settings, 'p');
+
+    expect(result).toMatchObject({ removedModels: 1, removedSources: 2, updatedModels: 1 });
+    expect(result.settings.models).toHaveLength(1);
+    expect(result.settings.models[0]).toMatchObject({
+      id: 'shared',
+      revision: 5,
+      sources: [{ id: 'surviving-source', providerId: 'other' }],
+      activeSourceByProtocol: { 'openai-responses': 'surviving-source' },
+    });
+    expect(result.settings.ignoredSourceIds).toEqual([
+      `other:${JSON.stringify(survivingSource.protocolModels)}`,
+    ]);
+    expect(gatewayModelsSettingsSchema.safeParse(result.settings).success).toBe(true);
+  });
+
+  it('does not rewrite the catalog when the deleted provider has no sources', () => {
+    const settings = gatewayModelsSettingsSchema.parse({
+      version: 2,
+      models: [published],
+      ignoredSourceIds: [],
+    });
+
+    const result = removeGatewayProvider(settings, 'missing');
+
+    expect(result).toMatchObject({ removedModels: 0, removedSources: 0, updatedModels: 0 });
+    expect(result.settings.models[0]).toBe(settings.models[0]);
+  });
+
   it('migrates every legacy route losslessly without merging models or sources', () => {
     const legacy = {
       version: 1 as const,
@@ -79,6 +144,30 @@ describe('model-first routing', () => {
       ],
     });
     expect(migrated.models[1]).toMatchObject({ state: 'disabled', revision: 3 });
+  });
+
+  it('recognizes versionless legacy models after current defaults inject version 2', () => {
+    const mergedBySettingsStore = {
+      version: 2 as const,
+      ignoredSourceIds: [],
+      models: [model],
+    };
+
+    const migrated = gatewayModelsSettingsSchema.parse(mergedBySettingsStore);
+
+    expect(migrated).toMatchObject({
+      version: 2,
+      migration: { fromVersion: 1 },
+      legacyModels: [model],
+      models: [
+        {
+          id: model.id,
+          primaryAlias: model.alias,
+          displayName: model.name,
+          sources: [{ providerId: model.providerId }],
+        },
+      ],
+    });
   });
 
   it('uses the explicitly selected source per inbound protocol and never silently falls back', () => {

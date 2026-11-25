@@ -71,11 +71,15 @@ export type ChatCommands = {
   /**
    * Synchronously classify an `href` from a rendered markdown link.
    * Returns a workspace path and optional editor line for workspace files,
-   * or `{ kind: 'external' }` to keep the default external-link behavior.
+   * `{ kind: 'external' }` to keep browser behavior, or `{ kind: 'blocked' }`
+   * when the host recognizes the destination but cannot safely open it.
    */
   classifyLink?: (
     href: string
-  ) => { kind: 'workspace-file'; path: string; line?: number } | { kind: 'external' };
+  ) =>
+    | { kind: 'workspace-file'; path: string; line?: number }
+    | { kind: 'external' }
+    | { kind: 'blocked' };
 
   /**
    * Called when the user clicks a Mermaid diagram block preview.

@@ -23,6 +23,12 @@
   Do not mute all snapshot replies: initial snapshots can contain outstanding
   queries from a process started before subscription. Other queries keep their
   existing renderer behavior. Let xterm own write buffering and scheduling.
+- Codex file links use the internal `https://open-file.emdash.invalid/open?path=...`
+  target documented in `docs/adr/0009-terminal-agent-file-links.md`. Codex receives
+  `TERM_PROGRAM=vscode` because Emdash renders an OSC 8-capable xterm.js terminal;
+  other providers retain `TERM_PROGRAM=emdash`. Do not remove this override without
+  checking that visible replies still hide the target URL and clicks still open the
+  file in Emdash.
 - output parsing: consuming a DA query must preserve its introducer's effect on
   an interrupted escape sequence or string; test display and replies against xterm
 - provider-specific resume/session behavior

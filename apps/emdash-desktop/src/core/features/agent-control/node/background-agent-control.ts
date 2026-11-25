@@ -28,6 +28,26 @@ const messageRecordV1 = z.object({
   queued: z.boolean().optional(),
   reason: z.string().optional(),
 });
+const messageRecordV3 = z.object({
+  version: z.literal('3'),
+  fingerprint: z.string(),
+  promptId: z.string(),
+  conversationId: z.string(),
+  text: z.string(),
+  phase: z.enum([
+    'queued',
+    'delivering',
+    'delivered',
+    'injected',
+    'failed',
+    'delivery_unknown',
+    'handled',
+    'dismissed',
+  ]),
+  queued: z.boolean().optional(),
+  reason: z.string().optional(),
+  deliveryRequestId: z.string().optional(),
+});
 const messageRecord = defineVersionedSchema()
   .initial('1', messageRecordV1)
   .version(
@@ -38,6 +58,18 @@ const messageRecord = defineVersionedSchema()
     }),
     (record) => ({ ...record, version: '2' as const })
   )
+  .version('3', messageRecordV3, (record) => ({
+    ...record,
+    version: '3' as const,
+    phase:
+      record.phase === 'accepted'
+        ? ('delivered' as const)
+        : record.phase === 'sending'
+          ? ('delivery_unknown' as const)
+          : record.phase === 'handled' || record.phase === 'dismissed'
+            ? record.phase
+            : ('queued' as const),
+  }))
   .build();
 export type AgentMessageRecord = typeof messageRecord.Type;
 export type AgentTaskSnapshot = Task & {
@@ -67,7 +99,12 @@ type Dependencies = {
     conversation: Conversation,
     promptId: string,
     text: string
-  ): Promise<{ status: 'accepted'; queued: boolean } | { status: 'pending'; reason: string }>;
+  ): Promise<
+    | { status: 'delivered'; queued: boolean }
+    | { status: 'injected' }
+    | { status: 'queued'; reason: string }
+    | { status: 'failed'; reason: string }
+  >;
 };
 
 /** Authenticated discovery, reads and message acceptance never require a renderer. */
@@ -83,6 +120,45 @@ export class BackgroundAgentControl {
   private async saveMessage(key: string, record: AgentMessageRecord, taskId: string) {
     await this.deps.messages.setOrThrow(key, record);
     this.deps.emitMessagesChanged?.(taskId);
+  }
+  private publicStatus(record: AgentMessageRecord) {
+    return record.phase === 'delivering' ? ('delivery_unknown' as const) : record.phase;
+  }
+  private messageResult(record: AgentMessageRecord, requestId?: string) {
+    const status = this.publicStatus(record);
+    const nextAction =
+      status === 'queued' || status === 'failed'
+        ? 'Start or resume the target terminal, wait until it is idle, then retry deliver_message with the same request_id.'
+        : status === 'delivery_unknown'
+          ? 'Inspect the target terminal before retrying. If the prompt arrived, mark it handled; do not replay it automatically.'
+          : undefined;
+    return {
+      ...(requestId && { request_id: requestId }),
+      prompt_id: record.promptId,
+      conversation_id: record.conversationId,
+      status,
+      queued: record.queued,
+      reason: record.reason,
+      next_action: nextAction,
+    };
+  }
+  private async messageByPromptId(promptId: string) {
+    const matches: { key: string; record: AgentMessageRecord }[] = [];
+    for (const [key, value] of Object.entries(await this.deps.messages.getAll())) {
+      if (!value) continue;
+      let record: AgentMessageRecord;
+      try {
+        record = this.parseMessage(value);
+      } catch (error) {
+        this.deps.reportError?.(error, key);
+        continue;
+      }
+      if (record.promptId === promptId) matches.push({ key, record });
+    }
+    if (matches.length === 0) throw new Error('The message does not exist.');
+    if (matches.length > 1)
+      throw new Error('The prompt ID is not unique. Resolve the records first.');
+    return matches[0];
   }
   private async messageTarget(taskId: string, conversationId: string) {
     const task = await this.deps.task(taskId);
@@ -113,18 +189,30 @@ export class BackgroundAgentControl {
         if (conversation?.taskId === taskId) throw error;
         continue;
       }
-      if (this.inFlight.has(id) || !['prepared', 'pending', 'sending'].includes(record.phase))
+      if (
+        this.inFlight.has(id) ||
+        !['queued', 'failed', 'delivering', 'delivery_unknown'].includes(record.phase)
+      )
         continue;
       const conversation = await this.deps.conversation(record.conversationId);
       if (!conversation || conversation.taskId !== taskId) continue;
       await this.messageTarget(taskId, record.conversationId);
+      const status =
+        record.phase === 'delivering'
+          ? ('delivery_unknown' as const)
+          : record.phase === 'queued' ||
+              record.phase === 'failed' ||
+              record.phase === 'delivery_unknown'
+            ? record.phase
+            : null;
+      if (!status) continue;
       output.push({
         id,
         promptId: record.promptId,
         conversationId: record.conversationId,
         title: conversation.title,
         text: record.text,
-        status: record.phase === 'sending' ? 'delivery_unknown' : 'pending',
+        status,
         reason: record.reason,
       });
     }
@@ -140,7 +228,7 @@ export class BackgroundAgentControl {
       if (!saved) throw new Error('The message no longer exists.');
       const record = this.parseMessage(saved);
       await this.messageTarget(taskId, record.conversationId);
-      if (['accepted', 'handled', 'dismissed'].includes(record.phase)) return;
+      if (['delivered', 'injected', 'handled', 'dismissed'].includes(record.phase)) return;
       await this.saveMessage(id, { ...record, phase: resolution }, taskId);
     });
   }
@@ -155,6 +243,8 @@ export class BackgroundAgentControl {
         'get_task_status',
         'list_conversations',
         'send_message',
+        'get_message_status',
+        'deliver_message',
         'archive_task',
         'delete_task',
       ].includes(action.kind)
@@ -220,6 +310,10 @@ export class BackgroundAgentControl {
         return undefined;
       case 'send_message':
         return this.send(caller, action);
+      case 'get_message_status':
+        return this.getMessageStatus(caller, action.promptId);
+      case 'deliver_message':
+        return this.deliverMessage(caller, action.promptId, action.requestId);
       default:
         return undefined;
     }
@@ -265,48 +359,114 @@ export class BackgroundAgentControl {
       let record: AgentMessageRecord = saved
         ? this.parseMessage(saved)
         : {
-            version: '2' as const,
+            version: '3' as const,
             fingerprint,
             promptId: randomUUID(),
             conversationId: conversation.id,
             text: action.text,
-            phase: 'prepared' as AgentMessageRecord['phase'],
+            phase: 'queued' as AgentMessageRecord['phase'],
           };
       if (record.fingerprint !== fingerprint)
         throw new Error('This message request_id has different content or a different target.');
-      const result = () => ({
-        text: JSON.stringify({
-          request_id: requestId,
-          prompt_id: record.promptId,
-          conversation_id: conversation.id,
-          status: record.phase === 'sending' ? 'delivery_unknown' : record.phase,
-          queued: record.queued,
-          reason: record.reason,
-        }),
-      });
-      if (['accepted', 'sending', 'handled', 'dismissed'].includes(record.phase)) return result();
-      this.inFlight.add(key);
-      try {
-        await this.saveMessage(key, record, task.id);
-        record = { ...record, phase: 'sending', reason: undefined };
-        await this.saveMessage(key, record, task.id);
-        try {
-          const delivered = await this.deps.deliver(conversation, record.promptId, record.text);
-          record =
-            delivered.status === 'accepted'
-              ? { ...record, phase: 'accepted', queued: delivered.queued }
-              : { ...record, phase: 'pending', reason: delivered.reason };
-          await this.saveMessage(key, record, task.id);
-        } catch (error) {
-          // Acceptance may have reached the host. Preserve uncertainty instead of replaying input.
-          record = { ...record, reason: error instanceof Error ? error.message : String(error) };
-          await this.saveMessage(key, record, task.id);
-        }
-        return result();
-      } finally {
-        this.inFlight.delete(key);
-        this.deps.emitMessagesChanged?.(task.id);
-      }
+      if (
+        [
+          'delivered',
+          'injected',
+          'delivering',
+          'delivery_unknown',
+          'handled',
+          'dismissed',
+        ].includes(record.phase)
+      )
+        return { text: JSON.stringify(this.messageResult(record, requestId)) };
+      await this.saveMessage(key, record, task.id);
+      record = await this.attemptDelivery(key, record, conversation, task.id);
+      return { text: JSON.stringify(this.messageResult(record, requestId)) };
     });
+  }
+
+  private async getMessageStatus(
+    caller: AgentCaller,
+    promptId: string
+  ): Promise<AgentControlResult> {
+    const { record } = await this.messageByPromptId(promptId);
+    const conversation = await this.deps.conversation(record.conversationId);
+    if (!conversation) throw new Error('The target conversation is unavailable or deleted.');
+    const task = await this.taskFor(caller, conversation.taskId, 'control');
+    if (task.projectId !== conversation.projectId)
+      throw new Error('The target conversation has an invalid project binding.');
+    return { text: JSON.stringify(this.messageResult(record)) };
+  }
+
+  private async deliverMessage(
+    caller: AgentCaller,
+    promptId: string,
+    requestId: string
+  ): Promise<AgentControlResult> {
+    const found = await this.messageByPromptId(promptId);
+    return this.locks.runExclusive(found.key, async () => {
+      const saved = await this.deps.messages.getOrThrow(found.key);
+      if (!saved) throw new Error('The message no longer exists.');
+      let record = this.parseMessage(saved);
+      if (record.promptId !== promptId) throw new Error('The message changed.');
+      const conversation = await this.deps.conversation(record.conversationId);
+      if (!conversation) throw new Error('The target conversation is unavailable or deleted.');
+      const task = await this.taskFor(caller, conversation.taskId, 'control');
+      if (task.archivedAt) throw new Error('The target task is archived.');
+      if (task.projectId !== conversation.projectId)
+        throw new Error('The target conversation has an invalid project binding.');
+      if (
+        [
+          'delivered',
+          'injected',
+          'delivering',
+          'delivery_unknown',
+          'handled',
+          'dismissed',
+        ].includes(record.phase)
+      )
+        return { text: JSON.stringify(this.messageResult(record, requestId)) };
+      record = { ...record, deliveryRequestId: requestId };
+      await this.saveMessage(found.key, record, task.id);
+      record = await this.attemptDelivery(found.key, record, conversation, task.id);
+      return { text: JSON.stringify(this.messageResult(record, requestId)) };
+    });
+  }
+
+  private async attemptDelivery(
+    key: string,
+    initial: AgentMessageRecord,
+    conversation: Conversation,
+    taskId: string
+  ): Promise<AgentMessageRecord> {
+    let record = initial;
+    this.inFlight.add(key);
+    try {
+      record = { ...record, phase: 'delivering', reason: undefined, queued: undefined };
+      await this.saveMessage(key, record, taskId);
+      try {
+        const delivered = await this.deps.deliver(conversation, record.promptId, record.text);
+        record = {
+          ...record,
+          phase: delivered.status,
+          ...('queued' in delivered && typeof delivered.queued === 'boolean'
+            ? { queued: delivered.queued }
+            : { queued: undefined }),
+          ...('reason' in delivered ? { reason: delivered.reason } : { reason: undefined }),
+        };
+      } catch (error) {
+        // The write may have reached the host. Preserve uncertainty instead of replaying input.
+        record = {
+          ...record,
+          phase: 'delivery_unknown',
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+      await this.saveMessage(key, record, taskId);
+      return record;
+    } finally {
+      this.inFlight.delete(key);
+      this.deps.emitMessagesChanged?.(taskId);
+    }
   }
 }

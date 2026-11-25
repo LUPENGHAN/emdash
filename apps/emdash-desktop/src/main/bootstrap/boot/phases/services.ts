@@ -230,6 +230,7 @@ import { hostPathFromNative } from '@core/primitives/desktop-runtime/api';
 import { startPeriodicSweep } from '@core/primitives/periodic-sweep/node/periodic-sweep';
 import { DEFAULT_AGENT_GIT_CREDENTIALS } from '@core/primitives/project-settings/api';
 import { projectHostRef } from '@core/primitives/projects/api';
+import { buildPromptInjectionPayload } from '@core/primitives/prompt-injection/api/prompt-injection';
 import type { HostReachabilityProbe } from '@core/primitives/ssh/api';
 import { AppDbKeyValueStore } from '@core/services/app-db/node/key-value-store';
 import { conversations, tasks } from '@core/services/app-db/node/schema';
@@ -663,7 +664,8 @@ export async function bootServices(
     conversationEvents.on('conversation:deleted', (id) => modelGateway.forgetConversation(id))
   );
   void modelGateway
-    .restore()
+    .reconcileProviderInventory()
+    .then(() => modelGateway.restore())
     .catch(() => log.warn('Could not restore the model gateway. Retry from settings.'));
   const effectiveAgentConfig = createEffectiveAgentConfig({
     nativeSourceAvailable: async (agentId, config) => {
@@ -760,7 +762,7 @@ export async function bootServices(
             conversationId: main.conversationId,
             title: `Task result: ${main.tasks[event.taskId]?.name ?? event.taskId}`,
             text: `Task ${event.taskId}, result version ${event.version}, event ${event.id}\n${event.result.summary}\nCommits: ${event.result.commits.join(', ')}\nChecks:\n${event.result.checks.map((check) => `${check.passed ? 'Passed' : 'Failed'}: ${check.command}${check.output ? `\n${check.output}` : ''}`).join('\n')}\nUnresolved: ${event.result.unresolved.join('; ')}\nPRs: ${event.result.prUrls.join(', ')}`,
-            status: 'pending',
+            status: 'queued',
             reason: event.error,
           });
         }
@@ -797,6 +799,8 @@ export async function bootServices(
           'get_task_status',
           'list_conversations',
           'send_message',
+          'get_message_status',
+          'deliver_message',
           'archive_task',
           'delete_task',
         ].includes(action.kind)
@@ -1602,6 +1606,8 @@ export async function bootServices(
     },
     getDelegationDefaults: async (caller) => {
       const defaults = await coordinationRuntime.service?.defaultsForCaller(caller);
+      const callerRow = createConversationRegistry(db).getLive(caller.conversationId);
+      const callerConversation = callerRow ? mapConversationRowToConversation(callerRow) : null;
       return defaults
         ? {
             providerId: defaults.agent,
@@ -1609,8 +1615,9 @@ export async function bootServices(
             supplierId: defaults.supplierId,
             model: defaults.model,
             effort: defaults.effort,
+            permissionMode: callerConversation?.autoApprove === true ? 'full' : 'ask',
           }
-        : {};
+        : { permissionMode: callerConversation?.autoApprove === true ? 'full' : 'ask' };
     },
     getAgentSettings: (id) => providerOverrideSettings.getItem(id),
     getBranchDefaults: () => appSettingsService.get('project'),
@@ -1974,12 +1981,73 @@ export async function bootServices(
     },
     messages: new AppDbKeyValueStore<Record<string, AgentMessageRecord>>(db, 'agent-messages'),
     deliver: async (conversation, promptId, text) => {
-      if (conversation.type !== 'acp')
-        return {
-          status: 'pending',
-          reason:
-            'The terminal conversation requires explicit delivery in Emdash. No input was injected.',
-        };
+      if (conversation.type !== 'acp') {
+        if (conversation.agentStatus !== 'idle' && conversation.agentStatus !== 'completed')
+          return {
+            status: 'queued',
+            reason:
+              conversation.agentStatus === 'working'
+                ? 'The target agent is working. The message remains queued until the terminal is idle.'
+                : conversation.agentStatus === 'awaiting-input'
+                  ? 'The target terminal is awaiting interactive input, which may be a permission prompt. Resolve it first, then retry delivery.'
+                  : 'The target terminal state is not safely idle. Start or resume the conversation, wait until it is idle, then retry delivery.',
+          };
+        try {
+          await taskDelegation.service?.resources.activate(
+            conversation.taskId,
+            conversation.projectId
+          );
+          if (!conversation.sessionId)
+            return {
+              status: 'failed',
+              reason:
+                'The target conversation has never established an agent session. Start it once, wait until it is idle, then retry with the same request_id.',
+            };
+          await launchTuiConversation({
+            projectId: conversation.projectId,
+            taskId: conversation.taskId,
+            conversationId: conversation.id,
+            database: db,
+            telemetry: telemetryService,
+            taskSessions: taskSessionManager,
+            initialSize: { cols: 120, rows: 36 },
+          });
+          const target = await resolveConversationRuntimeTarget(
+            conversation.id,
+            workspaceIdentity,
+            db,
+            async (agentId, override) => (await effectiveAgentConfig(agentId, override))?.env,
+            sessionLaunchContexts,
+            prepareAgentLaunch
+          );
+          const runtime = await runtimes.client(target.host);
+          if (!runtime.success)
+            return {
+              status: 'failed',
+              reason: `The target host is unavailable (${runtime.error.type}). Restore the host, start or resume the target conversation, then retry with the same request_id.`,
+            };
+          const payload = buildPromptInjectionPayload({
+            providerId: conversation.providerId,
+            text,
+          });
+          const sent = await runtime.data.tuiAgents.sendInput({
+            conversationId: conversation.id,
+            data: `${payload}\r`,
+          });
+          if (!sent.success)
+            return {
+              status: 'failed',
+              reason:
+                'No active PTY owns the target conversation. Start or resume the target conversation, wait until it is idle, then retry with the same request_id.',
+            };
+          return { status: 'injected' };
+        } catch (error) {
+          return {
+            status: 'failed',
+            reason: `${error instanceof Error ? error.message : String(error)} Start or resume the target conversation, wait until it is idle, then retry with the same request_id.`,
+          };
+        }
+      }
       const ready = await (async () => {
         try {
           await taskDelegation.service?.resources.activate(
@@ -2012,7 +2080,7 @@ export async function bootServices(
           };
         }
       })();
-      if (!ready.success) return { status: 'pending', reason: ready.reason };
+      if (!ready.success) return { status: 'queued', reason: ready.reason };
       const sent = await ready.runtime.acp.sendPrompt(
         {
           conversationId: conversation.id,
@@ -2028,10 +2096,10 @@ export async function bootServices(
       );
       if (!sent.success)
         return {
-          status: 'pending',
+          status: 'failed',
           reason: `The target did not accept the message: ${JSON.stringify(sent.error)}`,
         };
-      return { status: 'accepted', queued: sent.data.queued };
+      return { status: 'delivered', queued: sent.data.queued };
     },
   });
 

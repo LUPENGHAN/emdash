@@ -193,6 +193,14 @@ export const findInTerminalCommand = defineCommand({
   keybinding: keybinding.fixed('Mod+F', { allowWhenTerminalFocused: true }),
 });
 
+export const findInPaneCommand = defineCommand({
+  id: 'workbench.findInPane',
+  title: 'Find in Preview',
+  description: 'Search the current document preview',
+  category: 'Editor',
+  keybinding: keybinding.fixed('Mod+F'),
+});
+
 export const closeTerminalSearchCommand = defineCommand({
   id: 'terminalSearch.close',
   title: 'Close Terminal Search',
@@ -272,6 +280,7 @@ export const WORKBENCH_COMMAND_DEFS = [
   saveEditorCommand,
   saveAllEditorsCommand,
   findInTerminalCommand,
+  findInPaneCommand,
   closeTerminalSearchCommand,
   ...tabIndexCommands,
 ] as const;
@@ -286,5 +295,6 @@ export const PANE_COMMAND_DEFS = [
   splitPaneDownCommand,
   cycleNextTabCommand,
   cyclePreviousTabCommand,
+  findInPaneCommand,
   ...tabIndexCommands,
 ] as const;

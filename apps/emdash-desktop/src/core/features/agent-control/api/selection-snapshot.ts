@@ -15,7 +15,7 @@ export const selectionValuesSchema = z.object({
   supplierId: z.string().nullable(),
   effort: z.string().nullable(),
 });
-export const delegationSelectionSnapshotSchema = z.object({
+const delegationSelectionSnapshotV1Schema = z.object({
   version: z.literal('1'),
   values: selectionValuesSchema,
   sources: z.object({
@@ -28,4 +28,24 @@ export const delegationSelectionSnapshotSchema = z.object({
   }),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 });
+const delegationSelectionSnapshotV2Schema = z.object({
+  version: z.literal('2'),
+  values: selectionValuesSchema.extend({
+    permissionMode: z.enum(['ask', 'full']),
+  }),
+  sources: z.object({
+    agent: selectionSourceSchema,
+    transport: selectionSourceSchema,
+    modelSource: selectionSourceSchema,
+    model: selectionSourceSchema,
+    supplierId: selectionSourceSchema,
+    effort: selectionSourceSchema,
+    permissionMode: selectionSourceSchema,
+  }),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export const delegationSelectionSnapshotSchema = z.discriminatedUnion('version', [
+  delegationSelectionSnapshotV1Schema,
+  delegationSelectionSnapshotV2Schema,
+]);
 export type DelegationSelectionSnapshot = z.infer<typeof delegationSelectionSnapshotSchema>;

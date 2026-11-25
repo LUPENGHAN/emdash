@@ -107,6 +107,7 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
   private static readonly _MAX_CLOSED_HISTORY = 20;
   renameRequest: { tabId: string; nonce: number } | null = null;
   private _contentFocuser: (() => void) | null = null;
+  private readonly _contentFinder = observable.box<(() => void) | undefined>(undefined);
   /** Disposes the per-pane onActivate effect reaction. */
   private readonly _onActivateDisposer: () => void;
 
@@ -458,6 +459,17 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
     this._contentFocuser = focuser;
   }
 
+  get contentFinder(): (() => void) | undefined {
+    return this._contentFinder.get();
+  }
+
+  registerContentFinder(finder: () => void): () => void {
+    runInAction(() => this._contentFinder.set(finder));
+    return () => {
+      if (this.contentFinder === finder) runInAction(() => this._contentFinder.set(undefined));
+    };
+  }
+
   focusActiveContent(): void {
     const focuser = this._contentFocuser;
     if (!focuser) return;
@@ -521,6 +533,7 @@ export class PaneStore<R extends TabRegistry = TabRegistry>
   }
 
   dispose(): void {
+    runInAction(() => this._contentFinder.set(undefined));
     this._onActivateDisposer();
     for (const id of [...this.tabOrder]) {
       this._disposeEntry(id);

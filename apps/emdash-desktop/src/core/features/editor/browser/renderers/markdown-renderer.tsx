@@ -17,9 +17,16 @@ import { useWorkspace } from '@core/features/workbench/api/browser/task-composit
 import { hostFileRefFromNativePath } from '@core/primitives/desktop-runtime/api';
 import { useMarkdownLinkOpener } from '@core/primitives/external-links/browser';
 import { usePaneContext } from '@core/primitives/workbench-shell/browser/tabs/pane-context';
+import { MarkdownPreviewSearch } from './markdown-preview-search';
 
 interface MarkdownEditorRendererProps {
   tab: FileTabResource;
+}
+
+interface MarkdownDocumentPreviewProps {
+  content: string;
+  containingFilePath: string;
+  documentKey: string;
 }
 
 /**
@@ -29,20 +36,35 @@ interface MarkdownEditorRendererProps {
 export const MarkdownEditorRenderer = observer(function MarkdownEditorRenderer({
   tab,
 }: MarkdownEditorRendererProps) {
-  const workspace = useWorkspace();
-  const workspacePath = workspace.path;
-  const { pane, paneId } = usePaneContext();
-
   // Reading bufferVersion creates a MobX tracking dependency so this observer
   // component re-renders whenever the buffer content changes or is first populated.
   void tab.bufferVersion;
   const content = tab.bufferText();
 
+  return (
+    <MarkdownDocumentPreview
+      content={content}
+      containingFilePath={tab.path}
+      documentKey={tab.path}
+    />
+  );
+});
+
+/** Shared document preview for ordinary Markdown files and modified diff sides. */
+export function MarkdownDocumentPreview({
+  content,
+  containingFilePath,
+  documentKey,
+}: MarkdownDocumentPreviewProps) {
+  const workspace = useWorkspace();
+  const workspacePath = workspace.path;
+  const { pane, paneId } = usePaneContext();
+
   const resolveImage = useCallback(
     async (src: string): Promise<string | null> => {
       const imagePath = resolveWorkspaceResourcePath({
         workspacePath,
-        containingFilePath: tab.path,
+        containingFilePath,
         resourcePath: src,
       });
       if (!imagePath) return null;
@@ -51,27 +73,27 @@ export const MarkdownEditorRenderer = observer(function MarkdownEditorRenderer({
       );
       return result.success && !result.data.truncated ? result.data.dataUrl : null;
     },
-    [workspace.sshConnectionId, workspacePath, tab.path]
+    [workspace.sshConnectionId, workspacePath, containingFilePath]
   );
 
   const openWorkspaceLink = useCallback(
     (href: string): boolean => {
       const target = resolveWorkspaceResourcePath({
         workspacePath,
-        containingFilePath: tab.path,
+        containingFilePath,
         resourcePath: href,
       });
       if (!target) return false;
       pane.open('file', { path: target }, { preview: false });
       return true;
     },
-    [workspacePath, tab.path, pane]
+    [workspacePath, containingFilePath, pane]
   );
 
   const openLink = useMarkdownLinkOpener(openWorkspaceLink);
   const headingPrefix = useMemo(
-    () => headingIdPrefix(`${paneId}\0${tab.path}`),
-    [paneId, tab.path]
+    () => headingIdPrefix(`${paneId}\0${documentKey}`),
+    [paneId, documentKey]
   );
   const [allHeadings, setAllHeadings] = useState<MarkdownHeading[]>([]);
   const headings = useMemo(
@@ -127,21 +149,27 @@ export const MarkdownEditorRenderer = observer(function MarkdownEditorRenderer({
   return (
     // Sized by the pane, not the window: a narrow split floats the outline over the file.
     <div className="@container relative flex h-full min-h-0 bg-(--em-surface)">
-      {/* File content: the interface translation leaves it (and its headings) alone. */}
-      <div
-        ref={scrollRef}
-        translate="no"
-        className="relative h-full min-w-0 flex-1 overflow-y-auto"
-      >
-        <Markdown
-          content={content}
-          variant="full"
-          className="w-full max-w-3xl px-8 py-8"
-          resolveImage={resolveImage}
-          onOpenLink={handleLink}
-          headingIdPrefix={headingPrefix}
-          onHeadings={setAllHeadings}
-        />
+      <div className="relative flex h-full min-w-0 flex-1 flex-col">
+        <MarkdownPreviewSearch key={documentKey} scrollRef={scrollRef} />
+        {/* File content: the interface translation leaves it (and its headings) alone. */}
+        <div
+          ref={scrollRef}
+          translate="no"
+          role="region"
+          aria-label="Markdown 预览"
+          tabIndex={0}
+          className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        >
+          <Markdown
+            content={content}
+            variant="full"
+            className="mx-auto w-full max-w-3xl px-8 py-8"
+            resolveImage={resolveImage}
+            onOpenLink={handleLink}
+            headingIdPrefix={headingPrefix}
+            onHeadings={setAllHeadings}
+          />
+        </div>
       </div>
       {headings.length > 0 ? (
         <>
@@ -160,7 +188,7 @@ export const MarkdownEditorRenderer = observer(function MarkdownEditorRenderer({
       ) : null}
     </div>
   );
-});
+}
 
 type OutlineProps = {
   headings: MarkdownHeading[];
@@ -173,7 +201,7 @@ function MarkdownOutline({ collapsed, ...props }: OutlineProps & { collapsed: bo
   if (collapsed) {
     return (
       <div className="hidden w-8 shrink-0 justify-center border-l border-border pt-2 @2xl:flex">
-        <OutlineButton label="Show outline" onClick={() => writeOutlineCollapsed(false)}>
+        <OutlineButton label="显示大纲" onClick={() => writeOutlineCollapsed(false)}>
           <PanelRightOpen className="size-3.5" />
         </OutlineButton>
       </div>
@@ -181,11 +209,11 @@ function MarkdownOutline({ collapsed, ...props }: OutlineProps & { collapsed: bo
   }
   return (
     <nav
-      aria-label="Outline"
+      aria-label="大纲"
       className="hidden w-56 shrink-0 flex-col border-l border-border pr-3 pl-3 @2xl:flex"
     >
       <OutlineHeader>
-        <OutlineButton label="Hide outline" onClick={() => writeOutlineCollapsed(true)}>
+        <OutlineButton label="隐藏大纲" onClick={() => writeOutlineCollapsed(true)}>
           <PanelRightClose className="size-3.5" />
         </OutlineButton>
       </OutlineHeader>
@@ -200,7 +228,7 @@ function FloatingMarkdownOutline({ onSelect, ...props }: OutlineProps) {
   if (!open) {
     return (
       <div className="absolute top-2 right-4 @2xl:hidden">
-        <OutlineButton label="Show outline" onClick={() => setOpen(true)}>
+        <OutlineButton label="显示大纲" onClick={() => setOpen(true)}>
           <List className="size-3.5" />
         </OutlineButton>
       </div>
@@ -209,7 +237,7 @@ function FloatingMarkdownOutline({ onSelect, ...props }: OutlineProps) {
   return (
     <div className="absolute inset-0 z-10 @2xl:hidden" onClick={() => setOpen(false)}>
       <nav
-        aria-label="Outline"
+        aria-label="大纲"
         className="absolute top-0 right-0 bottom-0 flex w-56 max-w-[80%] flex-col border-l border-border bg-(--em-surface) pr-3 pl-3 shadow-lg"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
@@ -217,7 +245,7 @@ function FloatingMarkdownOutline({ onSelect, ...props }: OutlineProps) {
         }}
       >
         <OutlineHeader>
-          <OutlineButton label="Hide outline" onClick={() => setOpen(false)}>
+          <OutlineButton label="隐藏大纲" onClick={() => setOpen(false)}>
             <X className="size-3.5" />
           </OutlineButton>
         </OutlineHeader>
@@ -236,7 +264,7 @@ function FloatingMarkdownOutline({ onSelect, ...props }: OutlineProps) {
 function OutlineHeader({ children }: { children: ReactNode }) {
   return (
     <div className="flex items-center justify-between py-2 pl-2">
-      <span className="text-xs font-medium text-foreground-muted">Outline</span>
+      <span className="text-xs font-medium text-foreground-muted">大纲</span>
       {children}
     </div>
   );
@@ -271,6 +299,7 @@ function OutlineList({ headings, activeId, onSelect }: OutlineProps) {
         <li key={heading.id}>
           <button
             type="button"
+            aria-current={activeId === heading.id ? 'location' : undefined}
             className={`hover:bg-muted block w-full truncate rounded px-2 py-1 text-left text-xs ${
               heading.depth === 2 ? 'pl-4' : heading.depth === 3 ? 'pl-6' : ''
             } ${activeId === heading.id ? 'text-foreground' : 'text-foreground-muted'}`}

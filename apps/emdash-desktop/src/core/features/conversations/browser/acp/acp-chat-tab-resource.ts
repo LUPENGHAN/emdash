@@ -1,3 +1,4 @@
+import type { AcpSessionStartMode } from '@emdash/core/runtimes/acp/api/client';
 import { reaction } from 'mobx';
 import { conversationRegistry } from '@core/features/conversations/api/browser/stores/conversation-registry';
 import type {
@@ -16,9 +17,11 @@ import type { AcpChatStore } from './acp-chat-store';
 export class AcpChatTabResource implements TabResource {
   readonly store: AcpChatStore;
   private readonly disposeCloseOnDelete: () => void;
+  private authorizedStart: AcpSessionStartMode | undefined;
 
-  constructor(store: AcpChatStore, handle?: TabHandle) {
+  constructor(store: AcpChatStore, handle?: TabHandle, authorizedStart?: AcpSessionStartMode) {
     this.store = store;
+    this.authorizedStart = authorizedStart;
     const { taskId, conversationId } = store;
     // Auto-close this tab when the conversation is deleted (mirrors ConversationTabResource),
     // e.g. after it was switched to a terminal conversation.
@@ -47,7 +50,9 @@ export class AcpChatTabResource implements TabResource {
 
   onActivate(): void {
     // Lazy bootstrap: safe to call repeatedly (idempotent).
-    this.store.bootstrap();
+    const mode = this.authorizedStart;
+    this.authorizedStart = undefined;
+    this.store.bootstrap(mode);
     // Mirror ConversationTabResource: clear the notification indicator when
     // the user opens this tab.
     const conversation = conversationRegistry

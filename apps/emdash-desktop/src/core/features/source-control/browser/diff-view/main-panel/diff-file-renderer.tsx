@@ -1,17 +1,16 @@
 import type { GitObjectRef } from '@emdash/core/runtimes/git/api';
-import { Markdown } from '@emdash/ui/react/components';
 import { Spinner } from '@emdash/ui/react/primitives';
 import { observer } from 'mobx-react-lite';
 import type * as monaco from 'monaco-editor';
 import { useCallback, useEffect, useState } from 'react';
 import type { ContentStatus } from '@core/features/editor/api/browser/open-file-store/open-file-store';
-import { resolveWorkspaceResourcePath } from '@core/features/editor/api/browser/renderers/workspace-resource-path';
+import { MarkdownDocumentPreview } from '@core/features/editor/api/browser/renderers/markdown-document-preview';
 import {
+  StickyFacetEditor,
   StickyDiffEditor,
   type DiffSideModel,
 } from '@core/features/editor/contributions/browser/monaco/sticky-diff-editor';
 import { HtmlContentRenderer } from '@core/features/editor/contributions/browser/renderers/html-renderer';
-import { readImageFile } from '@core/features/files/api/browser/file-content';
 import { draftCommentsStoreToken } from '@core/features/source-control/contributions/browser/task-stores';
 import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-selectors';
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
@@ -22,17 +21,15 @@ import {
   useWorkspaceId,
 } from '@core/features/workbench/api/browser/task-composition-context';
 import { resolveWorkspacePath } from '@core/features/workspaces/api/browser/workspace-path';
-import { hostFileRefFromNativePath } from '@core/primitives/desktop-runtime/api';
-import { useMarkdownLinkOpener } from '@core/primitives/external-links/browser';
 import { HEAD_REF } from '@core/primitives/git/api';
 import { gitRefToString } from '@core/primitives/git/api';
 import {
   getDraftCommentTargetKey,
   type DraftCommentTarget,
 } from '@core/primitives/line-comments/api';
-import { usePaneContext } from '@core/primitives/workbench-shell/browser/tabs/pane-context';
 import { MonacoCommentManager } from '../comments/monaco-comment-manager';
 import type { DiffTabResource } from '../stores/diff-tab-resource';
+import type { DiffViewMode } from '../stores/diff-tab-resource';
 import { ImageDiffView } from './image-diff-view';
 import { useDiffFacets } from './use-diff-facets';
 
@@ -116,9 +113,14 @@ const TextDiffRenderer = observer(function TextDiffRenderer({ tab }: DiffFileRen
 
   if (!diffView) return null;
 
-  if (tab.viewMode === 'preview' && tab.renderer.kind === 'text' && tab.renderer.previewKind) {
+  if (tab.viewMode !== 'diff' && tab.renderer.kind === 'text' && tab.renderer.previewKind) {
     return (
-      <DiffContentPreview tab={tab} side={sides.modified} previewKind={tab.renderer.previewKind} />
+      <DiffModifiedContent
+        tab={tab}
+        side={sides.modified}
+        previewKind={tab.renderer.previewKind}
+        mode={tab.viewMode}
+      />
     );
   }
 
@@ -137,22 +139,23 @@ const TextDiffRenderer = observer(function TextDiffRenderer({ tab }: DiffFileRen
   );
 });
 
-interface DiffContentPreviewProps {
+interface DiffModifiedContentProps {
   tab: DiffTabResource;
   /** The diff's modified side — the content the preview renders. */
   side: DiffSideModel | null;
   previewKind: 'markdown' | 'html';
+  mode: Exclude<DiffViewMode, 'diff'>;
 }
 
-const DiffContentPreview = observer(function DiffContentPreview({
+const DiffModifiedContent = observer(function DiffModifiedContent({
   tab,
   side,
   previewKind,
-}: DiffContentPreviewProps) {
+  mode,
+}: DiffModifiedContentProps) {
   const workspace = useWorkspace();
   const workspacePath = workspace.path;
   const containingFilePath = resolveWorkspacePath(workspacePath, tab.path);
-  const { pane } = usePaneContext();
 
   // The handle appears asynchronously on the observable entry; buffer edits
   // only fire the handle's change event, so bump a version to re-render.
@@ -163,18 +166,6 @@ const DiffContentPreview = observer(function DiffContentPreview({
     return handle.onDidChange(() => setContentVersion((v) => v + 1));
   }, [handle]);
 
-  const openWorkspaceLink = (href: string): boolean => {
-    const target = resolveWorkspaceResourcePath({
-      workspacePath,
-      containingFilePath,
-      resourcePath: href,
-    });
-    if (!target) return false;
-    pane.open('file', { path: target }, { preview: false });
-    return true;
-  };
-  const openLink = useMarkdownLinkOpener(openWorkspaceLink);
-
   if (tab.status === 'deleted') {
     return (
       <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
@@ -184,10 +175,30 @@ const DiffContentPreview = observer(function DiffContentPreview({
   }
 
   const status = sideStatus(side);
-  if (status.kind !== 'ready' || !handle) {
+  if (status.kind !== 'ready' || side?.kind !== 'facet' || !handle) {
     return (
       <div className="relative h-full bg-(--em-surface)">
         <DiffPreviewStatusOverlay status={status} />
+      </div>
+    );
+  }
+
+  if (mode === 'source') {
+    const readOnly = side.facet.kind !== 'buffer' || side.entry.readOnly;
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-(--em-surface)">
+        {readOnly ? (
+          <div className="shrink-0 border-b border-border bg-background-secondary px-3 py-1 text-xs text-foreground-muted">
+            当前内容来自 Git 快照，只能查看，不能直接编辑。
+          </div>
+        ) : null}
+        <div className="min-h-0 flex-1">
+          <StickyFacetEditor
+            side={side}
+            filePath={tab.path}
+            ariaLabel={previewKind === 'markdown' ? 'Markdown 源码' : 'HTML 源码'}
+          />
+        </div>
       </div>
     );
   }
@@ -198,29 +209,12 @@ const DiffContentPreview = observer(function DiffContentPreview({
     return <HtmlContentRenderer filePath={containingFilePath} rawContent={content} />;
   }
 
-  const resolveImage = async (src: string): Promise<string | null> => {
-    const imagePath = resolveWorkspaceResourcePath({
-      workspacePath,
-      containingFilePath,
-      resourcePath: src,
-    });
-    if (!imagePath) return null;
-    const result = await readImageFile(
-      hostFileRefFromNativePath(imagePath, workspace.sshConnectionId)
-    );
-    return result.success && !result.data.truncated ? result.data.dataUrl : null;
-  };
-
   return (
-    <div className="relative h-full overflow-y-auto bg-(--em-surface)">
-      <Markdown
-        content={content}
-        variant="full"
-        className="w-full max-w-3xl px-8 py-8"
-        resolveImage={resolveImage}
-        onOpenLink={openLink}
-      />
-    </div>
+    <MarkdownDocumentPreview
+      content={content}
+      containingFilePath={containingFilePath}
+      documentKey={`diff:${tab.tabId}`}
+    />
   );
 });
 

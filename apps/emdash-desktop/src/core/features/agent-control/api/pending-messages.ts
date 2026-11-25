@@ -6,7 +6,7 @@ export const pendingAgentMessageSchema = z.object({
   conversationId: z.string(),
   title: z.string(),
   text: z.string(),
-  status: z.enum(['pending', 'delivery_unknown']),
+  status: z.enum(['queued', 'failed', 'delivery_unknown']),
   reason: z.string().optional(),
 });
 export type PendingAgentMessage = z.infer<typeof pendingAgentMessageSchema>;

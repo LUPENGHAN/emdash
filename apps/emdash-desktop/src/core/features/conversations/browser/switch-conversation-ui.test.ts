@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Conversation } from '@core/primitives/conversations/api';
 import {
+  getAcpChatResourceManager,
+  releaseAcpChatResourceManager,
+} from './acp/acp-chat-resource-manager';
+import {
   canSwitchConversationUi,
+  switchConversationUiAndOpen,
   switchConversationUiCommands,
   switchConversationUi,
   switchTarget,
@@ -36,8 +41,9 @@ function conversation(overrides: Partial<Conversation>): Conversation {
   } as Conversation;
 }
 
+const paneOpen = vi.hoisted(() => vi.fn());
 vi.mock('@core/features/workbench/api/browser/task-composition-selectors', () => ({
-  getTaskComposition: vi.fn(),
+  getTaskComposition: () => ({ paneLayout: { open: paneOpen } }),
 }));
 
 const sshConnection = vi.hoisted(() => ({ id: undefined as string | undefined }));
@@ -46,6 +52,36 @@ vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
 }));
 
 describe('canSwitchConversationUi', () => {
+  it('authorizes exactly one resume when an explicit terminal-to-chat switch opens', async () => {
+    const source = conversation({
+      providerId: 'codex',
+      sessionId: 'thread-1',
+    });
+    const replacement = conversation({
+      id: 'replacement',
+      type: 'acp',
+      providerId: 'codex',
+      sessionId: 'thread-1',
+    });
+    const restart = vi.spyOn(restartModule, 'restartConversation').mockResolvedValue(replacement);
+    try {
+      await switchConversationUiAndOpen(source);
+
+      expect(paneOpen).toHaveBeenCalledWith(
+        'acp-chat',
+        { conversationId: 'replacement' },
+        { preview: false }
+      );
+      const manager = getAcpChatResourceManager(source.taskId, source.projectId);
+      expect(manager.consumeAuthorizedStart('replacement')).toBe('resume');
+      expect(manager.consumeAuthorizedStart('replacement')).toBeUndefined();
+    } finally {
+      restart.mockRestore();
+      releaseAcpChatResourceManager(source.taskId);
+      paneOpen.mockClear();
+    }
+  });
+
   it.each([false, true])(
     'preserves the gateway route when changing UI (pending: %s)',
     async (pending) => {

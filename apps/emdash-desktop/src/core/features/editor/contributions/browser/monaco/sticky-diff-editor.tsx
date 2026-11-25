@@ -12,6 +12,11 @@ import {
 import { DIFF_EDITOR_BASE_OPTIONS } from '@core/features/editor/browser/monaco/editorConfig';
 import { installMonacoFacetBinder } from '@core/features/editor/browser/monaco/install-monaco-facet-binder';
 import { monacoBootstrap } from '@core/features/editor/browser/monaco/monaco-bootstrap';
+import {
+  addMonacoKeyboardShortcuts,
+  configureMonacoEditor,
+} from '@core/features/editor/browser/monaco/monaco-config';
+import { DEFAULT_EDITOR_OPTIONS } from '@core/features/editor/browser/renderers/utils';
 import { openModal } from '@core/manifests/browser/modal-api';
 import { useTheme } from '@core/primitives/theme/browser';
 
@@ -143,6 +148,87 @@ async function saveDiffBuffer(entry: OpenFileEntry, filePath: string): Promise<v
     return;
   }
   await openFileStore.save(entry, { overwrite: true });
+}
+
+export interface StickyFacetEditorProps {
+  /** The modified side displayed as a normal source editor. */
+  side: DiffSideModel;
+  /** Checkout-relative path, used by the save-conflict dialog. */
+  filePath: string;
+  ariaLabel?: string;
+}
+
+/**
+ * A single-side Monaco editor backed by the same facet model used by the diff.
+ * Buffer facets stay editable and saveable; Git facets remain read-only snapshots.
+ */
+export function StickyFacetEditor({
+  side,
+  filePath,
+  ariaLabel = '文件源码',
+}: StickyFacetEditorProps) {
+  const mountRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const attachedUriRef = useRef<string | undefined>(undefined);
+  const sideRef = useRef(side);
+  sideRef.current = side;
+  const filePathRef = useRef(filePath);
+  filePathRef.current = filePath;
+  const { effectiveTheme } = useTheme();
+
+  useEffect(() => {
+    const m = monacoBootstrap.getMonaco();
+    if (!m || !mountRef.current) return;
+    const editor = m.editor.create(mountRef.current, {
+      ...DEFAULT_EDITOR_OPTIONS,
+      readOnly: true,
+      glyphMargin: true,
+    });
+    editorRef.current = editor;
+    configureMonacoEditor(editor);
+    addMonacoKeyboardShortcuts(editor, m, {
+      onSave: () => {
+        const current = sideRef.current;
+        if (current.kind !== 'facet' || current.facet.kind !== 'buffer' || current.entry.readOnly) {
+          return;
+        }
+        void saveDiffBuffer(current.entry, filePathRef.current);
+      },
+    });
+
+    return () => {
+      installMonacoFacetBinder().detach(editor, attachedUriRef.current);
+      attachedUriRef.current = undefined;
+      editor.dispose();
+      editorRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    monacoBootstrap.setTheme(effectiveTheme);
+  }, [effectiveTheme]);
+
+  const sideUri = side.kind === 'facet' ? side.uri : null;
+  const sideReadOnly = side.kind !== 'facet' || side.facet.kind !== 'buffer' || side.entry.readOnly;
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || side.kind !== 'facet') return;
+    const binder = installMonacoFacetBinder();
+    binder.attach(editor, side.uri, attachedUriRef.current);
+    editor.updateOptions({ readOnly: sideReadOnly });
+    attachedUriRef.current = side.uri;
+    editor.layout();
+    return () => {
+      if (editorRef.current !== editor) return;
+      if (attachedUriRef.current !== side.uri) return;
+      binder.detach(editor, side.uri);
+      attachedUriRef.current = undefined;
+    };
+  }, [side, sideUri, sideReadOnly]);
+
+  return (
+    <div ref={mountRef} role="region" aria-label={ariaLabel} className="h-full min-h-0 w-full" />
+  );
 }
 
 export function StickyDiffEditor({

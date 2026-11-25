@@ -8,7 +8,7 @@ import type {
 } from '@core/primitives/workbench-shell/browser/tabs/core/tab-provider';
 import type { DiffTabManager } from './diff-tab-manager';
 
-export type DiffViewMode = 'diff' | 'preview';
+export type DiffViewMode = 'diff' | 'source' | 'preview';
 export type DiffPreviewKind = 'markdown' | 'html';
 export type DiffRendererData =
   | { kind: 'text'; previewKind?: DiffPreviewKind }

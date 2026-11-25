@@ -517,7 +517,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
     'send_message',
     {
       description:
-        'Send a message to an authorized conversation. Get IDs from list_conversations and reuse request_id when retrying. ACP messages queue in the background; terminal messages retain a pending state when automatic delivery cannot be confirmed.',
+        'Queue a message for an authorized conversation and attempt safe delivery. Returns delivered for ACP acceptance, injected only after PTY input is written, queued when the terminal is busy, failed for a known non-delivery, or delivery_unknown when replay would be unsafe. Reuse request_id when retrying.',
       inputSchema: {
         conversation_id: z.string(),
         text: z.string().min(1),
@@ -531,6 +531,30 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         text,
         ...(request_id && { requestId: request_id }),
       })
+  );
+
+  server.registerTool(
+    'get_message_status',
+    {
+      description:
+        'Read the durable delivery state of a message created by send_message. queued is not delivered; injected means the PTY received the prompt and Enter.',
+      inputSchema: { prompt_id: z.string().min(1) },
+    },
+    ({ prompt_id }) => dispatch({ kind: 'get_message_status', promptId: prompt_id })
+  );
+
+  server.registerTool(
+    'deliver_message',
+    {
+      description:
+        'Attempt delivery of a queued or known-failed message. PTY input is injected only when the target is idle and active. Reuse the same request_id when retrying so successful input is never duplicated.',
+      inputSchema: {
+        prompt_id: z.string().min(1),
+        request_id: z.string().min(1).max(200),
+      },
+    },
+    ({ prompt_id, request_id }) =>
+      dispatch({ kind: 'deliver_message', promptId: prompt_id, requestId: request_id })
   );
 
   server.registerTool(
@@ -633,6 +657,10 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
           .nullable()
           .optional()
           .describe('Supported reasoning effort; null follows the adapter default'),
+        permission_mode: z
+          .enum(['ask', 'full'])
+          .optional()
+          .describe('Agent permission mode; omit to inherit the calling conversation permission'),
       },
     },
     ({
@@ -650,6 +678,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
       supplier_id,
       connection,
       effort,
+      permission_mode,
     }) =>
       dispatch({
         kind: 'create_task',
@@ -672,6 +701,7 @@ export function registerAgentControlTools(server: McpServer, ctx: AgentControlTo
         ...(supplier_id && { supplierId: supplier_id }),
         ...(connection && { connection }),
         ...(effort !== undefined && { effort }),
+        ...(permission_mode && { permissionMode: permission_mode }),
       })
   );
 

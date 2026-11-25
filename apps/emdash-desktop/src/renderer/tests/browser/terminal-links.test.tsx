@@ -149,6 +149,21 @@ describe('terminal links and copy through real xterm and usePty', () => {
     }
   );
 
+  it('opens a short named Emdash file link in the task without exposing its path', async () => {
+    const uri =
+      'https://open-file.emdash.invalid/open?path=%2FUsers%2Ftest%2Fproject%2Fsrc%2Fapp.ts%3A42';
+    await write(`\x1b[?1000h\x1b[?1006h\x1b]8;;${uri}\x07启动策略\x1b]8;;\x07`);
+    mouse('mousemove', 3);
+    await expect.poll(() => pty.getHoveredOscLink()).toBe(uri);
+    input.length = 0;
+    mouse('mousedown', 3);
+    mouse('mouseup', 3);
+    expect(openFile).toHaveBeenCalledExactlyOnceWith('/Users/test/project/src/app.ts');
+    expect(openLink).not.toHaveBeenCalled();
+    expect(openExternalFile).not.toHaveBeenCalled();
+    expect(input).toEqual([]);
+  });
+
   it('opens a quoted Unicode image path without passing its modified click to the TUI', async () => {
     await write('\x1b[?1000h\x1b[?1006hopen "/tmp/图片 1.png" here');
     const modifier = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
@@ -225,7 +240,7 @@ describe('terminal links and copy through real xterm and usePty', () => {
     expect(input).toEqual([]);
   });
 
-  it('blocks invalid image destinations instead of passing the click to the TUI', async () => {
+  it('blocks invalid file destinations instead of passing the click to the TUI', async () => {
     const notify = vi.spyOn(toast, 'error');
     await write('\x1b[?1000h\x1b[?1006h\x1b]8;;file://other/tmp/image.png\x07image\x1b]8;;\x07');
     mouse('mousemove', 3);
@@ -240,27 +255,41 @@ describe('terminal links and copy through real xterm and usePty', () => {
     expect(input).toEqual([]);
   });
 
-  it('leaves other OSC 8 file links to a mouse-reporting TUI', async () => {
+  it.each([9, 1000, 1002, 1003])(
+    'opens an OSC 8 source file in Emdash without reporting a mouse click in mode %s',
+    async (mode) => {
+      await write(`\x1b[?${mode}h\x1b[?1006h\x1b]8;;file:///tmp/code.ts\x07code\x1b]8;;\x07`);
+      mouse('mousemove', 3);
+      await expect.poll(() => pty.getHoveredOscLink()).toBe('file:///tmp/code.ts');
+      input.length = 0;
+      mouse('mousedown', 3);
+      mouse('mouseup', 3);
+      expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/code.ts');
+      expect(openExternalFile).not.toHaveBeenCalled();
+      expect(input).toEqual([]);
+    }
+  );
+
+  it('opens an OSC 8 source file in Emdash when mouse reporting is off', async () => {
     await write('\x1b[?1000h\x1b[?1006h\x1b]8;;file:///tmp/code.ts\x07code\x1b]8;;\x07');
+    await write('\x1b[?1000l');
     mouse('mousemove', 3);
-    await frame();
-    expect(pty.getHoveredOscLink()).toBeNull();
-    input.length = 0;
+    await expect.poll(() => pty.getHoveredOscLink()).toBe('file:///tmp/code.ts');
     mouse('mousedown', 3);
     mouse('mouseup', 3);
-    expect(openFile).not.toHaveBeenCalled();
-    expect(input).toEqual(['\x1b[<0;3;1M', '\x1b[<0;3;1m']);
+    expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/code.ts');
+    expect(openExternalFile).not.toHaveBeenCalled();
+    expect(input).toEqual([]);
   });
 
-  it('preserves the plain file gesture beneath a non-image OSC link', async () => {
+  it('opens a source-file OSC link in Emdash even when its label is a plain path', async () => {
     await write('\x1b]8;;file:///tmp/source.ts\x07/tmp/source.ts\x1b]8;;\x07');
-    const modifier = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
-    mouse('mousemove', 3, 1, modifier);
+    mouse('mousemove', 3);
     await frame();
-    mouse('mousedown', 3, 1, modifier);
-    mouse('mouseup', 3, 1, modifier);
-    expect(openExternalFile).toHaveBeenCalledExactlyOnceWith('/tmp/source.ts');
-    expect(openFile).not.toHaveBeenCalled();
+    mouse('mousedown', 3);
+    mouse('mouseup', 3);
+    expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/source.ts');
+    expect(openExternalFile).not.toHaveBeenCalled();
   });
 
   it('opens a plain absolute image path in the task with the file-link modifier', async () => {
@@ -285,6 +314,38 @@ describe('terminal links and copy through real xterm and usePty', () => {
       mouse('mousedown', 10, 1, modifier);
       mouse('mouseup', 10, 1, modifier);
       expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/screenshot.png');
+      expect(openExternalFile).not.toHaveBeenCalled();
+      expect(input).toEqual([]);
+    }
+  );
+
+  it.each([9, 1000, 1002, 1003])(
+    'opens a plain source file in Emdash without reporting its click in mode %s',
+    async (mode) => {
+      await write(`\x1b[?${mode}h\x1b[?1006hopen /tmp/source.ts:42 here`);
+      mouse('mousemove', 10);
+      await frame();
+      input.length = 0;
+      mouse('mousedown', 10);
+      mouse('mouseup', 10);
+      expect(openFile).toHaveBeenCalledExactlyOnceWith('/tmp/source.ts');
+      expect(openExternalFile).not.toHaveBeenCalled();
+      expect(input).toEqual([]);
+    }
+  );
+
+  it.each(['/tmp/source.ts:42', 'src/core/source.ts#L42C3'])(
+    'opens a path OSC target %s in Emdash without passing it to the TUI',
+    async (target) => {
+      await write(`\x1b[?1000h\x1b[?1006h\x1b]8;;${target}\x07source\x1b]8;;\x07`);
+      mouse('mousemove', 3);
+      await expect.poll(() => pty.getHoveredOscLink()).toBe(target);
+      input.length = 0;
+      mouse('mousedown', 3);
+      mouse('mouseup', 3);
+      expect(openFile).toHaveBeenCalledExactlyOnceWith(
+        target.startsWith('/') ? '/tmp/source.ts' : 'src/core/source.ts'
+      );
       expect(openExternalFile).not.toHaveBeenCalled();
       expect(input).toEqual([]);
     }

@@ -232,7 +232,7 @@ it('persists effective selection values and their sources across changed default
   };
   const first = JSON.parse((await service.dispatch(t.caller, request)).text);
   expect(first.selection_snapshot).toMatchObject({
-    version: '1',
+    version: '2',
     values: {
       agent: 'claude',
       transport: 'pty',
@@ -240,6 +240,7 @@ it('persists effective selection values and their sources across changed default
       model: 'shared',
       supplierId: null,
       effort: 'low',
+      permissionMode: 'ask',
     },
     sources: {
       agent: 'main-default',
@@ -248,6 +249,7 @@ it('persists effective selection values and their sources across changed default
       model: 'main-default',
       supplierId: 'adapter-default',
       effort: 'request',
+      permissionMode: 'caller',
     },
     fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
   });
@@ -264,6 +266,42 @@ it('persists effective selection values and their sources across changed default
   );
   expect(getSettings).not.toHaveBeenCalled();
   expect(getDefaults).not.toHaveBeenCalled();
+});
+
+it('inherits the caller permission and lets an explicit task permission override it', async () => {
+  const t = await setup();
+  const service = createBackendTaskDelegation({
+    ...t.dependencies,
+    getDelegationDefaults: async () => ({ permissionMode: 'full' as const }),
+  });
+  const inherited: PreparedTaskDelegation = await service.resources.prepare(
+    t.caller,
+    { kind: 'create_task', name: 'Inherited', prompt: 'Implement' },
+    { taskId: 'inherited', conversationId: 'inherited-conversation' }
+  );
+  expect(inherited.taskConfig.initialConversation?.autoApprove).toBe(true);
+  expect(inherited.selectionSnapshot).toMatchObject({
+    version: '2',
+    values: { permissionMode: 'full' },
+    sources: { permissionMode: 'caller' },
+  });
+
+  const explicit: PreparedTaskDelegation = await service.resources.prepare(
+    t.caller,
+    {
+      kind: 'create_task',
+      name: 'Explicit',
+      prompt: 'Implement',
+      permissionMode: 'ask',
+    },
+    { taskId: 'explicit', conversationId: 'explicit-conversation' }
+  );
+  expect(explicit.taskConfig.initialConversation?.autoApprove).toBe(false);
+  expect(explicit.selectionSnapshot).toMatchObject({
+    version: '2',
+    values: { permissionMode: 'ask' },
+    sources: { permissionMode: 'request' },
+  });
 });
 
 it('forces delegated work into a terminal even when a caller requests structured chat', async () => {

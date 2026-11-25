@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 import { getAgentsClient, hostRefFromConnectionId } from '@core/features/agents/api/browser/client';
 import { useAgentSettings } from '@core/features/agents/api/browser/use-agent-settings';
 import { useAgent } from '@core/features/agents/api/browser/use-agents';
+import { getModelGatewayClient } from '@core/features/model-gateway/api/browser/client';
 import { catalogProvider } from '@core/features/model-gateway/api/model-catalog';
 import { GatewayModelsPanel } from '@core/features/model-gateway/contributions/browser/models-panel';
 import { GatewayProvidersPanel } from '@core/features/model-gateway/contributions/browser/providers-panel';
@@ -68,7 +69,8 @@ const AGENT_NAMES: Record<string, string> = {
 };
 
 export function ProvidersSettingsPage() {
-  const { value, update } = useAppSettingsKey('modelProviders');
+  const { value, update, updateAsync } = useAppSettingsKey('modelProviders');
+  const queryClient = useQueryClient();
   const providers = value?.providers ?? [];
   const apis = providers.filter((provider) => !provider.account);
   const [editing, setEditing] = useState<ModelProvider | 'new' | null>(null);
@@ -132,18 +134,41 @@ export function ProvidersSettingsPage() {
                         const confirmed = await openModal('confirmActionModal', {
                           title: `删除“${provider.name}”？`,
                           description:
-                            '系统会删除其安全存储密钥。引用它的 Agent 和会话不会回退到个人登录；选择其它来源前将无法启动。',
+                            '只使用该服务源的目录模型会一并删除；共享模型只移除这个来源，不会自动切换到其它来源。历史会话仍保留原路由快照，但无法继续使用已删除的服务源。系统也会删除其安全存储密钥。',
                           confirmLabel: '删除',
                         });
                         if (!confirmed.success) return;
-                        await (
-                          await getAgentsClient()
-                        ).clearModelProviderKey({ providerId: provider.id });
-                        for (const protocol of PROVIDER_PROTOCOLS)
+                        try {
+                          const gateway = await getModelGatewayClient();
+                          const cleanup = await gateway.removeProvider({
+                            providerId: provider.id,
+                          });
+                          await updateAsync({
+                            providers: providers.filter((p) => p.id !== provider.id),
+                          });
+                          await gateway.status();
                           await (
                             await getAgentsClient()
-                          ).clearModelProviderKey({ providerId: provider.id, protocol });
-                        saveProviders(providers.filter((p) => p.id !== provider.id));
+                          ).clearModelProviderKey({ providerId: provider.id });
+                          for (const protocol of PROVIDER_PROTOCOLS)
+                            await (
+                              await getAgentsClient()
+                            ).clearModelProviderKey({ providerId: provider.id, protocol });
+                          await queryClient.invalidateQueries({
+                            queryKey: ['appSettings', 'gatewayModels'],
+                          });
+                          await queryClient.invalidateQueries({ queryKey: ['modelGateway'] });
+                          toast.success(`已删除“${provider.name}”`, {
+                            description:
+                              cleanup.removedModels > 0 || cleanup.updatedModels > 0
+                                ? `同时删除 ${cleanup.removedModels} 个模型，并更新 ${cleanup.updatedModels} 个共享模型。`
+                                : '没有目录模型引用该服务源。',
+                          });
+                        } catch (error) {
+                          toast.error(`无法删除“${provider.name}”`, {
+                            description: error instanceof Error ? error.message : String(error),
+                          });
+                        }
                       }}
                     />
                   </li>

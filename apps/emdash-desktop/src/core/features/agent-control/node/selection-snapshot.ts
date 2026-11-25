@@ -7,10 +7,12 @@ import type { DelegationSelectionSnapshot } from '../api/selection-snapshot';
 import type { CreateDelegatedTask } from './task-delegation-service';
 
 type Conversation = NonNullable<CreateTaskParams['taskConfig']['initialConversation']>;
-type Sources = DelegationSelectionSnapshot['sources'];
+type SnapshotV1 = Extract<DelegationSelectionSnapshot, { version: '1' }>;
+type SnapshotV2 = Extract<DelegationSelectionSnapshot, { version: '2' }>;
+type Sources = SnapshotV2['sources'];
 
 /** Projects only launch selections; prompts, environment and credentials never enter this receipt. */
-function valuesOf(conversation: Conversation): DelegationSelectionSnapshot['values'] {
+function valuesOfV1(conversation: Conversation): SnapshotV1['values'] {
   const nativeModel =
     typeof conversation.options?.model === 'string' ? conversation.options.model : null;
   return {
@@ -23,6 +25,13 @@ function valuesOf(conversation: Conversation): DelegationSelectionSnapshot['valu
         null),
     supplierId: conversation.supplierId ?? null,
     effort: sourceOverrideOf(conversation)?.effort ?? null,
+  };
+}
+
+function valuesOfV2(conversation: Conversation): SnapshotV2['values'] {
+  return {
+    ...valuesOfV1(conversation),
+    permissionMode: conversation.autoApprove === true ? 'full' : 'ask',
   };
 }
 
@@ -42,9 +51,9 @@ export function freezeDelegationSelection(
       : keys.some((key) => defaults?.[key] !== undefined)
         ? 'main-default'
         : undefined;
-  const values = valuesOf(conversation);
-  const snapshot: Omit<DelegationSelectionSnapshot, 'fingerprint'> = {
-    version: '1',
+  const values = valuesOfV2(conversation);
+  const snapshot: Omit<SnapshotV2, 'fingerprint'> = {
+    version: '2',
     values,
     sources: {
       agent: selected('providerId') ?? 'caller',
@@ -55,6 +64,7 @@ export function freezeDelegationSelection(
       model: selected('model') ?? (values.model !== null ? 'agent-default' : 'adapter-default'),
       supplierId: selected('supplierId') ?? 'adapter-default',
       effort: selected('effort') ?? (values.effort !== null ? 'agent-default' : 'adapter-default'),
+      permissionMode: request.permissionMode !== undefined ? 'request' : 'caller',
     },
   };
   return { ...snapshot, fingerprint: fingerprint(snapshot) };
@@ -64,9 +74,15 @@ export function selectionMatchesConversation(
   snapshot: DelegationSelectionSnapshot,
   conversation: Conversation | undefined
 ): boolean {
+  const values =
+    snapshot.version === '1' && conversation
+      ? valuesOfV1(conversation)
+      : conversation
+        ? valuesOfV2(conversation)
+        : undefined;
   return (
     !!conversation &&
-    stableStringify(snapshot.values) === stableStringify(valuesOf(conversation)) &&
+    stableStringify(snapshot.values) === stableStringify(values) &&
     fingerprint({
       version: snapshot.version,
       values: snapshot.values,

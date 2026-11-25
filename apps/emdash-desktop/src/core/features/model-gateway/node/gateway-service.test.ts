@@ -14,6 +14,11 @@ import {
 } from '@core/features/model-providers/api/node/codex-launch';
 import { buildSourceLaunch } from '@core/features/model-providers/api/node/source-launch';
 import type { GatewayUsage } from '../api/contract';
+import {
+  gatewayModelsSettingsSchema,
+  migrateGatewayModelsV1,
+  type GatewayModel,
+} from '../api/model-catalog';
 import { startAcpTestClient } from './acp-test-client';
 import {
   ModelGatewayService,
@@ -47,6 +52,106 @@ const built = await access(binary).then(
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
   for (const dispose of cleanup.splice(0).reverse()) await dispose();
+});
+
+describe('model gateway provider reconciliation', () => {
+  it('removes catalog sources whose provider was already deleted', async () => {
+    const orphan: GatewayModel = {
+      id: 'orphan-model',
+      alias: 'orphan',
+      name: 'Orphan',
+      enabled: true,
+      revision: 1,
+      providerId: 'deleted-provider',
+      protocolModels: { 'openai-responses': { upstreamModel: 'orphan' } },
+      protocolPolicy: { mode: 'auto' },
+    };
+    let settings = gatewayModelsSettingsSchema.parse(
+      migrateGatewayModelsV1({ version: 1, models: [orphan] })
+    );
+    const vault = new Map<string, string>();
+    const service = new ModelGatewayService({
+      binary,
+      dataDir: tmpdir(),
+      getModels: async () => settings,
+      saveModels: async (next) => {
+        settings = structuredClone(next);
+      },
+      inventory: async () => [],
+      secrets: {
+        getSecret: async (key): Promise<Secret<string> | null> =>
+          vault.has(key) ? secret(vault.get(key)!, key) : null,
+        setSecret: async (key, value) => {
+          vault.set(key, value.expose());
+        },
+        deleteSecret: async (key) => {
+          vault.delete(key);
+        },
+      },
+      routes: store<GatewayRoute>(),
+      ledger: store<GatewayUsage>(),
+      conversationIdle: async () => true,
+      conversationLocal: async () => true,
+    });
+
+    await expect(service.reconcileProviderInventory()).resolves.toMatchObject({
+      removedModels: 1,
+      removedSources: 1,
+    });
+    expect(settings.models).toEqual([]);
+  });
+
+  it('explicitly deletes a model while preserving historical route snapshots', async () => {
+    const savedModel: GatewayModel = {
+      id: 'saved-model',
+      alias: 'saved',
+      name: 'Saved',
+      enabled: true,
+      revision: 1,
+      providerId: 'provider',
+      protocolModels: { 'openai-responses': { upstreamModel: 'saved' } },
+      protocolPolicy: { mode: 'auto' },
+    };
+    let settings = gatewayModelsSettingsSchema.parse(
+      migrateGatewayModelsV1({ version: 1, models: [savedModel] })
+    );
+    const routes = store<GatewayRoute>();
+    const historicalRoute: GatewayRoute = {
+      sourceId: 'gateway:models',
+      model: savedModel.alias,
+      catalog: { agent: 'codex', models: [savedModel], providers: [] },
+    };
+    await routes.setOrThrow('history', historicalRoute);
+    const vault = new Map<string, string>();
+    const service = new ModelGatewayService({
+      binary,
+      dataDir: tmpdir(),
+      getModels: async () => settings,
+      saveModels: async (next) => {
+        settings = structuredClone(next);
+      },
+      inventory: async () => [],
+      secrets: {
+        getSecret: async (key): Promise<Secret<string> | null> =>
+          vault.has(key) ? secret(vault.get(key)!, key) : null,
+        setSecret: async (key, value) => {
+          vault.set(key, value.expose());
+        },
+        deleteSecret: async (key) => {
+          vault.delete(key);
+        },
+      },
+      routes,
+      ledger: store<GatewayUsage>(),
+      conversationIdle: async () => true,
+      conversationLocal: async () => true,
+    });
+
+    await expect(service.deleteModel('saved-model')).resolves.toEqual({ deleted: true });
+    expect(settings.models).toEqual([]);
+    expect(await routes.getOrThrow('history')).toEqual(historicalRoute);
+    await expect(service.deleteModel('saved-model')).resolves.toEqual({ deleted: false });
+  });
 });
 
 describe.runIf(built)('model gateway process integration', () => {

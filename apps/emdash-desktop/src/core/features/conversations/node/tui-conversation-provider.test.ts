@@ -58,6 +58,50 @@ describe('TuiConversationProvider', () => {
     );
   });
 
+  it('identifies the Emdash xterm as an OSC-link-capable terminal to Codex', async () => {
+    const provider = createProvider();
+
+    await provider.ensureSession({
+      conversation: conversation({ providerId: 'codex' }),
+      mode: 'start',
+    });
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerVars: expect.objectContaining({ TERM_PROGRAM: 'vscode' }),
+      })
+    );
+  });
+
+  it('keeps the Emdash terminal identity for other providers', async () => {
+    const provider = createProvider({
+      launchContextSource: {
+        resolve: async () =>
+          ok({
+            workspace: {
+              workspaceId: 'workspace-1',
+              projectId: 'project-1',
+              host: { type: 'local', id: 'local' },
+              path: '/workspace',
+            },
+            tmux: false,
+            env: { TERM_PROGRAM: 'emdash' },
+          }),
+      },
+    });
+
+    await provider.ensureSession({
+      conversation: conversation({ providerId: 'claude' }),
+      mode: 'start',
+    });
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerVars: expect.objectContaining({ TERM_PROGRAM: 'emdash' }),
+      })
+    );
+  });
+
   it.each(['antigravity', 'codex', 'prime-agent'])(
     'routes native-id provider %s to the runtime resume path when a native id exists',
     async (providerId) => {

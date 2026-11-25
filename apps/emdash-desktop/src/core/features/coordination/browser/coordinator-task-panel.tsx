@@ -27,9 +27,9 @@ import { getTaskStore } from '@core/features/tasks/api/browser/task-state/task-s
 import { useTaskViewContext } from '@core/features/tasks/contributions/browser/task-view-context';
 import { taskViewDef } from '@core/features/tasks/contributions/views';
 import { getUpdateStore } from '@core/features/updates/contributions/app-stores';
+import { isPopoutWindow } from '@core/features/workbench/api/browser/popout-mode';
 import { useTaskComposition } from '@core/features/workbench/api/browser/task-composition-context';
 import { getHostClient } from '@core/primitives/desktop-host/browser/host-client';
-import { useMemento } from '@core/primitives/mementos/react';
 import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { getCoordinationClient } from '../api/browser/client';
 import { isMainAgentHostProject } from '../api/main-agent-host';
@@ -41,7 +41,6 @@ import type {
   WorkspaceCompletionReport,
   WorkspaceProjectImport,
 } from '../api/types';
-import { coordinatorViewMemento } from '../contributions/mementos';
 import { CoordinatorDocumentsPanel } from './coordinator-documents-panel';
 import { TakeOverTaskForm } from './take-over-task-form';
 import { TaskStartupStatus } from './task-startup-status';
@@ -64,9 +63,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
   taskId: string;
   children: ReactNode;
 }) {
-  const [view, setView] = useMemento(coordinatorViewMemento);
-  const tab = view.tab === 'settings' ? 'tasks' : view.tab;
-  const setTab = (tab: typeof view.tab) => setView({ version: '1', tab });
+  const [tab, setTab] = useState<'conversation' | 'tasks' | 'documents'>('conversation');
   const composition = useTaskComposition();
   const queryClient = useQueryClient();
   const key = ['coordinator', taskId];
@@ -128,7 +125,7 @@ const CoordinatorContent = observer(function CoordinatorContent({
             tab={tab}
             onSelect={(next) => {
               setTab(next);
-              if (next !== 'documents') return;
+              if (next !== 'documents' || isPopoutWindow()) return;
               composition.chrome.commands.openSidebarTab('files');
               const path = composition.editorView.openFilePaths.at(-1);
               if (record && path) void openFileInTaskEditor(record.projectId, taskId, path);

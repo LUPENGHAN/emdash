@@ -85,6 +85,10 @@ export function usePaneScope(
         focusContent();
       },
     }),
+    'workbench.findInPane': () => ({
+      availability: () => (provider.contentFinder ? enabled : hidden),
+      execute: () => provider.contentFinder?.(),
+    }),
     'workbench.tab1': () => ({ execute: () => selectIndex(0) }),
     'workbench.tab2': () => ({ execute: () => selectIndex(1) }),
     'workbench.tab3': () => ({ execute: () => selectIndex(2) }),

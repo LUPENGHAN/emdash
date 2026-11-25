@@ -212,6 +212,7 @@ export function createBackendTaskDelegation(deps: Dependencies): TaskDelegationS
               modelSource,
               sourceModel,
               effort,
+              autoApprove: request.permissionMode === 'full',
               ...(explicit.supplierId && { supplierId: explicit.supplierId }),
               ...(type === 'acp'
                 ? {
